@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose:*)",
+      "Bash(python -m alembic revision --autogenerate -m \"Add User model\")",
+      "Bash(powershell \"Get-Process -Id 6108,27180 | Select-Object Id,ProcessName,Description\")"
+    ]
+  }
+}

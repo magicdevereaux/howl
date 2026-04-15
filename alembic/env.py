@@ -15,11 +15,9 @@ if config.config_file_name is not None:
 # Override sqlalchemy.url from our settings (reads from .env)
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-# Import all models here so autogenerate can detect them.
-# Example: from app.models.user import User  # noqa: F401
-from app.models import *  # noqa: F401, F403
+from app.models import Base  # noqa: F401 — imports User too via __init__
 
-target_metadata = None  # replaced with Base.metadata once models exist
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
