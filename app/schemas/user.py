@@ -35,6 +35,21 @@ class UserOut(BaseModel):
     updated_at: datetime
 
 
+class ProfileUpdate(BaseModel):
+    bio: str | None = None
+
+    @field_validator("bio")
+    @classmethod
+    def bio_length(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if len(v) < 10:
+            raise ValueError("Bio must be at least 10 characters")
+        if len(v) > 500:
+            raise ValueError("Bio must be at most 500 characters")
+        return v
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
