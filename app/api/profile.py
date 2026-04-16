@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import get_current_user
-from app.models.user import User
+from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, UserOut
+from app.tasks.avatar import generate_avatar
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -22,8 +23,16 @@ def update_my_profile(
 ) -> User:
     if payload.bio is not None:
         current_user.bio = payload.bio
-    db.commit()
-    db.refresh(current_user)
+        # Reset avatar so it gets regenerated from the new bio
+        current_user.animal = None
+        current_user.avatar_url = None
+        current_user.avatar_status = AvatarStatus.pending
+        db.commit()
+        db.refresh(current_user)
+        generate_avatar.delay(current_user.id)
+    else:
+        db.commit()
+        db.refresh(current_user)
     return current_user
 
 
