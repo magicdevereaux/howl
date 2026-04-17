@@ -11,8 +11,8 @@ from app.security import create_access_token, hash_password, verify_password
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(payload: UserRegister, db: Session = Depends(get_db)) -> User:
+@router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
+def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
@@ -27,7 +27,8 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> User:
             detail="Email already registered",
         )
     db.refresh(user)
-    return user
+    token = create_access_token(user.id)
+    return {"access_token": token, "user": user}
 
 
 @router.post("/login", response_model=TokenOut)
