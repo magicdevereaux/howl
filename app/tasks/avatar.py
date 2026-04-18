@@ -62,7 +62,7 @@ def generate_avatar(self, user_id: int) -> None:
         # ── Claude call ──────────────────────────────────────────────────────
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-haiku-4-5-20251001",
             max_tokens=512,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": f"Bio: {user.bio}"}],
@@ -74,6 +74,15 @@ def generate_avatar(self, user_id: int) -> None:
         )
         if not raw_text:
             raise ValueError("Claude returned no text content")
+
+        logger.info(f"Claude raw response: {raw_text!r}")
+        
+        # ── Strip markdown fences ───────────────────────────────────────
+        raw_text = raw_text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.split("\n")
+            raw_text = "\n".join(lines[1:-1]).strip()
+            logger.info(f"Stripped markdown fences")
 
         # ── Parse & validate ─────────────────────────────────────────────────
         data: dict = json.loads(raw_text)
