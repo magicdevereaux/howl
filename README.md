@@ -2,12 +2,25 @@
 
 AI-powered dating platform that analyzes your personality and matches you with your spirit animal.
 
+## Screenshots
+
+### Login Page
+![Login](screenshots/login.png)
+
+### Profile & Spirit Animal
+![Profile](screenshots/profile-wolf.png)
+
+### Dynamic Regeneration
+![Snake](screenshots/profile-snake.png)
+
 ## Features
 
 - **AI Personality Analysis**: Claude (Anthropic) analyzes dating bios to determine spirit animals
 - **Async Task Processing**: Celery + Redis for background AI generation
+- **Real-time Updates**: Frontend polls for status changes every 3 seconds
 - **Production-Ready**: JWT auth, retry logic, error handling, database persistence
 - **Fast**: ~2 second response time for AI generation
+- **Beautiful UI**: Modern React frontend with responsive design
 
 ## Tech Stack
 
@@ -18,8 +31,10 @@ AI-powered dating platform that analyzes your personality and matches you with y
 - Redis (message broker)
 - Anthropic Claude API (AI)
 
-**Frontend:** (coming soon)
-- React
+**Frontend:**
+- React 18
+- Vite (build tool)
+- Modern CSS with gradients
 
 ## How It Works
 
@@ -27,13 +42,15 @@ AI-powered dating platform that analyzes your personality and matches you with y
 2. Background task picks up the request
 3. Claude API analyzes personality traits
 4. System returns spirit animal + traits + avatar description
-5. User gets their match!
+5. User sees their match in real-time!
+6. User can regenerate by updating their bio
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.11+
+- Node.js 18+
 - Docker & Docker Compose
 - Anthropic API key
 
@@ -70,11 +87,6 @@ SECRET_KEY=your_secret_key_here
 docker compose up -d
 ```
 
-6. Run database migrations (if applicable):
-```bash
-# Add migration commands here
-```
-
 ### Running the App
 
 **Terminal 1 - FastAPI:**
@@ -87,9 +99,29 @@ python -m uvicorn app.main:app --port 8001 --reload
 python -m celery -A app.celery_app worker --loglevel=info --pool=solo
 ```
 
+**Terminal 3 - Frontend (React/Vite):**
+```bash
+cd frontend
+npm install  # First time only
+npm run dev
+```
+
+**Then open:** http://localhost:3000 (frontend) or http://localhost:8001/docs (API docs)
+
 ## Usage
 
-### Register a user:
+### Via Frontend (Recommended)
+
+1. Open http://localhost:3000
+2. Create an account
+3. Write your bio
+4. Watch Claude analyze your personality!
+5. See your spirit animal appear
+6. Update bio to regenerate
+
+### Via API (curl)
+
+#### Register a user:
 ```bash
 curl -X POST http://localhost:8001/api/auth/register \
   -H "Content-Type: application/json" \
@@ -105,7 +137,7 @@ curl -X POST http://localhost:8001/api/auth/register \
 }
 ```
 
-### Update bio (triggers avatar generation):
+#### Update bio (triggers avatar generation):
 ```bash
 curl -X PATCH http://localhost:8001/api/profile/me \
   -H "Authorization: Bearer YOUR_TOKEN" \
@@ -113,7 +145,7 @@ curl -X PATCH http://localhost:8001/api/profile/me \
   -d '{"bio":"A lone wolf who loves midnight runs and howling at the moon."}'
 ```
 
-### Check avatar status:
+#### Check avatar status:
 ```bash
 curl http://localhost:8001/api/avatar/status \
   -H "Authorization: Bearer YOUR_TOKEN"
@@ -150,24 +182,30 @@ curl http://localhost:8001/api/avatar/status \
              ├──→ Redis (broker)
              │
              └──→ Claude API (AI)
+                       │
+                       └──→ React Frontend (polling)
 ```
-
 ## Development
 
 ### Project Structure
 ```
 howl/
 ├── app/
-│   ├── api/          # API routes
-│   ├── models/       # Database models
-│   ├── schemas/      # Pydantic schemas
-│   ├── tasks/        # Celery tasks
+│   ├── api/          # API routes (auth, profile, avatar)
+│   ├── models/       # Database models (User)
+│   ├── schemas/      # Pydantic schemas (validation)
+│   ├── tasks/        # Celery tasks (avatar generation)
+│   ├── config.py     # Settings & environment
 │   └── main.py       # FastAPI app
+├── frontend/
+│   ├── src/
+│   │   └── App.jsx   # React app
+│   └── package.json  # Frontend dependencies
+├── screenshots/      # UI screenshots
 ├── docker-compose.yml
 ├── requirements.txt
 └── README.md
 ```
-
 ### Running Tests
 ```bash
 pytest
@@ -175,11 +213,13 @@ pytest
 
 ## Roadmap
 
-- [ ] React frontend
-- [ ] Avatar image generation (DALL-E)
-- [ ] Matching algorithm
+- [x] React frontend with beautiful UI
+- [x] Real-time status updates
+- [ ] Avatar image generation (DALL-E/Midjourney)
+- [ ] Matching algorithm (compatible spirit animals)
 - [ ] Chat system
 - [ ] Deployment (Heroku/Railway)
+- [ ] Mobile responsive improvements
 
 ## License
 
