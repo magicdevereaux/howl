@@ -207,9 +207,50 @@ howl/
 └── README.md
 ```
 ### Running Tests
+
+Tests use SQLite in-memory so they run without Docker, Postgres, Redis,
+or a real Anthropic API key.
+
+**Install test dependencies first (one-time):**
+```bash
+pip install -e ".[dev]"
+```
+
+**Run all tests:**
 ```bash
 pytest
 ```
+
+**Run with coverage (terminal output):**
+```bash
+pytest --cov=app --cov-report=term-missing
+```
+
+**Run with coverage + HTML report:**
+```bash
+pytest --cov=app --cov-report=term-missing --cov-report=html
+```
+Then open `htmlcov/index.html` in your browser to see a line-by-line
+breakdown of which code is covered.
+
+**Run a specific test file:**
+```bash
+pytest tests/test_auth.py -v
+```
+
+**Run a single test by name:**
+```bash
+pytest tests/test_task.py::test_successful_generation -v
+```
+
+**Test layout:**
+
+| File | What it covers |
+|------|----------------|
+| `tests/test_auth.py` | `/api/auth/register`, `/api/auth/login`, `/api/auth/me` |
+| `tests/test_profile.py` | `/api/profile/me` (GET & PATCH), `/api/profile/{id}` |
+| `tests/test_avatar.py` | `/api/avatar/status` — all avatar states |
+| `tests/test_task.py` | `generate_avatar` Celery task — Claude parsing, retries, failures |
 
 ## Roadmap
 
