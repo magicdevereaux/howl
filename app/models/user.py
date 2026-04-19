@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text
+from sqlalchemy import DateTime, Enum, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -21,6 +21,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     animal: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    personality_traits: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    avatar_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_status: Mapped[AvatarStatus] = mapped_column(
         Enum(AvatarStatus, name="avatar_status", native_enum=True),

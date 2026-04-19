@@ -8,3 +8,5 @@ class AvatarStatusOut(BaseModel):
 
     avatar_status: AvatarStatus
     animal: str | None
+    personality_traits: list[str] | None = None
+    avatar_description: str | None = None

@@ -10,6 +10,9 @@ export default function HowlApp() {
   const [avatarStatus, setAvatarStatus] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [generationStartTime, setGenerationStartTime] = useState(null);
+  const [generationTime, setGenerationTime] = useState(null);
 
   const API_URL = 'http://localhost:8001';
 
@@ -58,7 +61,19 @@ export default function HowlApp() {
       });
       if (res.ok) {
         const data = await res.json();
-        setAvatarStatus(data);
+        setAvatarStatus(prev => {
+          // If we just transitioned to ready, record elapsed time
+          if (data.avatar_status === 'ready' && prev?.avatar_status !== 'ready') {
+            setGenerationStartTime(t => {
+              if (t !== null) {
+                const elapsed = ((Date.now() - t) / 1000).toFixed(1);
+                setGenerationTime(`${elapsed}s`);
+              }
+              return null;
+            });
+          }
+          return data;
+        });
       }
     } catch (err) {
       console.error('Failed to fetch avatar status');
@@ -146,6 +161,8 @@ export default function HowlApp() {
 
       if (res.ok) {
         setUser(data);
+        setGenerationStartTime(Date.now());
+        setGenerationTime(null);
         // Local sentinel so the UI reacts immediately before the first poll
         setAvatarStatus({ avatar_status: 'generating', animal: null });
         setTimeout(fetchAvatarStatus, 2000);
@@ -171,14 +188,22 @@ export default function HowlApp() {
   };
 
   const getStatusEmoji = () => {
-    if (!avatarStatus) return '🐺';
+    if (!avatarStatus) return <span>🐺</span>;
     switch (avatarStatus.avatar_status) {
-      case 'ready': return '✨';
+      case 'ready': return <span>✨</span>;
       case 'generating':
-      case 'pending': return '⏳';
-      case 'failed': return '❌';
-      default: return '🐺';
+      case 'pending': return <span className="spinner">⏳</span>;
+      case 'failed': return <span>❌</span>;
+      default: return <span>🐺</span>;
     }
+  };
+
+  const handleCopyAnimal = () => {
+    if (!avatarStatus?.animal) return;
+    navigator.clipboard.writeText(avatarStatus.animal).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   const getStatusText = () => {
@@ -340,13 +365,47 @@ export default function HowlApp() {
         {/* Avatar Status Card */}
         <div style={{ background: 'white', borderRadius: '16px', padding: '32px', marginBottom: '24px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', textAlign: 'center' }}>
           <div style={{ fontSize: '64px', marginBottom: '16px' }}>{getStatusEmoji()}</div>
-          <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#2d3748', marginBottom: '8px' }}>
+          <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#2d3748', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {getStatusText()}
+            {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal && (
+              <button
+                onClick={handleCopyAnimal}
+                style={{ padding: '4px 10px', background: copied ? '#48bb78' : '#edf2f7', color: copied ? 'white' : '#4a5568', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
+              >
+                {copied ? 'Copied!' : '📋 Copy'}
+              </button>
+            )}
           </h2>
           {avatarStatus?.avatar_status === 'ready' && (
-            <p style={{ color: '#718096', fontSize: '14px' }}>
-              Update your bio to regenerate
-            </p>
+            <>
+              {generationTime && (
+                <p style={{ color: '#a0aec0', fontSize: '12px', marginBottom: '12px' }}>
+                  Generated in {generationTime}
+                </p>
+              )}
+              {avatarStatus?.personality_traits?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginBottom: '16px' }}>
+                  {avatarStatus.personality_traits.map((trait, i) => (
+                    <span key={i} style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '4px 12px', borderRadius: '16px', fontSize: '12px', fontWeight: '500' }}>
+                      {trait}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {avatarStatus?.avatar_description && (
+                <details style={{ textAlign: 'left', marginBottom: '12px' }}>
+                  <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '13px', fontWeight: '500', userSelect: 'none' }}>
+                    View full description
+                  </summary>
+                  <p style={{ marginTop: '8px', color: '#4a5568', fontSize: '14px', lineHeight: '1.6', padding: '12px', background: '#f7fafc', borderRadius: '8px' }}>
+                    {avatarStatus.avatar_description}
+                  </p>
+                </details>
+              )}
+              <p style={{ color: '#718096', fontSize: '14px' }}>
+                Update your bio to regenerate
+              </p>
+            </>
           )}
           {isGenerating && (
             <div style={{ marginTop: '16px', overflow: 'hidden' }}>
@@ -441,6 +500,14 @@ export default function HowlApp() {
         @keyframes slide {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(250%); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spinner {
+          display: inline-block;
+          animation: spin 2s linear infinite;
         }
       `}</style>
     </div>

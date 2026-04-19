@@ -104,6 +104,8 @@ def generate_avatar(self, user_id: int) -> None:
 
         # ── Persist ──────────────────────────────────────────────────────────
         user.animal = animal
+        user.personality_traits = personality_traits
+        user.avatar_description = avatar_description
         user.avatar_status = AvatarStatus.ready
         user.updated_at = datetime.now(timezone.utc)
         db.commit()
