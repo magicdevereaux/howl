@@ -24,16 +24,16 @@ export default function HowlApp() {
     }
   }, [token]);
 
-  // FIX: poll on 'pending' (server status) as well as the local 'generating' sentinel
+  // Poll only when generation is actually in progress (bio exists + pending/generating)
   useEffect(() => {
     const isGenerating =
-      avatarStatus?.avatar_status === 'pending' ||
-      avatarStatus?.avatar_status === 'generating';
+      (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
+      !!user?.bio;
     if (isGenerating) {
       const interval = setInterval(fetchAvatarStatus, 3000);
       return () => clearInterval(interval);
     }
-  }, [avatarStatus?.avatar_status]);
+  }, [avatarStatus?.avatar_status, user?.bio]);
 
   const fetchProfile = async () => {
     try {
@@ -198,6 +198,7 @@ export default function HowlApp() {
   };
 
   const getStatusEmoji = () => {
+    if (!user?.bio) return <span>🐺</span>;
     if (!avatarStatus) return <span>🐺</span>;
     switch (avatarStatus.avatar_status) {
       case 'ready': return <span>✨</span>;
@@ -217,6 +218,7 @@ export default function HowlApp() {
   };
 
   const getStatusText = () => {
+    if (!user?.bio) return 'Fill in your bio to discover your spirit animal';
     if (!avatarStatus) return 'No avatar yet';
     switch (avatarStatus.avatar_status) {
       case 'ready': return `Your spirit animal: ${avatarStatus.animal}`;
@@ -228,8 +230,8 @@ export default function HowlApp() {
   };
 
   const isGenerating =
-    avatarStatus?.avatar_status === 'pending' ||
-    avatarStatus?.avatar_status === 'generating';
+    (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
+    !!user?.bio;
 
   if (view === 'register') {
     return (
