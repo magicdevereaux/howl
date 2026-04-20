@@ -54,10 +54,13 @@ export default function HowlApp() {
     }
   };
 
-  const fetchAvatarStatus = async () => {
+  // currentToken is an explicit override for cases where the React state
+  // hasn't updated yet (stale closure after login/register).
+  const fetchAvatarStatus = async (currentToken) => {
+    const authToken = currentToken !== undefined ? currentToken : token;
     try {
       const res = await fetch(`${API_URL}/api/avatar/status`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${authToken}` }
       });
       if (res.ok) {
         const data = await res.json();
@@ -74,9 +77,15 @@ export default function HowlApp() {
           }
           return data;
         });
+      } else if (res.status === 401) {
+        // Token is invalid or expired — clear session and return to login
+        setToken('');
+        localStorage.removeItem('access_token');
+        setView('login');
+        setError('Session expired. Please sign in again.');
       }
     } catch (err) {
-      console.error('Failed to fetch avatar status');
+      console.error('Failed to fetch avatar status', err);
     }
   };
 
@@ -95,12 +104,13 @@ export default function HowlApp() {
       const data = await res.json();
 
       if (res.ok) {
-        setToken(data.access_token);
-        localStorage.setItem('access_token', data.access_token);
+        const newToken = data.access_token;
+        setToken(newToken);
+        localStorage.setItem('access_token', newToken);
         setUser(data.user);
         setBio(data.user.bio || '');
         setView('profile');
-        fetchAvatarStatus();
+        fetchAvatarStatus(newToken); // pass token explicitly — avoids stale closure
       } else {
         setError(data.detail || 'Login failed');
       }
