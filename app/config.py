@@ -26,5 +26,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
 
+    # CORS — comma-separated list of allowed origins, e.g.:
+    # ALLOWED_ORIGINS=https://howl-rouge.vercel.app,https://www.howl.app
+    allowed_origins: str = ""
+
 
 settings = Settings()

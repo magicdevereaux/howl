@@ -14,9 +14,15 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
 )
 
+_cors_origins: list[str] = [
+    o.strip() for o in settings.allowed_origins.split(",") if o.strip()
+]
+if settings.debug:
+    _cors_origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"] if settings.debug else [],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
