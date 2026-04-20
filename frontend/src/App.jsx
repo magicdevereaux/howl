@@ -14,7 +14,7 @@ export default function HowlApp() {
   const [generationStartTime, setGenerationStartTime] = useState(null);
   const [generationTime, setGenerationTime] = useState(null);
 
-  const API_URL = 'http://localhost:8001';
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
   // Fetch profile on mount if token exists
   useEffect(() => {
