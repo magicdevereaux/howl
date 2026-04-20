@@ -5,7 +5,7 @@ export default function HowlApp() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [bio, setBio] = useState('');
-  const [token, setToken] = useState(localStorage.getItem('howl_token') || '');
+  const [token, setToken] = useState(localStorage.getItem('access_token') || '');
   const [user, setUser] = useState(null);
   const [avatarStatus, setAvatarStatus] = useState(null);
   const [error, setError] = useState('');
@@ -47,7 +47,7 @@ export default function HowlApp() {
         setView('profile');
       } else {
         setToken('');
-        localStorage.removeItem('howl_token');
+        localStorage.removeItem('access_token');
       }
     } catch (err) {
       setError('Failed to fetch profile');
@@ -96,7 +96,7 @@ export default function HowlApp() {
 
       if (res.ok) {
         setToken(data.access_token);
-        localStorage.setItem('howl_token', data.access_token);
+        localStorage.setItem('access_token', data.access_token);
         setUser(data.user);
         setBio(data.user.bio || '');
         setView('profile');
@@ -128,7 +128,7 @@ export default function HowlApp() {
       if (res.ok) {
         // FIX: register now returns {access_token, user} matching login shape
         setToken(data.access_token);
-        localStorage.setItem('howl_token', data.access_token);
+        localStorage.setItem('access_token', data.access_token);
         setUser(data.user);
         setBio(data.user.bio || '');
         setView('profile');
@@ -184,7 +184,7 @@ export default function HowlApp() {
     setPassword('');
     setBio('');
     setView('login');
-    localStorage.removeItem('howl_token');
+    localStorage.removeItem('access_token');
   };
 
   const getStatusEmoji = () => {
