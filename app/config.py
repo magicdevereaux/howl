@@ -8,26 +8,25 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database
-    database_url: str = "postgresql://howl:howl_dev@localhost:5432/howl"
+    # Database - MUST come from env var
+    database_url: str
 
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    # Redis - MUST come from env var
+    redis_url: str
 
-    # Security
-    secret_key: str = "change-me"
+    # Security - MUST come from env var
+    secret_key: str
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    # Anthropic
-    anthropic_api_key: str = ""
+    # Anthropic - MUST come from env var
+    anthropic_api_key: str
 
-    # App
-    environment: str = "development"
-    debug: bool = True
+    # App - Safe defaults for production
+    environment: str = "production"
+    debug: bool = False
 
-    # CORS — comma-separated list of allowed origins, e.g.:
-    # ALLOWED_ORIGINS=https://howl-rouge.vercel.app,https://www.howl.app
+    # CORS — comma-separated list of allowed origins
     allowed_origins: str = ""
 
 
