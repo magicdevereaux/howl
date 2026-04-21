@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -25,8 +27,11 @@ def update_my_profile(
         current_user.bio = payload.bio
         # Reset avatar so it gets regenerated from the new bio
         current_user.animal = None
+        current_user.personality_traits = None
+        current_user.avatar_description = None
         current_user.avatar_url = None
         current_user.avatar_status = AvatarStatus.pending
+        current_user.avatar_status_updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(current_user)
         generate_avatar.delay(current_user.id)

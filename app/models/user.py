@@ -41,6 +41,10 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    avatar_status_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} animal={self.animal!r}>"

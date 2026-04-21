@@ -24,16 +24,17 @@ export default function HowlApp() {
     }
   }, [token]);
 
-  // Poll only when generation is actually in progress (bio exists + pending/generating)
+  // Poll only when generation is actively in progress (bio exists + pending/generating + not stale)
   useEffect(() => {
-    const isGenerating =
+    const shouldPoll =
       (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
-      !!user?.bio;
-    if (isGenerating) {
+      !!user?.bio &&
+      !isStale;
+    if (shouldPoll) {
       const interval = setInterval(fetchAvatarStatus, 3000);
       return () => clearInterval(interval);
     }
-  }, [avatarStatus?.avatar_status, user?.bio]);
+  }, [avatarStatus?.avatar_status, user?.bio, isStale]);
 
   const fetchProfile = async () => {
     try {
@@ -200,12 +201,36 @@ export default function HowlApp() {
   const getStatusEmoji = () => {
     if (!user?.bio) return <span>🐺</span>;
     if (!avatarStatus) return <span>🐺</span>;
+    if (isStale) return <span>⚠️</span>;
     switch (avatarStatus.avatar_status) {
       case 'ready': return <span>✨</span>;
       case 'generating':
       case 'pending': return <span className="spinner">⏳</span>;
       case 'failed': return <span>❌</span>;
       default: return <span>🐺</span>;
+    }
+  };
+
+  const handleRegenerate = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/avatar/regenerate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setGenerationStartTime(Date.now());
+        setGenerationTime(null);
+        setAvatarStatus(data);
+      } else {
+        setError(data.detail || 'Regeneration failed');
+      }
+    } catch (err) {
+      setError('Network error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -220,6 +245,7 @@ export default function HowlApp() {
   const getStatusText = () => {
     if (!user?.bio) return 'Fill in your bio to discover your spirit animal';
     if (!avatarStatus) return 'No avatar yet';
+    if (isStale) return 'Generation timed out — click Try Again below';
     switch (avatarStatus.avatar_status) {
       case 'ready': return `Your spirit animal: ${avatarStatus.animal}`;
       case 'generating':
@@ -229,9 +255,17 @@ export default function HowlApp() {
     }
   };
 
+  const STALE_PENDING_MS = 2 * 60 * 1000; // 2 minutes
+  const isStale =
+    avatarStatus?.avatar_status === 'pending' &&
+    !!user?.bio &&
+    !!avatarStatus?.avatar_status_updated_at &&
+    Date.now() - new Date(avatarStatus.avatar_status_updated_at).getTime() > STALE_PENDING_MS;
+
   const isGenerating =
     (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
-    !!user?.bio;
+    !!user?.bio &&
+    !isStale;
 
   if (view === 'register') {
     return (
@@ -445,7 +479,7 @@ export default function HowlApp() {
             </div>
           )}
 
-          <form onSubmit={handleUpdateBio}>
+          <form onSubmit={isStale ? (e) => { e.preventDefault(); handleRegenerate(); } : handleUpdateBio}>
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>
                 Tell us about yourself
@@ -466,31 +500,31 @@ export default function HowlApp() {
 
             <button
               type="submit"
-              disabled={loading || !bio.trim() || isGenerating}
+              disabled={loading || (!isStale && (!bio.trim() || isGenerating))}
               style={{
                 width: '100%',
                 padding: '14px',
-                background: loading || !bio.trim() || isGenerating ? '#cbd5e0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                background: loading || (!isStale && (!bio.trim() || isGenerating)) ? '#cbd5e0' : isStale ? 'linear-gradient(135deg, #f6ad55 0%, #ed8936 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                 color: 'white',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '16px',
                 fontWeight: '600',
-                cursor: loading || !bio.trim() || isGenerating ? 'not-allowed' : 'pointer',
+                cursor: loading || (!isStale && (!bio.trim() || isGenerating)) ? 'not-allowed' : 'pointer',
                 transition: 'transform 0.2s'
               }}
               onMouseEnter={(e) => {
-                if (!loading && bio.trim() && !isGenerating) {
+                if (!loading && (isStale || (bio.trim() && !isGenerating))) {
                   e.target.style.transform = 'translateY(-2px)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (!loading && bio.trim() && !isGenerating) {
+                if (!loading && (isStale || (bio.trim() && !isGenerating))) {
                   e.target.style.transform = 'translateY(0)';
                 }
               }}
             >
-              {loading ? 'Updating...' : isGenerating ? 'Generating...' : bio !== user?.bio ? 'Update Bio & Generate Avatar' : 'Regenerate Avatar'}
+              {loading ? (isStale ? 'Retrying...' : 'Updating...') : isStale ? '⚠️ Try Again' : isGenerating ? 'Generating...' : bio !== user?.bio ? 'Update Bio & Generate Avatar' : 'Regenerate Avatar'}
             </button>
           </form>
         </div>

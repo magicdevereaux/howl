@@ -131,3 +131,40 @@ def test_get_profile_not_found(client):
     res = client.get("/api/profile/99999")
     assert res.status_code == 404
     assert "not found" in res.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Bio update side effects (avatar reset)
+# ---------------------------------------------------------------------------
+
+def test_update_bio_clears_personality_traits_and_description(client, db, auth_headers, test_user):
+    """Bio update clears stale personality_traits and avatar_description in the DB."""
+    test_user.animal = "wolf"
+    test_user.personality_traits = ["loyal", "fierce"]
+    test_user.avatar_description = "A silver wolf-human hybrid."
+    test_user.avatar_status = AvatarStatus.ready
+    db.commit()
+
+    res = client.patch(
+        "/api/profile/me",
+        headers=auth_headers,
+        json={"bio": "A lone wolf who loves midnight runs and howling at the moon."},
+    )
+    assert res.status_code == 200
+    # HTTP response (UserOut) doesn't expose traits/description — check the DB row
+    db.refresh(test_user)
+    assert test_user.personality_traits is None
+    assert test_user.avatar_description is None
+    assert test_user.animal is None
+
+
+def test_update_bio_sets_avatar_status_updated_at(client, db, auth_headers, test_user):
+    """Bio update stamps avatar_status_updated_at so stale detection works."""
+    res = client.patch(
+        "/api/profile/me",
+        headers=auth_headers,
+        json={"bio": "A lone wolf who loves midnight runs and howling at the moon."},
+    )
+    assert res.status_code == 200
+    db.refresh(test_user)
+    assert test_user.avatar_status_updated_at is not None
