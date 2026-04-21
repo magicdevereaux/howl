@@ -23,8 +23,8 @@ export default function HowlApp() {
   const isStale =
     avatarStatus?.avatar_status === 'pending' &&
     !!user?.bio &&
-    !!avatarStatus?.avatar_status_updated_at &&
-    Date.now() - new Date(avatarStatus.avatar_status_updated_at).getTime() > STALE_PENDING_MS;
+    (!avatarStatus?.avatar_status_updated_at ||
+      Date.now() - new Date(avatarStatus.avatar_status_updated_at).getTime() > STALE_PENDING_MS);
 
   const isGenerating =
     (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
