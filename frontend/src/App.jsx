@@ -16,6 +16,21 @@ export default function HowlApp() {
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
+  // Derived state — must be declared before any useEffect that references them,
+  // because const is in the TDZ until its declaration is reached. Rollup's
+  // production bundler exposes this as "Cannot access '<minified>' before initialization".
+  const STALE_PENDING_MS = 2 * 60 * 1000; // 2 minutes
+  const isStale =
+    avatarStatus?.avatar_status === 'pending' &&
+    !!user?.bio &&
+    !!avatarStatus?.avatar_status_updated_at &&
+    Date.now() - new Date(avatarStatus.avatar_status_updated_at).getTime() > STALE_PENDING_MS;
+
+  const isGenerating =
+    (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
+    !!user?.bio &&
+    !isStale;
+
   // Fetch profile on mount if token exists
   useEffect(() => {
     if (token) {
@@ -254,18 +269,6 @@ export default function HowlApp() {
       default: return 'Unknown status';
     }
   };
-
-  const STALE_PENDING_MS = 2 * 60 * 1000; // 2 minutes
-  const isStale =
-    avatarStatus?.avatar_status === 'pending' &&
-    !!user?.bio &&
-    !!avatarStatus?.avatar_status_updated_at &&
-    Date.now() - new Date(avatarStatus.avatar_status_updated_at).getTime() > STALE_PENDING_MS;
-
-  const isGenerating =
-    (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
-    !!user?.bio &&
-    !isStale;
 
   if (view === 'register') {
     return (
