@@ -27,6 +27,8 @@ class UserOut(BaseModel):
 
     id: int
     email: str
+    name: str | None = None
+    location: str | None = None
     bio: str | None
     animal: str | None
     avatar_url: str | None
@@ -36,7 +38,29 @@ class UserOut(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
+    name: str | None = None
+    location: str | None = None
     bio: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_length(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 100:
+            raise ValueError("Name must be at most 100 characters")
+        return v or None  # treat blank string same as null
+
+    @field_validator("location")
+    @classmethod
+    def location_length(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 100:
+            raise ValueError("Location must be at most 100 characters")
+        return v or None  # treat blank string same as null
 
     @field_validator("bio")
     @classmethod

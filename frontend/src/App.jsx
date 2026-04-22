@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 
 export default function HowlApp() {
-  const [view, setView] = useState('login'); // 'login', 'register', 'profile'
+  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'browse'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [location, setLocation] = useState('');
   const [bio, setBio] = useState('');
   const [token, setToken] = useState(localStorage.getItem('access_token') || '');
   const [user, setUser] = useState(null);
@@ -13,6 +15,9 @@ export default function HowlApp() {
   const [copied, setCopied] = useState(false);
   const [generationStartTime, setGenerationStartTime] = useState(null);
   const [generationTime, setGenerationTime] = useState(null);
+  const [browseUsers, setBrowseUsers] = useState([]);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState('');
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
@@ -59,6 +64,8 @@ export default function HowlApp() {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        setName(data.name || '');
+        setLocation(data.location || '');
         setBio(data.bio || '');
         setView('profile');
       } else {
@@ -124,6 +131,8 @@ export default function HowlApp() {
         setToken(newToken);
         localStorage.setItem('access_token', newToken);
         setUser(data.user);
+        setName(data.user.name || '');
+        setLocation(data.user.location || '');
         setBio(data.user.bio || '');
         setView('profile');
         fetchAvatarStatus(newToken); // pass token explicitly — avoids stale closure
@@ -156,6 +165,8 @@ export default function HowlApp() {
         setToken(data.access_token);
         localStorage.setItem('access_token', data.access_token);
         setUser(data.user);
+        setName(data.user.name || '');
+        setLocation(data.user.location || '');
         setBio(data.user.bio || '');
         setView('profile');
       } else {
@@ -180,13 +191,15 @@ export default function HowlApp() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ bio })
+        body: JSON.stringify({ name: name || null, location: location || null, bio })
       });
 
       const data = await res.json();
 
       if (res.ok) {
         setUser(data);
+        setName(data.name || '');
+        setLocation(data.location || '');
         setGenerationStartTime(Date.now());
         setGenerationTime(null);
         // Local sentinel so the UI reacts immediately before the first poll
@@ -208,6 +221,8 @@ export default function HowlApp() {
     setAvatarStatus(null);
     setEmail('');
     setPassword('');
+    setName('');
+    setLocation('');
     setBio('');
     setView('login');
     localStorage.removeItem('access_token');
@@ -255,6 +270,37 @@ export default function HowlApp() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  };
+
+  const ANIMAL_EMOJI = {
+    wolf: '🐺', fox: '🦊', deer: '🦌', bear: '🐻', owl: '🦉',
+    cat: '🐱', lion: '🦁', otter: '🦦', eagle: '🦅', panther: '🐆',
+    hawk: '🦅', rabbit: '🐰', dolphin: '🐬', crow: '🐦‍⬛',
+  };
+  const animalEmoji = (animal) => ANIMAL_EMOJI[animal?.toLowerCase()] || '🐾';
+
+  const fetchBrowseUsers = async () => {
+    setBrowseLoading(true);
+    setBrowseError('');
+    try {
+      const res = await fetch(`${API_URL}/api/users/browse`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setBrowseUsers(await res.json());
+      } else if (res.status === 401) {
+        setToken('');
+        localStorage.removeItem('access_token');
+        setView('login');
+        setError('Session expired. Please sign in again.');
+      } else {
+        setBrowseError('Failed to load users');
+      }
+    } catch {
+      setBrowseError('Network error');
+    } finally {
+      setBrowseLoading(false);
+    }
   };
 
   const getStatusText = () => {
@@ -398,17 +444,195 @@ export default function HowlApp() {
     );
   }
 
+  if (view === 'browse') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
+        <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+
+          {/* Nav */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
+            <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => setView('profile')}
+                style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+              >
+                My Profile
+              </button>
+              <button
+                onClick={() => { setView('browse'); fetchBrowseUsers(); }}
+                style={{ padding: '10px 20px', background: 'white', color: '#667eea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
+              >
+                Browse ✨
+              </button>
+              <button
+                onClick={handleLogout}
+                style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+
+          <h2 style={{ color: 'white', fontSize: '22px', fontWeight: '600', marginBottom: '8px' }}>Discover your people</h2>
+          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', marginBottom: '28px' }}>Everyone here has found their spirit animal. Who will you meet?</p>
+
+          {browseError && (
+            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>
+              {browseError}
+            </div>
+          )}
+
+          {browseLoading ? (
+            <div style={{ textAlign: 'center', color: 'white', padding: '60px', fontSize: '18px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }} className="spinner">🐾</div>
+              Finding spirit animals…
+            </div>
+          ) : browseUsers.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.8)', padding: '60px', background: 'rgba(255,255,255,0.1)', borderRadius: '16px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>🐺</div>
+              <p style={{ fontSize: '18px', fontWeight: '600' }}>No one here yet</p>
+              <p style={{ fontSize: '14px', marginTop: '8px' }}>Be the first to discover your spirit animal!</p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+              {browseUsers.map((u, i) => (
+                <div
+                  key={i}
+                  style={{
+                    background: 'white',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
+                    boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
+                    transition: 'transform 0.2s, box-shadow 0.2s',
+                    cursor: 'default',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-4px)';
+                    e.currentTarget.style.boxShadow = '0 12px 40px rgba(0,0,0,0.25)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 4px 24px rgba(0,0,0,0.15)';
+                  }}
+                >
+                  {/* Card header — gradient banner with avatar or emoji placeholder */}
+                  <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '28px 24px 20px', textAlign: 'center' }}>
+                    {u.avatar_url ? (
+                      <img
+                        src={u.avatar_url}
+                        alt={`${u.name || 'User'}'s avatar`}
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'block';
+                        }}
+                        style={{ width: '96px', height: '96px', borderRadius: '50%', objectFit: 'cover', marginBottom: '12px', border: '3px solid rgba(255,255,255,0.4)' }}
+                      />
+                    ) : null}
+                    <div style={{ fontSize: '72px', lineHeight: 1, marginBottom: '12px', display: u.avatar_url ? 'none' : 'block' }}>
+                      {animalEmoji(u.animal)}
+                    </div>
+                    <h3 style={{ color: 'white', fontSize: '20px', fontWeight: '700', margin: 0 }}>
+                      {u.name || 'Anonymous'}{' '}
+                      <span style={{ fontWeight: '400', opacity: 0.85, fontSize: '16px' }}>
+                        · {u.animal ? u.animal.charAt(0).toUpperCase() + u.animal.slice(1) : ''}
+                      </span>
+                    </h3>
+                    {u.location && (
+                      <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '13px', marginTop: '6px' }}>
+                        📍 {u.location}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Card body */}
+                  <div style={{ padding: '20px 24px 24px' }}>
+                    {/* Bio */}
+                    {u.bio && (
+                      <p style={{ color: '#4a5568', fontSize: '14px', lineHeight: '1.6', marginBottom: '16px' }}>
+                        {u.bio.length > 160 ? u.bio.slice(0, 160).trimEnd() + '…' : u.bio}
+                      </p>
+                    )}
+
+                    {/* Traits */}
+                    {u.personality_traits?.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
+                        {u.personality_traits.map((trait, j) => (
+                          <span
+                            key={j}
+                            style={{ background: '#eef2ff', color: '#667eea', padding: '3px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}
+                          >
+                            {trait}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Avatar description */}
+                    {u.avatar_description && (
+                      <details>
+                        <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '12px', fontWeight: '500', userSelect: 'none', listStyle: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          ✦ View spirit animal description
+                        </summary>
+                        <p style={{ marginTop: '10px', color: '#718096', fontSize: '13px', lineHeight: '1.6', padding: '10px 12px', background: '#f7fafc', borderRadius: '8px' }}>
+                          {u.avatar_description}
+                        </p>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ marginTop: '40px', textAlign: 'center' }}>
+            <a
+              href="https://github.com/magicdevereaux/howl"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', textDecoration: 'none' }}
+            >
+              View on GitHub →
+            </a>
+          </div>
+        </div>
+
+        <style>{`
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+          .spinner { display: inline-block; animation: spin 2s linear infinite; }
+        `}</style>
+      </div>
+    );
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
           <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
-          <button
-            onClick={handleLogout}
-            style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
-          >
-            Logout
-          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => setView('profile')}
+              style={{ padding: '10px 20px', background: 'white', color: '#667eea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
+            >
+              My Profile
+            </button>
+            <button
+              onClick={() => { setView('browse'); fetchBrowseUsers(); }}
+              style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+            >
+              Browse ✨
+            </button>
+            <button
+              onClick={handleLogout}
+              style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         {/* Avatar Status Card */}
@@ -483,6 +707,35 @@ export default function HowlApp() {
           )}
 
           <form onSubmit={isStale ? (e) => { e.preventDefault(); handleRegenerate(); } : handleUpdateBio}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Your first name"
+                  maxLength={100}
+                  style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
+                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
+                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Location</label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="City, State"
+                  maxLength={100}
+                  style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
+                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
+                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                />
+              </div>
+            </div>
+
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>
                 Tell us about yourself

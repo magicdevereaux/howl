@@ -168,3 +168,123 @@ def test_update_bio_sets_avatar_status_updated_at(client, db, auth_headers, test
     assert res.status_code == 200
     db.refresh(test_user)
     assert test_user.avatar_status_updated_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Name and location updates
+# ---------------------------------------------------------------------------
+
+def test_update_name_success(client, auth_headers):
+    """Patching name updates it without touching avatar_status."""
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"name": "Jordan"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Jordan"
+    # Name change must NOT reset the avatar
+    assert data["avatar_status"] == "pending"
+
+
+def test_update_location_success(client, auth_headers):
+    """Patching location updates it without touching avatar_status."""
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"location": "Austin, TX"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["location"] == "Austin, TX"
+    assert data["avatar_status"] == "pending"
+
+
+def test_update_name_and_location_together(client, auth_headers):
+    """Name and location can be updated in the same request."""
+    res = client.patch(
+        "/api/profile/me",
+        headers=auth_headers,
+        json={"name": "Riley", "location": "Seattle, WA"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Riley"
+    assert data["location"] == "Seattle, WA"
+
+
+def test_update_name_too_long(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"name": "x" * 101})
+    assert res.status_code == 422
+
+
+def test_update_location_too_long(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"location": "x" * 101})
+    assert res.status_code == 422
+
+
+def test_update_name_strips_whitespace(client, auth_headers):
+    """Leading/trailing whitespace is stripped from name."""
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"name": "  Casey  "})
+    assert res.status_code == 200
+    assert res.json()["name"] == "Casey"
+
+
+def test_update_blank_name_is_ignored(client, db, auth_headers, test_user):
+    """Sending a whitespace-only name leaves the existing name unchanged.
+
+    The validator strips and nullifies blank strings, which the handler
+    treats the same as 'field not provided' — so the existing value is kept.
+    To explicitly clear a name, send JSON null.
+    """
+    test_user.name = "OldName"
+    db.commit()
+
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"name": "   "})
+    assert res.status_code == 200
+    assert res.json()["name"] == "OldName"
+
+
+def test_update_profile_with_all_fields(client, auth_headers, monkeypatch):
+    """Sending name, location, and bio in one request saves all three."""
+    called = []
+    monkeypatch.setattr(
+        "app.api.profile.generate_avatar.delay",
+        lambda user_id: called.append(user_id),
+    )
+    res = client.patch(
+        "/api/profile/me",
+        headers=auth_headers,
+        json={
+            "name": "Morgan",
+            "location": "Chicago, IL",
+            "bio": "A bold lion who leads the pride with quiet confidence and warmth.",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Morgan"
+    assert data["location"] == "Chicago, IL"
+    assert data["bio"] == "A bold lion who leads the pride with quiet confidence and warmth."
+    assert data["avatar_status"] == "pending"
+    # Bio was present so task should have been queued
+    assert len(called) == 1
+
+
+def test_name_location_without_bio_does_not_trigger_avatar(client, db, auth_headers, test_user):
+    """Updating only name/location never resets avatar_status or queues a task."""
+    from app.models.user import AvatarStatus
+    test_user.avatar_status = AvatarStatus.ready
+    test_user.animal = "wolf"
+    db.commit()
+
+    called = []
+    # Override the autouse mock to capture calls
+    import app.api.profile as profile_module
+    original = profile_module.generate_avatar.delay
+    profile_module.generate_avatar.delay = lambda uid: called.append(uid)
+    try:
+        res = client.patch(
+            "/api/profile/me",
+            headers=auth_headers,
+            json={"name": "Alex", "location": "Portland, OR"},
+        )
+    finally:
+        profile_module.generate_avatar.delay = original
+
+    assert res.status_code == 200
+    assert res.json()["avatar_status"] == "ready"
+    assert len(called) == 0
