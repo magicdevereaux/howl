@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 export default function HowlApp() {
-  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'browse'
+  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'discover', 'matches'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -15,9 +15,13 @@ export default function HowlApp() {
   const [copied, setCopied] = useState(false);
   const [generationStartTime, setGenerationStartTime] = useState(null);
   const [generationTime, setGenerationTime] = useState(null);
-  const [browseUsers, setBrowseUsers] = useState([]);
-  const [browseLoading, setBrowseLoading] = useState(false);
-  const [browseError, setBrowseError] = useState('');
+  const [discoverUsers, setDiscoverUsers] = useState([]);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverError, setDiscoverError] = useState('');
+  const [matches, setMatches] = useState([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchPopup, setMatchPopup] = useState(null); // null | match object
+  const [swipeLoading, setSwipeLoading] = useState(false);
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
@@ -36,7 +40,6 @@ export default function HowlApp() {
     !!user?.bio &&
     !isStale;
 
-  // Fetch profile on mount if token exists
   useEffect(() => {
     if (token) {
       fetchProfile();
@@ -44,7 +47,6 @@ export default function HowlApp() {
     }
   }, [token]);
 
-  // Poll only when generation is actively in progress (bio exists + pending/generating + not stale)
   useEffect(() => {
     const shouldPoll =
       (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
@@ -77,8 +79,6 @@ export default function HowlApp() {
     }
   };
 
-  // currentToken is an explicit override for cases where the React state
-  // hasn't updated yet (stale closure after login/register).
   const fetchAvatarStatus = async (currentToken) => {
     const authToken = currentToken !== undefined ? currentToken : token;
     try {
@@ -88,7 +88,6 @@ export default function HowlApp() {
       if (res.ok) {
         const data = await res.json();
         setAvatarStatus(prev => {
-          // If we just transitioned to ready, record elapsed time
           if (data.avatar_status === 'ready' && prev?.avatar_status !== 'ready') {
             setGenerationStartTime(t => {
               if (t !== null) {
@@ -101,7 +100,6 @@ export default function HowlApp() {
           return data;
         });
       } else if (res.status === 401) {
-        // Token is invalid or expired — clear session and return to login
         setToken('');
         localStorage.removeItem('access_token');
         setView('login');
@@ -116,16 +114,13 @@ export default function HowlApp() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
-
       const data = await res.json();
-
       if (res.ok) {
         const newToken = data.access_token;
         setToken(newToken);
@@ -135,7 +130,7 @@ export default function HowlApp() {
         setLocation(data.user.location || '');
         setBio(data.user.bio || '');
         setView('profile');
-        fetchAvatarStatus(newToken); // pass token explicitly — avoids stale closure
+        fetchAvatarStatus(newToken);
       } else {
         setError(data.detail || 'Login failed');
       }
@@ -150,18 +145,14 @@ export default function HowlApp() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const res = await fetch(`${API_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
-
       const data = await res.json();
-
       if (res.ok) {
-        // FIX: register now returns {access_token, user} matching login shape
         setToken(data.access_token);
         localStorage.setItem('access_token', data.access_token);
         setUser(data.user);
@@ -183,26 +174,19 @@ export default function HowlApp() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ name: name || null, location: location || null, bio })
       });
-
       const data = await res.json();
-
       if (res.ok) {
         setUser(data);
         setName(data.name || '');
         setLocation(data.location || '');
         setGenerationStartTime(Date.now());
         setGenerationTime(null);
-        // Local sentinel so the UI reacts immediately before the first poll
         setAvatarStatus({ avatar_status: 'generating', animal: null });
         setTimeout(fetchAvatarStatus, 2000);
       } else {
@@ -224,21 +208,11 @@ export default function HowlApp() {
     setName('');
     setLocation('');
     setBio('');
+    setDiscoverUsers([]);
+    setMatches([]);
+    setMatchPopup(null);
     setView('login');
     localStorage.removeItem('access_token');
-  };
-
-  const getStatusEmoji = () => {
-    if (!user?.bio) return <span>🐺</span>;
-    if (!avatarStatus) return <span>🐺</span>;
-    if (isStale) return <span>⚠️</span>;
-    switch (avatarStatus.avatar_status) {
-      case 'ready': return <span>✨</span>;
-      case 'generating':
-      case 'pending': return <span className="spinner">⏳</span>;
-      case 'failed': return <span>❌</span>;
-      default: return <span>🐺</span>;
-    }
   };
 
   const handleRegenerate = async () => {
@@ -272,34 +246,82 @@ export default function HowlApp() {
     });
   };
 
-  const ANIMAL_EMOJI = {
-    wolf: '🐺', fox: '🦊', deer: '🦌', bear: '🐻', owl: '🦉',
-    cat: '🐱', lion: '🦁', otter: '🦦', eagle: '🦅', panther: '🐆',
-    hawk: '🦅', rabbit: '🐰', dolphin: '🐬', crow: '🐦‍⬛',
-  };
-  const animalEmoji = (animal) => ANIMAL_EMOJI[animal?.toLowerCase()] || '🐾';
-
-  const fetchBrowseUsers = async () => {
-    setBrowseLoading(true);
-    setBrowseError('');
+  const fetchDiscoverUsers = async () => {
+    setDiscoverLoading(true);
+    setDiscoverError('');
     try {
-      const res = await fetch(`${API_URL}/api/users/browse`, {
+      const res = await fetch(`${API_URL}/api/users/discover`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        setBrowseUsers(await res.json());
+        setDiscoverUsers(await res.json());
       } else if (res.status === 401) {
         setToken('');
         localStorage.removeItem('access_token');
         setView('login');
         setError('Session expired. Please sign in again.');
       } else {
-        setBrowseError('Failed to load users');
+        setDiscoverError('Failed to load users');
       }
     } catch {
-      setBrowseError('Network error');
+      setDiscoverError('Network error');
     } finally {
-      setBrowseLoading(false);
+      setDiscoverLoading(false);
+    }
+  };
+
+  const fetchMatches = async () => {
+    setMatchesLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/matches`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setMatches(await res.json());
+      } else if (res.status === 401) {
+        setToken('');
+        localStorage.removeItem('access_token');
+        setView('login');
+        setError('Session expired. Please sign in again.');
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setMatchesLoading(false);
+    }
+  };
+
+  const handleSwipe = async (targetUserId, direction) => {
+    setSwipeLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/swipes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ target_user_id: targetUserId, direction }),
+      });
+      const data = await res.json();
+      // Remove the top card regardless of outcome
+      setDiscoverUsers(prev => prev.slice(1));
+      if (res.ok && data.matched) {
+        setMatchPopup(data.match);
+      }
+    } catch {
+      setDiscoverUsers(prev => prev.slice(1));
+    } finally {
+      setSwipeLoading(false);
+    }
+  };
+
+  const getStatusEmoji = () => {
+    if (!user?.bio) return <span>🐺</span>;
+    if (!avatarStatus) return <span>🐺</span>;
+    if (isStale) return <span>⚠️</span>;
+    switch (avatarStatus.avatar_status) {
+      case 'ready': return <span>✨</span>;
+      case 'generating':
+      case 'pending': return <span className="spinner">⏳</span>;
+      case 'failed': return <span>❌</span>;
+      default: return <span>🐺</span>;
     }
   };
 
@@ -316,324 +338,348 @@ export default function HowlApp() {
     }
   };
 
+  const ANIMAL_EMOJI = {
+    wolf: '🐺', fox: '🦊', deer: '🦌', bear: '🐻', owl: '🦉',
+    cat: '🐱', lion: '🦁', otter: '🦦', eagle: '🦅', panther: '🐆',
+    hawk: '🦅', rabbit: '🐰', dolphin: '🐬', crow: '🐦‍⬛',
+  };
+  const animalEmoji = (animal) => ANIMAL_EMOJI[animal?.toLowerCase()] || '🐾';
+
+  const navButton = (label, targetView, fetchFn) => {
+    const active = view === targetView;
+    return (
+      <button
+        onClick={() => { setView(targetView); fetchFn && fetchFn(); }}
+        style={{
+          padding: '10px 20px',
+          background: active ? 'white' : 'rgba(255,255,255,0.15)',
+          color: active ? '#667eea' : 'white',
+          border: active ? 'none' : '1px solid rgba(255,255,255,0.3)',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          fontSize: '14px',
+          fontWeight: active ? '600' : '500',
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  const Nav = () => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
+      <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
+      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        {navButton('Discover', 'discover', fetchDiscoverUsers)}
+        {navButton('Matches ❤️', 'matches', fetchMatches)}
+        {navButton('My Profile', 'profile', null)}
+        <button
+          onClick={handleLogout}
+          style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+        >
+          Logout
+        </button>
+      </div>
+    </div>
+  );
+
+  // ---------------------------------------------------------------------------
+  // Register view
+  // ---------------------------------------------------------------------------
   if (view === 'register') {
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
         <div style={{ background: 'white', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
           <h1 style={{ fontSize: '32px', fontWeight: '700', color: '#2d3748', marginBottom: '8px', textAlign: 'center' }}>Join Howl 🐺</h1>
           <p style={{ color: '#718096', marginBottom: '32px', textAlign: 'center' }}>Create your account</p>
-
-          {error && (
-            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>
-              {error}
-            </div>
-          )}
-
+          {error && <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>{error}</div>}
           <form onSubmit={handleRegister}>
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="wolf@howl.app"
-                required
-                style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-              />
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="wolf@howl.app" required style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
             </div>
-
             <div style={{ marginBottom: '24px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-              />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
             </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{ width: '100%', padding: '14px', background: loading ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer', transition: 'transform 0.2s' }}
-              onMouseEnter={(e) => !loading && (e.target.style.transform = 'translateY(-2px)')}
-              onMouseLeave={(e) => !loading && (e.target.style.transform = 'translateY(0)')}
-            >
+            <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', background: loading ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer' }}>
               {loading ? 'Creating account...' : 'Create Account'}
             </button>
           </form>
-
           <p style={{ marginTop: '24px', textAlign: 'center', color: '#718096', fontSize: '14px' }}>
             Already have an account?{' '}
-            <button onClick={() => setView('login')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>
-              Sign in
-            </button>
+            <button onClick={() => setView('login')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>Sign in</button>
           </p>
         </div>
       </div>
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Login view
+  // ---------------------------------------------------------------------------
   if (view === 'login') {
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
         <div style={{ background: 'white', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
           <h1 style={{ fontSize: '32px', fontWeight: '700', color: '#2d3748', marginBottom: '8px', textAlign: 'center' }}>Welcome to Howl 🐺</h1>
           <p style={{ color: '#718096', marginBottom: '32px', textAlign: 'center' }}>Sign in to find your spirit animal</p>
-
-          {error && (
-            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>
-              {error}
-            </div>
-          )}
-
+          {error && <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>{error}</div>}
           <form onSubmit={handleLogin}>
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="wolf@howl.app"
-                required
-                style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-              />
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="wolf@howl.app" required style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
             </div>
-
             <div style={{ marginBottom: '24px' }}>
               <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-              />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
             </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{ width: '100%', padding: '14px', background: loading ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer', transition: 'transform 0.2s' }}
-              onMouseEnter={(e) => !loading && (e.target.style.transform = 'translateY(-2px)')}
-              onMouseLeave={(e) => !loading && (e.target.style.transform = 'translateY(0)')}
-            >
+            <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', background: loading ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer' }}>
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
-
           <p style={{ marginTop: '24px', textAlign: 'center', color: '#718096', fontSize: '14px' }}>
             Don't have an account?{' '}
-            <button onClick={() => setView('register')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>
-              Create one
-            </button>
+            <button onClick={() => setView('register')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>Create one</button>
           </p>
         </div>
       </div>
     );
   }
 
-  if (view === 'browse') {
+  // ---------------------------------------------------------------------------
+  // Discover view (Tinder-style single card)
+  // ---------------------------------------------------------------------------
+  if (view === 'discover') {
+    const currentCard = discoverUsers[0] || null;
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
-        <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+        <div style={{ maxWidth: '520px', margin: '0 auto' }}>
+          <Nav />
 
-          {/* Nav */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
-            <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => setView('profile')}
-                style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
-              >
-                My Profile
-              </button>
-              <button
-                onClick={() => { setView('browse'); fetchBrowseUsers(); }}
-                style={{ padding: '10px 20px', background: 'white', color: '#667eea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
-              >
-                Browse ✨
-              </button>
-              <button
-                onClick={handleLogout}
-                style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-
-          <h2 style={{ color: 'white', fontSize: '22px', fontWeight: '600', marginBottom: '8px' }}>Discover your people</h2>
-          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', marginBottom: '28px' }}>Everyone here has found their spirit animal. Who will you meet?</p>
-
-          {browseError && (
-            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>
-              {browseError}
-            </div>
-          )}
-
-          {browseLoading ? (
+          {discoverLoading ? (
             <div style={{ textAlign: 'center', color: 'white', padding: '60px', fontSize: '18px' }}>
               <div style={{ fontSize: '48px', marginBottom: '16px' }} className="spinner">🐾</div>
               Finding spirit animals…
             </div>
-          ) : browseUsers.length === 0 ? (
-            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.8)', padding: '60px', background: 'rgba(255,255,255,0.1)', borderRadius: '16px' }}>
-              <div style={{ fontSize: '48px', marginBottom: '16px' }}>🐺</div>
-              <p style={{ fontSize: '18px', fontWeight: '600' }}>No one here yet</p>
-              <p style={{ fontSize: '14px', marginTop: '8px' }}>Be the first to discover your spirit animal!</p>
+          ) : discoverError ? (
+            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', color: '#c53030' }}>{discoverError}</div>
+          ) : !currentCard ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.9)', padding: '60px', background: 'rgba(255,255,255,0.12)', borderRadius: '20px' }}>
+              <div style={{ fontSize: '56px', marginBottom: '16px' }}>🎉</div>
+              <p style={{ fontSize: '20px', fontWeight: '700' }}>You've seen everyone!</p>
+              <p style={{ fontSize: '14px', marginTop: '8px', opacity: 0.8 }}>Check back later for new members.</p>
+              <button
+                onClick={fetchDiscoverUsers}
+                style={{ marginTop: '20px', padding: '12px 28px', background: 'white', color: '#667eea', border: 'none', borderRadius: '10px', fontWeight: '600', cursor: 'pointer', fontSize: '15px' }}
+              >
+                Refresh
+              </button>
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-              {browseUsers.map((u, i) => (
-                <div
-                  key={i}
-                  style={{
-                    background: 'white',
-                    borderRadius: '16px',
-                    overflow: 'hidden',
-                    boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
-                    transition: 'transform 0.2s, box-shadow 0.2s',
-                    cursor: 'default',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-4px)';
-                    e.currentTarget.style.boxShadow = '0 12px 40px rgba(0,0,0,0.25)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 4px 24px rgba(0,0,0,0.15)';
-                  }}
-                >
-                  {/* Card header — gradient banner with avatar or emoji placeholder */}
-                  <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '28px 24px 20px', textAlign: 'center' }}>
-                    {u.avatar_url ? (
-                      <img
-                        src={u.avatar_url}
-                        alt={`${u.name || 'User'}'s avatar`}
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                          e.target.nextSibling.style.display = 'block';
-                        }}
-                        style={{ width: '96px', height: '96px', borderRadius: '50%', objectFit: 'cover', marginBottom: '12px', border: '3px solid rgba(255,255,255,0.4)' }}
-                      />
-                    ) : null}
-                    <div style={{ fontSize: '72px', lineHeight: 1, marginBottom: '12px', display: u.avatar_url ? 'none' : 'block' }}>
-                      {animalEmoji(u.animal)}
-                    </div>
-                    <h3 style={{ color: 'white', fontSize: '20px', fontWeight: '700', margin: 0 }}>
-                      {u.name || 'Anonymous'}{' '}
-                      <span style={{ fontWeight: '400', opacity: 0.85, fontSize: '16px' }}>
-                        · {u.animal ? u.animal.charAt(0).toUpperCase() + u.animal.slice(1) : ''}
-                      </span>
-                    </h3>
-                    {u.location && (
-                      <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '13px', marginTop: '6px' }}>
-                        📍 {u.location}
-                      </p>
-                    )}
+            <>
+              <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>
+                {discoverUsers.length} {discoverUsers.length === 1 ? 'person' : 'people'} left
+              </p>
+
+              {/* Card */}
+              <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 16px 48px rgba(0,0,0,0.25)' }}>
+                <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 28px 28px', textAlign: 'center' }}>
+                  {currentCard.avatar_url ? (
+                    <img
+                      src={currentCard.avatar_url}
+                      alt={`${currentCard.name || 'User'}'s avatar`}
+                      onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+                      style={{ width: '112px', height: '112px', borderRadius: '50%', objectFit: 'cover', marginBottom: '16px', border: '4px solid rgba(255,255,255,0.4)' }}
+                    />
+                  ) : null}
+                  <div style={{ fontSize: '88px', lineHeight: 1, marginBottom: '16px', display: currentCard.avatar_url ? 'none' : 'block' }}>
+                    {animalEmoji(currentCard.animal)}
                   </div>
-
-                  {/* Card body */}
-                  <div style={{ padding: '20px 24px 24px' }}>
-                    {/* Bio */}
-                    {u.bio && (
-                      <p style={{ color: '#4a5568', fontSize: '14px', lineHeight: '1.6', marginBottom: '16px' }}>
-                        {u.bio.length > 160 ? u.bio.slice(0, 160).trimEnd() + '…' : u.bio}
-                      </p>
-                    )}
-
-                    {/* Traits */}
-                    {u.personality_traits?.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
-                        {u.personality_traits.map((trait, j) => (
-                          <span
-                            key={j}
-                            style={{ background: '#eef2ff', color: '#667eea', padding: '3px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}
-                          >
-                            {trait}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Avatar description */}
-                    {u.avatar_description && (
-                      <details>
-                        <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '12px', fontWeight: '500', userSelect: 'none', listStyle: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          ✦ View spirit animal description
-                        </summary>
-                        <p style={{ marginTop: '10px', color: '#718096', fontSize: '13px', lineHeight: '1.6', padding: '10px 12px', background: '#f7fafc', borderRadius: '8px' }}>
-                          {u.avatar_description}
-                        </p>
-                      </details>
-                    )}
-                  </div>
+                  <h2 style={{ color: 'white', fontSize: '26px', fontWeight: '700', margin: '0 0 4px' }}>
+                    {currentCard.name || 'Anonymous'}
+                  </h2>
+                  <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: '16px', margin: 0 }}>
+                    {currentCard.animal ? currentCard.animal.charAt(0).toUpperCase() + currentCard.animal.slice(1) : ''}
+                  </p>
+                  {currentCard.location && (
+                    <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '13px', marginTop: '8px' }}>
+                      📍 {currentCard.location}
+                    </p>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
 
-          <div style={{ marginTop: '40px', textAlign: 'center' }}>
-            <a
-              href="https://github.com/magicdevereaux/howl"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', textDecoration: 'none' }}
-            >
-              View on GitHub →
-            </a>
-          </div>
+                <div style={{ padding: '24px 28px 28px' }}>
+                  {currentCard.bio && (
+                    <p style={{ color: '#4a5568', fontSize: '15px', lineHeight: '1.65', marginBottom: '16px' }}>
+                      {currentCard.bio.length > 200 ? currentCard.bio.slice(0, 200).trimEnd() + '…' : currentCard.bio}
+                    </p>
+                  )}
+                  {currentCard.personality_traits?.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
+                      {currentCard.personality_traits.map((trait, i) => (
+                        <span key={i} style={{ background: '#eef2ff', color: '#667eea', padding: '4px 12px', borderRadius: '12px', fontSize: '13px', fontWeight: '500' }}>
+                          {trait}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {currentCard.avatar_description && (
+                    <details style={{ marginBottom: '8px' }}>
+                      <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '13px', fontWeight: '500', userSelect: 'none', listStyle: 'none' }}>
+                        ✦ View spirit animal description
+                      </summary>
+                      <p style={{ marginTop: '10px', color: '#718096', fontSize: '13px', lineHeight: '1.6', padding: '10px 12px', background: '#f7fafc', borderRadius: '8px' }}>
+                        {currentCard.avatar_description}
+                      </p>
+                    </details>
+                  )}
+                </div>
+              </div>
+
+              {/* Swipe buttons */}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '28px' }}>
+                <button
+                  disabled={swipeLoading}
+                  onClick={() => handleSwipe(currentCard.id, 'pass')}
+                  style={{ width: '72px', height: '72px', borderRadius: '50%', background: 'white', border: '2px solid #fed7d7', fontSize: '28px', cursor: swipeLoading ? 'not-allowed' : 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,0.15)', transition: 'transform 0.15s, box-shadow 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  onMouseEnter={(e) => !swipeLoading && (e.currentTarget.style.transform = 'scale(1.1)')}
+                  onMouseLeave={(e) => !swipeLoading && (e.currentTarget.style.transform = 'scale(1)')}
+                  title="Pass"
+                >
+                  ❌
+                </button>
+                <button
+                  disabled={swipeLoading}
+                  onClick={() => handleSwipe(currentCard.id, 'like')}
+                  style={{ width: '72px', height: '72px', borderRadius: '50%', background: 'linear-gradient(135deg, #f687b3 0%, #ed64a6 100%)', border: 'none', fontSize: '28px', cursor: swipeLoading ? 'not-allowed' : 'pointer', boxShadow: '0 4px 16px rgba(237,100,166,0.4)', transition: 'transform 0.15s, box-shadow 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  onMouseEnter={(e) => !swipeLoading && (e.currentTarget.style.transform = 'scale(1.1)')}
+                  onMouseLeave={(e) => !swipeLoading && (e.currentTarget.style.transform = 'scale(1)')}
+                  title="Like"
+                >
+                  ❤️
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
+        {/* Match popup */}
+        {matchPopup && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+            <div style={{ background: 'white', borderRadius: '24px', padding: '48px 40px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.4)' }}>
+              <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎉</div>
+              <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#2d3748', marginBottom: '8px' }}>It's a Match!</h2>
+              <p style={{ color: '#718096', fontSize: '15px', marginBottom: '24px' }}>
+                You and {matchPopup.other_user?.name || 'someone'} liked each other!
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginBottom: '28px', fontSize: '52px' }}>
+                <span>{animalEmoji(avatarStatus?.animal)}</span>
+                <span style={{ fontSize: '24px', alignSelf: 'center', color: '#ed64a6' }}>❤️</span>
+                <span>{animalEmoji(matchPopup.other_user?.animal)}</span>
+              </div>
+              <button
+                onClick={() => setMatchPopup(null)}
+                style={{ width: '100%', padding: '14px', background: 'linear-gradient(135deg, #f687b3 0%, #ed64a6 100%)', color: 'white', border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                Keep Swiping
+              </button>
+              <button
+                onClick={() => { setMatchPopup(null); setView('matches'); fetchMatches(); }}
+                style={{ width: '100%', marginTop: '10px', padding: '12px', background: 'transparent', color: '#667eea', border: '2px solid #667eea', borderRadius: '10px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
+              >
+                View Matches
+              </button>
+            </div>
+          </div>
+        )}
+
         <style>{`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
           .spinner { display: inline-block; animation: spin 2s linear infinite; }
         `}</style>
       </div>
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Matches view
+  // ---------------------------------------------------------------------------
+  if (view === 'matches') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
+        <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+          <Nav />
+
+          <h2 style={{ color: 'white', fontSize: '22px', fontWeight: '600', marginBottom: '8px' }}>Your Matches</h2>
+          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', marginBottom: '28px' }}>Spirit animals that connected with yours</p>
+
+          {matchesLoading ? (
+            <div style={{ textAlign: 'center', color: 'white', padding: '60px', fontSize: '18px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }} className="spinner">🐾</div>
+              Loading matches…
+            </div>
+          ) : matches.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.8)', padding: '60px', background: 'rgba(255,255,255,0.1)', borderRadius: '16px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>❤️</div>
+              <p style={{ fontSize: '18px', fontWeight: '600' }}>No matches yet</p>
+              <p style={{ fontSize: '14px', marginTop: '8px' }}>Go discover some spirit animals!</p>
+              <button
+                onClick={() => { setView('discover'); fetchDiscoverUsers(); }}
+                style={{ marginTop: '20px', padding: '12px 28px', background: 'white', color: '#667eea', border: 'none', borderRadius: '10px', fontWeight: '600', cursor: 'pointer', fontSize: '15px' }}
+              >
+                Discover People
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '16px' }}>
+              {matches.map((m) => (
+                <div
+                  key={m.id}
+                  style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.15)', transition: 'transform 0.2s' }}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-4px)'}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+                >
+                  <div style={{ background: 'linear-gradient(135deg, #f687b3 0%, #ed64a6 100%)', padding: '24px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '56px', lineHeight: 1, marginBottom: '10px' }}>
+                      {m.other_user.avatar_url ? (
+                        <img src={m.other_user.avatar_url} alt="" style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid rgba(255,255,255,0.4)' }} onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
+                      ) : null}
+                      <span style={{ display: m.other_user.avatar_url ? 'none' : 'block' }}>{animalEmoji(m.other_user.animal)}</span>
+                    </div>
+                    <h3 style={{ color: 'white', fontSize: '17px', fontWeight: '700', margin: 0 }}>
+                      {m.other_user.name || 'Anonymous'}
+                    </h3>
+                    <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '4px 0 0' }}>
+                      {m.other_user.animal ? m.other_user.animal.charAt(0).toUpperCase() + m.other_user.animal.slice(1) : ''}
+                    </p>
+                  </div>
+                  <div style={{ padding: '12px 16px', textAlign: 'center' }}>
+                    <p style={{ color: '#a0aec0', fontSize: '11px' }}>
+                      Matched {new Date(m.matched_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <style>{`
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+          .spinner { display: inline-block; animation: spin 2s linear infinite; }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Profile view (default)
+  // ---------------------------------------------------------------------------
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
-          <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={() => setView('profile')}
-              style={{ padding: '10px 20px', background: 'white', color: '#667eea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
-            >
-              My Profile
-            </button>
-            <button
-              onClick={() => { setView('browse'); fetchBrowseUsers(); }}
-              style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
-            >
-              Browse ✨
-            </button>
-            <button
-              onClick={handleLogout}
-              style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
-            >
-              Logout
-            </button>
-          </div>
-        </div>
+        <Nav />
 
         {/* Avatar Status Card */}
         <div style={{ background: 'white', borderRadius: '16px', padding: '32px', marginBottom: '24px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', textAlign: 'center' }}>
@@ -641,10 +687,7 @@ export default function HowlApp() {
           <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#2d3748', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {getStatusText()}
             {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal && (
-              <button
-                onClick={handleCopyAnimal}
-                style={{ padding: '4px 10px', background: copied ? '#48bb78' : '#edf2f7', color: copied ? 'white' : '#4a5568', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
-              >
+              <button onClick={handleCopyAnimal} style={{ padding: '4px 10px', background: copied ? '#48bb78' : '#edf2f7', color: copied ? 'white' : '#4a5568', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}>
                 {copied ? 'Copied!' : '📋 Copy'}
               </button>
             )}
@@ -652,9 +695,7 @@ export default function HowlApp() {
           {avatarStatus?.avatar_status === 'ready' && (
             <>
               {generationTime && (
-                <p style={{ color: '#a0aec0', fontSize: '12px', marginBottom: '12px' }}>
-                  Generated in {generationTime}
-                </p>
+                <p style={{ color: '#a0aec0', fontSize: '12px', marginBottom: '12px' }}>Generated in {generationTime}</p>
               )}
               {avatarStatus?.personality_traits?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginBottom: '16px' }}>
@@ -667,17 +708,13 @@ export default function HowlApp() {
               )}
               {avatarStatus?.avatar_description && (
                 <details style={{ textAlign: 'left', marginBottom: '12px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '13px', fontWeight: '500', userSelect: 'none' }}>
-                    View full description
-                  </summary>
+                  <summary style={{ cursor: 'pointer', color: '#667eea', fontSize: '13px', fontWeight: '500', userSelect: 'none' }}>View full description</summary>
                   <p style={{ marginTop: '8px', color: '#4a5568', fontSize: '14px', lineHeight: '1.6', padding: '12px', background: '#f7fafc', borderRadius: '8px' }}>
                     {avatarStatus.avatar_description}
                   </p>
                 </details>
               )}
-              <p style={{ color: '#718096', fontSize: '14px' }}>
-                Update your bio to regenerate
-              </p>
+              <p style={{ color: '#718096', fontSize: '14px' }}>Update your bio to regenerate</p>
             </>
           )}
           {isGenerating && (
@@ -689,95 +726,43 @@ export default function HowlApp() {
           )}
         </div>
 
-        {/* Profile Card */}
+        {/* Profile form */}
         <div style={{ background: 'white', borderRadius: '16px', padding: '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#2d3748' }}>Your Profile</h3>
-              <span style={{ fontSize: '12px', color: '#718096', background: '#f7fafc', padding: '4px 12px', borderRadius: '12px' }}>
-                {user?.email}
-              </span>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#2d3748' }}>Your Profile</h3>
+            <span style={{ fontSize: '12px', color: '#718096', background: '#f7fafc', padding: '4px 12px', borderRadius: '12px' }}>{user?.email}</span>
           </div>
 
           {error && (
-            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030', fontSize: '14px' }}>
-              {error}
-            </div>
+            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030', fontSize: '14px' }}>{error}</div>
           )}
 
           <form onSubmit={isStale ? (e) => { e.preventDefault(); handleRegenerate(); } : handleUpdateBio}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your first name"
-                  maxLength={100}
-                  style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                />
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" maxLength={100} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Location</label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="City, State"
-                  maxLength={100}
-                  style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                />
+                <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="City, State" maxLength={100} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
               </div>
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>
-                Tell us about yourself
-              </label>
-              <textarea
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                placeholder="I'm a lone wolf who loves midnight runs and howling at the moon..."
-                rows={4}
-                style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical', transition: 'border 0.2s', boxSizing: 'border-box' }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-              />
-              <p style={{ fontSize: '12px', color: '#a0aec0', marginTop: '8px' }}>
-                Claude will analyze your bio to determine your spirit animal
-              </p>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Tell us about yourself</label>
+              <textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="I'm a lone wolf who loves midnight runs and howling at the moon..." rows={4} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
+              <p style={{ fontSize: '12px', color: '#a0aec0', marginTop: '8px' }}>Claude will analyze your bio to determine your spirit animal</p>
             </div>
 
             <button
               type="submit"
               disabled={loading || (!isStale && (!bio.trim() || isGenerating))}
               style={{
-                width: '100%',
-                padding: '14px',
+                width: '100%', padding: '14px',
                 background: loading || (!isStale && (!bio.trim() || isGenerating)) ? '#cbd5e0' : isStale ? 'linear-gradient(135deg, #f6ad55 0%, #ed8936 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '16px',
-                fontWeight: '600',
+                color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600',
                 cursor: loading || (!isStale && (!bio.trim() || isGenerating)) ? 'not-allowed' : 'pointer',
-                transition: 'transform 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                if (!loading && (isStale || (bio.trim() && !isGenerating))) {
-                  e.target.style.transform = 'translateY(-2px)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!loading && (isStale || (bio.trim() && !isGenerating))) {
-                  e.target.style.transform = 'translateY(0)';
-                }
               }}
             >
               {loading ? (isStale ? 'Retrying...' : 'Updating...') : isStale ? '⚠️ Try Again' : isGenerating ? 'Generating...' : bio !== user?.bio ? 'Update Bio & Generate Avatar' : 'Regenerate Avatar'}
@@ -785,32 +770,17 @@ export default function HowlApp() {
           </form>
         </div>
 
-        {/* FIX: restored missing opening <a> tag */}
         <div style={{ marginTop: '24px', textAlign: 'center' }}>
-          <a
-            href="https://github.com/magicdevereaux/howl"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', textDecoration: 'none' }}
-          >
+          <a href="https://github.com/magicdevereaux/howl" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', textDecoration: 'none' }}>
             View on GitHub →
           </a>
         </div>
       </div>
 
       <style>{`
-        @keyframes slide {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(250%); }
-        }
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        .spinner {
-          display: inline-block;
-          animation: spin 2s linear infinite;
-        }
+        @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spinner { display: inline-block; animation: spin 2s linear infinite; }
       `}</style>
     </div>
   );
