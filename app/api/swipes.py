@@ -1,3 +1,6 @@
+import logging
+import random
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -7,6 +10,13 @@ from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
 from app.schemas.swipe import MatchOut, MatchedProfileOut, SwipeIn, SwipeOut
+from app.tasks.auto_match import auto_match_demo_user
+
+logger = logging.getLogger(__name__)
+
+# Seconds to wait before the demo user "responds". Change to random.randint(600, 3600)
+# (10–60 min) for production; 30 s is convenient for local testing.
+_DEMO_REPLY_DELAY_S = 30
 
 router = APIRouter(prefix="/api/swipes", tags=["swipes"])
 
@@ -69,4 +79,17 @@ def record_swipe(
             )
 
     db.commit()
+
+    # Queue a delayed auto-like if the target is a demo user and we just liked them.
+    # The task itself re-validates everything, so it's safe to fire and forget.
+    if body.direction == SwipeDirection.like and target.email.startswith("demo"):
+        auto_match_demo_user.apply_async(
+            args=[current_user.id, body.target_user_id],
+            countdown=_DEMO_REPLY_DELAY_S,
+        )
+        logger.info(
+            "swipes: queued auto_match in %ds for real=%d demo=%d",
+            _DEMO_REPLY_DELAY_S, current_user.id, body.target_user_id,
+        )
+
     return SwipeOut(matched=matched, match=match_out)
