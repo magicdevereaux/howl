@@ -22,6 +22,8 @@ export default function HowlApp() {
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [matchPopup, setMatchPopup] = useState(null); // null | match object
   const [swipeLoading, setSwipeLoading] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [undoMessage, setUndoMessage] = useState('');
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
@@ -293,6 +295,7 @@ export default function HowlApp() {
 
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
+    setUndoMessage('');
     try {
       const res = await fetch(`${API_URL}/api/swipes`, {
         method: 'POST',
@@ -302,11 +305,38 @@ export default function HowlApp() {
       const data = await res.json();
       // Remove the top card regardless of outcome
       setDiscoverUsers(prev => prev.slice(1));
+      setCanUndo(true);
       if (res.ok && data.matched) {
         setMatchPopup(data.match);
       }
     } catch {
       setDiscoverUsers(prev => prev.slice(1));
+    } finally {
+      setSwipeLoading(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    setSwipeLoading(true);
+    setUndoMessage('');
+    try {
+      const res = await fetch(`${API_URL}/api/swipes/last`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Push the restored user back to the front of the stack
+        setDiscoverUsers(prev => [data.user, ...prev]);
+        setCanUndo(false);
+        const name = data.user.name || 'that person';
+        setUndoMessage(`↩️ Undid swipe on ${name}`);
+        setTimeout(() => setUndoMessage(''), 3000);
+      } else if (res.status === 404) {
+        setCanUndo(false);
+      }
+    } catch {
+      // ignore network errors silently
     } finally {
       setSwipeLoading(false);
     }
@@ -559,6 +589,24 @@ export default function HowlApp() {
                 >
                   ❤️
                 </button>
+              </div>
+
+              {/* Undo button — one-level, appears after first swipe */}
+              <div style={{ textAlign: 'center', marginTop: '16px', minHeight: '32px' }}>
+                {canUndo && (
+                  <button
+                    disabled={swipeLoading}
+                    onClick={handleUndo}
+                    style={{ padding: '6px 18px', background: 'rgba(255,255,255,0.18)', color: 'white', border: '1px solid rgba(255,255,255,0.35)', borderRadius: '20px', fontSize: '13px', fontWeight: '500', cursor: swipeLoading ? 'not-allowed' : 'pointer', transition: 'background 0.15s', opacity: swipeLoading ? 0.5 : 1 }}
+                    onMouseEnter={(e) => !swipeLoading && (e.currentTarget.style.background = 'rgba(255,255,255,0.28)')}
+                    onMouseLeave={(e) => !swipeLoading && (e.currentTarget.style.background = 'rgba(255,255,255,0.18)')}
+                  >
+                    ↩️ Undo
+                  </button>
+                )}
+                {undoMessage && (
+                  <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: '13px', margin: 0 }}>{undoMessage}</p>
+                )}
               </div>
             </>
           )}

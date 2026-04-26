@@ -9,7 +9,7 @@ from app.dependencies import get_current_user
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
-from app.schemas.swipe import MatchOut, MatchedProfileOut, SwipeIn, SwipeOut
+from app.schemas.swipe import DiscoverUserOut, MatchOut, MatchedProfileOut, SwipeIn, SwipeOut, UndoSwipeOut
 from app.tasks.auto_match import auto_match_demo_user
 
 logger = logging.getLogger(__name__)
@@ -93,3 +93,70 @@ def record_swipe(
         )
 
     return SwipeOut(matched=matched, match=match_out)
+
+
+@router.delete("/last", response_model=UndoSwipeOut, status_code=200)
+def undo_last_swipe(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UndoSwipeOut:
+    """
+    Delete the current user's most recent swipe.
+
+    If that swipe was a like that created a match, the match is deleted too.
+    For demo user auto-matches, the demo's return-swipe is also removed so
+    the discover queue is fully restored to its pre-swipe state.
+
+    Returns the deleted swipe's target user so the frontend can push them
+    back to the front of the discover stack.
+    """
+    last_swipe = (
+        db.query(Swipe)
+        .filter(Swipe.user_id == current_user.id)
+        .order_by(Swipe.created_at.desc())
+        .first()
+    )
+    if last_swipe is None:
+        raise HTTPException(status_code=404, detail="No swipes to undo.")
+
+    target = db.query(User).filter(User.id == last_swipe.target_user_id).first()
+    # Snapshot the values we need before deletion
+    target_user_id = last_swipe.target_user_id
+    direction = last_swipe.direction
+
+    if direction == SwipeDirection.like:
+        u1 = min(current_user.id, target_user_id)
+        u2 = max(current_user.id, target_user_id)
+        match = (
+            db.query(Match)
+            .filter(Match.user1_id == u1, Match.user2_id == u2)
+            .first()
+        )
+        if match:
+            db.delete(match)
+            # Also remove the other party's swipe (demo auto-match or a real mutual like)
+            # so both users are fully restored to pre-swipe state.
+            return_swipe = (
+                db.query(Swipe)
+                .filter(
+                    Swipe.user_id == target_user_id,
+                    Swipe.target_user_id == current_user.id,
+                )
+                .first()
+            )
+            if return_swipe:
+                db.delete(return_swipe)
+
+    db.delete(last_swipe)
+    db.commit()
+
+    logger.info(
+        "swipes: undid %s swipe by user=%d on target=%d",
+        direction.value, current_user.id, target_user_id,
+    )
+
+    return UndoSwipeOut(
+        target_user_id=target_user_id,
+        direction=direction,
+        user=DiscoverUserOut.model_validate(target),
+    )

@@ -46,3 +46,9 @@ class SwipeIn(BaseModel):
 class SwipeOut(BaseModel):
     matched: bool
     match: MatchOut | None = None
+
+
+class UndoSwipeOut(BaseModel):
+    target_user_id: int
+    direction: SwipeDirection
+    user: DiscoverUserOut

@@ -308,3 +308,125 @@ def test_matches_excludes_email_and_password(client, db, auth_headers, test_user
     m = res.json()[0]
     assert "email" not in m["other_user"]
     assert "password_hash" not in m["other_user"]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/swipes/last  (undo)
+# ---------------------------------------------------------------------------
+
+def test_undo_unauthenticated(client):
+    res = client.delete("/api/swipes/last")
+    assert res.status_code == 401
+
+
+def test_undo_no_swipes_returns_404(client, auth_headers):
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 404
+
+
+def test_undo_pass_deletes_swipe_returns_user(client, db, auth_headers, test_user):
+    other = _make_user(db, email="undo_pass@howl.app", animal="fox", name="Finn")
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["direction"] == "pass"
+    assert data["target_user_id"] == other.id
+    assert data["user"]["id"] == other.id
+    assert data["user"]["name"] == "Finn"
+    assert data["user"]["animal"] == "fox"
+    # Swipe is gone
+    assert db.query(Swipe).filter(Swipe.user_id == test_user.id).count() == 0
+
+
+def test_undo_like_without_match_deletes_swipe(client, db, auth_headers, test_user):
+    other = _make_user(db, email="undo_like@howl.app", animal="owl")
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["direction"] == "like"
+    assert db.query(Swipe).filter(Swipe.user_id == test_user.id).count() == 0
+    assert db.query(Match).count() == 0
+
+
+def test_undo_like_with_match_deletes_swipe_and_match(client, db, auth_headers, test_user):
+    other = _make_user(db, email="undo_match@howl.app", animal="bear")
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+    _make_swipe(db, user_id=other.id, target_user_id=test_user.id, direction=SwipeDirection.like)
+    db.add(Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id)))
+    db.commit()
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Match).count() == 0
+    # User's own swipe is gone; other user's swipe is also removed
+    assert db.query(Swipe).filter(Swipe.user_id == test_user.id).count() == 0
+    assert db.query(Swipe).filter(Swipe.user_id == other.id).count() == 0
+
+
+def test_undo_demo_auto_match_removes_both_swipes_and_match(client, db, auth_headers, test_user):
+    """Undoing a like on a demo user that auto-matched clears demo's return-swipe too."""
+    demo = _make_user(db, email="demo_undo@howl.app", animal="wolf")
+    _make_swipe(db, user_id=test_user.id, target_user_id=demo.id, direction=SwipeDirection.like)
+    _make_swipe(db, user_id=demo.id, target_user_id=test_user.id, direction=SwipeDirection.like)
+    db.add(Match(user1_id=min(test_user.id, demo.id), user2_id=max(test_user.id, demo.id)))
+    db.commit()
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Match).count() == 0
+    assert db.query(Swipe).count() == 0
+
+
+def test_undo_only_affects_current_user(client, db, auth_headers, test_user):
+    """Undoing test_user's swipe doesn't touch another user's swipes."""
+    from app.security import create_access_token
+
+    other = _make_user(db, email="bystander@howl.app", animal="deer")
+    third = _make_user(db, email="third@howl.app", animal="elk")
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+    _make_swipe(db, user_id=other.id, target_user_id=third.id, direction=SwipeDirection.like)
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    # other's swipe on third is untouched
+    assert db.query(Swipe).filter(Swipe.user_id == other.id).count() == 1
+
+
+def test_undo_returns_user_fields_for_rediscovery(client, db, auth_headers, test_user):
+    """Response includes all DiscoverUserOut fields needed to re-add card to stack."""
+    other = _make_user(
+        db, email="undo_fields@howl.app", animal="lion", name="Leo",
+        location="Savanna, KE", personality_traits=["bold", "warm"],
+    )
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    u = res.json()["user"]
+    assert u["id"] == other.id
+    assert u["name"] == "Leo"
+    assert u["location"] == "Savanna, KE"
+    assert u["animal"] == "lion"
+    assert u["personality_traits"] == ["bold", "warm"]
+    assert "email" not in u
+    assert "password_hash" not in u
+
+
+def test_undo_restores_user_to_discover_queue(client, db, auth_headers, test_user):
+    """After undo, the target re-appears in GET /api/users/discover."""
+    other = _make_user(db, email="undo_discover@howl.app", animal="otter")
+    _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+
+    # Not in discover before undo
+    before = [u["id"] for u in client.get("/api/users/discover", headers=auth_headers).json()]
+    assert other.id not in before
+
+    client.delete("/api/swipes/last", headers=auth_headers)
+
+    # Back in discover after undo
+    after = [u["id"] for u in client.get("/api/users/discover", headers=auth_headers).json()]
+    assert other.id in after
