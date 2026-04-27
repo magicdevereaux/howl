@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.avatar import router as avatar_router
+from app.api.chat import router as chat_router
 from app.api.profile import router as profile_router
 from app.api.swipes import router as swipes_router
 from app.api.users import router as users_router
@@ -36,6 +37,7 @@ app.include_router(profile_router)
 app.include_router(avatar_router)
 app.include_router(users_router)
 app.include_router(swipes_router)
+app.include_router(chat_router)
 
 
 @app.get("/health", tags=["system"])

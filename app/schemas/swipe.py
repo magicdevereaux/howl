@@ -30,12 +30,20 @@ class MatchedProfileOut(BaseModel):
     avatar_description: str | None = None
 
 
+class LastMessageOut(BaseModel):
+    sender_id: int
+    content: str
+    created_at: datetime
+
+
 class MatchOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: int
     matched_at: datetime
     other_user: MatchedProfileOut
+    unread_count: int = 0
+    last_message: LastMessageOut | None = None
 
 
 class SwipeIn(BaseModel):

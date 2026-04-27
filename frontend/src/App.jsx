@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function HowlApp() {
-  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'discover', 'matches'
+  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'discover', 'matches', 'chat'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -24,6 +24,13 @@ export default function HowlApp() {
   const [swipeLoading, setSwipeLoading] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [undoMessage, setUndoMessage] = useState('');
+  const [currentMatch, setCurrentMatch] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messageInput, setMessageInput] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const messagesEndRef = useRef(null);
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
@@ -59,6 +66,26 @@ export default function HowlApp() {
       return () => clearInterval(interval);
     }
   }, [avatarStatus?.avatar_status, user?.bio, isStale]);
+
+  // Poll for new messages every 3 s while the chat view is open.
+  useEffect(() => {
+    if (view !== 'chat' || !currentMatch) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) setMessages(await res.json());
+      } catch { /* ignore */ }
+    };
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [view, currentMatch?.id, token]);
+
+  // Scroll to the latest message whenever the messages array changes.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const fetchProfile = async () => {
     try {
@@ -213,8 +240,53 @@ export default function HowlApp() {
     setDiscoverUsers([]);
     setMatches([]);
     setMatchPopup(null);
+    setCurrentMatch(null);
+    setMessages([]);
+    setMessageInput('');
     setView('login');
     localStorage.removeItem('access_token');
+  };
+
+  const loadMessages = async (matchId) => {
+    setMessagesLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/matches/${matchId}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setMessages(await res.json());
+    } catch { /* ignore */ }
+    finally { setMessagesLoading(false); }
+  };
+
+  const sendMessage = async () => {
+    const content = messageInput.trim();
+    if (!content || !currentMatch || sending) return;
+    setSending(true);
+    setMessageInput('');
+    try {
+      const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ content }),
+      });
+      if (res.ok) {
+        const msg = await res.json();
+        setMessages(prev => [...prev, msg]);
+      } else {
+        setMessageInput(content); // restore on failure
+      }
+    } catch {
+      setMessageInput(content);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const openChat = (match) => {
+    setCurrentMatch(match);
+    setMessages([]);
+    setView('chat');
+    loadMessages(match.id);
   };
 
   const handleRegenerate = async () => {
@@ -684,11 +756,18 @@ export default function HowlApp() {
               {matches.map((m) => (
                 <div
                   key={m.id}
-                  style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.15)', transition: 'transform 0.2s' }}
+                  onClick={() => openChat(m)}
+                  style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.15)', transition: 'transform 0.2s', cursor: 'pointer' }}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-4px)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
                 >
-                  <div style={{ background: 'linear-gradient(135deg, #f687b3 0%, #ed64a6 100%)', padding: '24px', textAlign: 'center' }}>
+                  {/* Pink header: avatar + name + unread badge */}
+                  <div style={{ background: 'linear-gradient(135deg, #f687b3 0%, #ed64a6 100%)', padding: '24px', textAlign: 'center', position: 'relative' }}>
+                    {m.unread_count > 0 && (
+                      <div style={{ position: 'absolute', top: '12px', right: '12px', background: '#e53e3e', color: 'white', borderRadius: '10px', fontSize: '11px', fontWeight: '700', padding: '2px 7px', minWidth: '18px', textAlign: 'center' }}>
+                        {m.unread_count}
+                      </div>
+                    )}
                     <div style={{ fontSize: '56px', lineHeight: 1, marginBottom: '10px' }}>
                       {m.other_user.avatar_url ? (
                         <img src={m.other_user.avatar_url} alt="" style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid rgba(255,255,255,0.4)' }} onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
@@ -702,15 +781,153 @@ export default function HowlApp() {
                       {m.other_user.animal ? m.other_user.animal.charAt(0).toUpperCase() + m.other_user.animal.slice(1) : ''}
                     </p>
                   </div>
-                  <div style={{ padding: '12px 16px', textAlign: 'center' }}>
-                    <p style={{ color: '#a0aec0', fontSize: '11px' }}>
-                      Matched {new Date(m.matched_at).toLocaleDateString()}
-                    </p>
+                  {/* Footer: last message preview or match date */}
+                  <div style={{ padding: '12px 16px' }}>
+                    {m.last_message ? (
+                      <p style={{ color: '#4a5568', fontSize: '12px', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span style={{ color: '#a0aec0' }}>
+                          {m.last_message.sender_id === user?.id ? 'You: ' : ''}
+                        </span>
+                        {m.last_message.content}
+                      </p>
+                    ) : (
+                      <p style={{ color: '#a0aec0', fontSize: '11px', margin: 0, textAlign: 'center' }}>
+                        Matched {new Date(m.matched_at).toLocaleDateString()}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+
+        <style>{`
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+          .spinner { display: inline-block; animation: spin 2s linear infinite; }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chat view
+  // ---------------------------------------------------------------------------
+  if (view === 'chat' && currentMatch) {
+    const other = currentMatch.other_user;
+
+    const formatTime = (iso) =>
+      new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const formatDate = (iso) => {
+      const d = new Date(iso);
+      const today = new Date();
+      const yesterday = new Date(today - 86400000);
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    };
+
+    // Group messages by date label
+    const grouped = messages.reduce((acc, msg) => {
+      const label = formatDate(msg.created_at);
+      (acc[label] = acc[label] || []).push(msg);
+      return acc;
+    }, {});
+
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', flexDirection: 'column' }}>
+
+        {/* Chat header */}
+        <div style={{ background: 'rgba(0,0,0,0.2)', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
+          <button
+            onClick={() => { setView('matches'); fetchMatches(); }}
+            style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', color: 'white', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+          >
+            ← Matches
+          </button>
+          <div style={{ fontSize: '36px', lineHeight: 1 }}>{animalEmoji(other.animal)}</div>
+          <div>
+            <p style={{ color: 'white', fontWeight: '700', fontSize: '17px', margin: 0 }}>{other.name || 'Anonymous'}</p>
+            <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', margin: 0 }}>
+              {other.animal ? other.animal.charAt(0).toUpperCase() + other.animal.slice(1) : ''}
+            </p>
+          </div>
+        </div>
+
+        {/* Message list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column' }}>
+          {messagesLoading && messages.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)', marginTop: '40px' }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }} className="spinner">🐾</div>
+              Loading…
+            </div>
+          ) : messages.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.75)', marginTop: '60px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '12px' }}>👋</div>
+              <p style={{ fontSize: '17px', fontWeight: '600' }}>Start the conversation!</p>
+              <p style={{ fontSize: '14px', marginTop: '6px', opacity: 0.8 }}>
+                Say hi to {other.name || 'them'}!
+              </p>
+            </div>
+          ) : (
+            Object.entries(grouped).map(([dateLabel, msgs]) => (
+              <div key={dateLabel}>
+                {/* Date divider */}
+                <div style={{ textAlign: 'center', margin: '16px 0 10px' }}>
+                  <span style={{ background: 'rgba(0,0,0,0.25)', color: 'rgba(255,255,255,0.8)', fontSize: '11px', padding: '3px 12px', borderRadius: '10px' }}>
+                    {dateLabel}
+                  </span>
+                </div>
+                {msgs.map((msg) => (
+                  <div key={msg.id} style={{ display: 'flex', justifyContent: msg.is_mine ? 'flex-end' : 'flex-start', marginBottom: '8px' }}>
+                    <div style={{
+                      maxWidth: '70%',
+                      padding: '10px 14px',
+                      borderRadius: msg.is_mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                      background: msg.is_mine ? 'white' : 'rgba(255,255,255,0.15)',
+                      color: msg.is_mine ? '#2d3748' : 'white',
+                      boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                    }}>
+                      <p style={{ margin: 0, fontSize: '15px', lineHeight: '1.45', wordBreak: 'break-word' }}>{msg.content}</p>
+                      <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
+                        {formatTime(msg.created_at)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Message input */}
+        <div style={{ background: 'white', padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, borderTop: '1px solid #e2e8f0' }}>
+          <input
+            type="text"
+            value={messageInput}
+            onChange={(e) => setMessageInput(e.target.value.slice(0, 2000))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            placeholder={`Message ${other.name || 'them'}…`}
+            disabled={sending}
+            style={{ flex: 1, padding: '11px 16px', border: '2px solid #e2e8f0', borderRadius: '24px', fontSize: '15px', outline: 'none', boxSizing: 'border-box' }}
+            onFocus={(e) => e.target.style.borderColor = '#667eea'}
+            onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={!messageInput.trim() || sending}
+            style={{
+              width: '44px', height: '44px', borderRadius: '50%', border: 'none', flexShrink: 0,
+              background: (!messageInput.trim() || sending) ? '#e2e8f0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              cursor: (!messageInput.trim() || sending) ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px',
+              transition: 'background 0.15s',
+            }}
+          >
+            ➤
+          </button>
         </div>
 
         <style>{`
