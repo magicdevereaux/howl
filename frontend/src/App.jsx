@@ -966,7 +966,11 @@ export default function HowlApp() {
               style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', marginBottom: '16px', border: '4px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' }}
             />
           ) : null}
-          <div style={{ fontSize: '64px', marginBottom: '16px', display: (avatarStatus?.avatar_status === 'ready' && avatarStatus?.avatar_url) ? 'none' : 'block' }}>{getStatusEmoji()}</div>
+          <div style={{ fontSize: '64px', marginBottom: '16px', display: (avatarStatus?.avatar_status === 'ready' && avatarStatus?.avatar_url) ? 'none' : 'block' }}>
+            {avatarStatus?.avatar_status === 'ready'
+              ? animalEmoji(avatarStatus.animal)
+              : getStatusEmoji()}
+          </div>
           <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#2d3748', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {getStatusText()}
             {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal && (
