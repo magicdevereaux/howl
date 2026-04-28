@@ -8,6 +8,7 @@ from app.celery_app import celery_app
 from app.config import settings
 from app.db import SessionLocal
 from app.models.user import AvatarStatus, User
+from app.services.image_generation import generate_avatar_image
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ Return ONLY a valid JSON object — no markdown fences, no prose, just the objec
 {
     "animal": "<single lowercase word: wolf | otter | fox | bear | owl | rabbit | lion | hawk | dolphin | cat | deer | crow | etc.>",
     "personality_traits": ["<trait>", "<trait>", "<trait>"],
-    "avatar_description": "<1-2 sentences describing a vivid human-animal hybrid avatar suitable for image generation>"
+    "avatar_description": "<1-2 sentences describing a vivid human-animal hybrid avatar suitable for image generation>",
+    "image_prompt": "<DALL-E 3 prompt under 350 characters: mystical animal spirit art, specific colors, fantasy aesthetic>"
 }"""
 
 
@@ -93,23 +95,31 @@ def generate_avatar(self, user_id: int) -> None:
 
         personality_traits: list[str] = data.get("personality_traits", [])
         avatar_description: str = data.get("avatar_description", "")
+        image_prompt: str = data.get(
+            "image_prompt",
+            f"A mystical {animal} spirit animal, ethereal digital art, fantasy style, vibrant colors",
+        )
 
         logger.info(
-            "generate_avatar: user=%d animal=%r traits=%r description=%r",
-            user_id,
-            animal,
-            personality_traits,
-            avatar_description,
+            "generate_avatar: user=%d animal=%r traits=%r",
+            user_id, animal, personality_traits,
         )
+
+        # ── Generate avatar image (best-effort — never blocks ready status) ──
+        avatar_url = generate_avatar_image(image_prompt, animal)
 
         # ── Persist ──────────────────────────────────────────────────────────
         user.animal = animal
         user.personality_traits = personality_traits
         user.avatar_description = avatar_description
+        user.avatar_url = avatar_url
         user.avatar_status = AvatarStatus.ready
         user.updated_at = datetime.now(timezone.utc)
         db.commit()
-        logger.info("generate_avatar: user %d → complete (animal=%r)", user_id, animal)
+        logger.info(
+            "generate_avatar: user %d → complete (animal=%r, image=%s)",
+            user_id, animal, "yes" if avatar_url else "no (emoji fallback)",
+        )
 
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         # Bad response from Claude — don't retry, just fail

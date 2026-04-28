@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Anthropic - MUST come from env var
     anthropic_api_key: str
 
+    # OpenAI (DALL-E image generation) — optional; omitting disables image gen
+    openai_api_key: str | None = None
+
     # App - Safe defaults for production
     environment: str = "production"
     debug: bool = False

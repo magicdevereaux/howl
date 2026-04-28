@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
 from app.api.avatar import router as avatar_router
@@ -38,6 +41,11 @@ app.include_router(avatar_router)
 app.include_router(users_router)
 app.include_router(swipes_router)
 app.include_router(chat_router)
+
+
+_avatar_dir = Path("static/avatars")
+_avatar_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(_avatar_dir)), name="avatars")
 
 
 @app.get("/health", tags=["system"])

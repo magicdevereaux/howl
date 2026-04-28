@@ -446,6 +446,8 @@ export default function HowlApp() {
     hawk: '🦅', rabbit: '🐰', dolphin: '🐬', crow: '🐦‍⬛',
   };
   const animalEmoji = (animal) => ANIMAL_EMOJI[animal?.toLowerCase()] || '🐾';
+  // Resolve avatar URL: stored paths are server-relative (/avatars/…), full URLs are used as-is.
+  const avatarUrl = (url) => (!url ? null : url.startsWith('http') ? url : `${API_URL}${url}`);
 
   const navButton = (label, targetView, fetchFn) => {
     const active = view === targetView;
@@ -589,7 +591,7 @@ export default function HowlApp() {
                 <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 28px 28px', textAlign: 'center' }}>
                   {currentCard.avatar_url ? (
                     <img
-                      src={currentCard.avatar_url}
+                      src={avatarUrl(currentCard.avatar_url)}
                       alt={`${currentCard.name || 'User'}'s avatar`}
                       onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
                       style={{ width: '112px', height: '112px', borderRadius: '50%', objectFit: 'cover', marginBottom: '16px', border: '4px solid rgba(255,255,255,0.4)' }}
@@ -770,7 +772,7 @@ export default function HowlApp() {
                     )}
                     <div style={{ fontSize: '56px', lineHeight: 1, marginBottom: '10px' }}>
                       {m.other_user.avatar_url ? (
-                        <img src={m.other_user.avatar_url} alt="" style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid rgba(255,255,255,0.4)' }} onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
+                        <img src={avatarUrl(m.other_user.avatar_url)} alt="" style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid rgba(255,255,255,0.4)' }} onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
                       ) : null}
                       <span style={{ display: m.other_user.avatar_url ? 'none' : 'block' }}>{animalEmoji(m.other_user.animal)}</span>
                     </div>
@@ -846,7 +848,15 @@ export default function HowlApp() {
           >
             ← Matches
           </button>
-          <div style={{ fontSize: '36px', lineHeight: 1 }}>{animalEmoji(other.animal)}</div>
+          {other.avatar_url ? (
+            <img
+              src={avatarUrl(other.avatar_url)}
+              alt={other.animal || 'avatar'}
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+              style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.4)', flexShrink: 0 }}
+            />
+          ) : null}
+          <div style={{ fontSize: '36px', lineHeight: 1, display: other.avatar_url ? 'none' : 'block' }}>{animalEmoji(other.animal)}</div>
           <div>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '17px', margin: 0 }}>{other.name || 'Anonymous'}</p>
             <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', margin: 0 }}>
@@ -948,7 +958,15 @@ export default function HowlApp() {
 
         {/* Avatar Status Card */}
         <div style={{ background: 'white', borderRadius: '16px', padding: '32px', marginBottom: '24px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', textAlign: 'center' }}>
-          <div style={{ fontSize: '64px', marginBottom: '16px' }}>{getStatusEmoji()}</div>
+          {avatarStatus?.avatar_status === 'ready' && avatarStatus?.avatar_url ? (
+            <img
+              src={avatarUrl(avatarStatus.avatar_url)}
+              alt={avatarStatus.animal || 'avatar'}
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+              style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', marginBottom: '16px', border: '4px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' }}
+            />
+          ) : null}
+          <div style={{ fontSize: '64px', marginBottom: '16px', display: (avatarStatus?.avatar_status === 'ready' && avatarStatus?.avatar_url) ? 'none' : 'block' }}>{getStatusEmoji()}</div>
           <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#2d3748', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {getStatusText()}
             {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal && (

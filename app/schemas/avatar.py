@@ -12,4 +12,5 @@ class AvatarStatusOut(BaseModel):
     animal: str | None
     personality_traits: list[str] | None = None
     avatar_description: str | None = None
+    avatar_url: str | None = None
     avatar_status_updated_at: datetime | None = None
