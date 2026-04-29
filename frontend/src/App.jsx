@@ -20,15 +20,19 @@ export default function HowlApp() {
   const [discoverError, setDiscoverError] = useState('');
   const [matches, setMatches] = useState([]);
   const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState('');
   const [matchPopup, setMatchPopup] = useState(null); // null | match object
   const [swipeLoading, setSwipeLoading] = useState(false);
+  const [swipeError, setSwipeError] = useState('');
   const [canUndo, setCanUndo] = useState(false);
   const [undoMessage, setUndoMessage] = useState('');
   const [currentMatch, setCurrentMatch] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState('');
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
 
   const messagesEndRef = useRef(null);
 
@@ -243,25 +247,38 @@ export default function HowlApp() {
     setCurrentMatch(null);
     setMessages([]);
     setMessageInput('');
+    setMatchesError('');
+    setMessagesError('');
+    setSendError('');
+    setSwipeError('');
     setView('login');
     localStorage.removeItem('access_token');
   };
 
   const loadMessages = async (matchId) => {
     setMessagesLoading(true);
+    setMessagesError('');
     try {
       const res = await fetch(`${API_URL}/api/matches/${matchId}/messages`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) setMessages(await res.json());
-    } catch { /* ignore */ }
-    finally { setMessagesLoading(false); }
+      if (res.ok) {
+        setMessages(await res.json());
+      } else {
+        setMessagesError("Couldn't load messages.");
+      }
+    } catch {
+      setMessagesError('Network error — check your connection.');
+    } finally {
+      setMessagesLoading(false);
+    }
   };
 
   const sendMessage = async () => {
     const content = messageInput.trim();
     if (!content || !currentMatch || sending) return;
     setSending(true);
+    setSendError('');
     setMessageInput('');
     try {
       const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
@@ -273,10 +290,12 @@ export default function HowlApp() {
         const msg = await res.json();
         setMessages(prev => [...prev, msg]);
       } else {
-        setMessageInput(content); // restore on failure
+        setMessageInput(content);
+        setSendError("Message failed to send — please try again.");
       }
     } catch {
       setMessageInput(content);
+      setSendError('Network error — message not sent.');
     } finally {
       setSending(false);
     }
@@ -285,6 +304,8 @@ export default function HowlApp() {
   const openChat = (match) => {
     setCurrentMatch(match);
     setMessages([]);
+    setMessagesError('');
+    setSendError('');
     setView('chat');
     loadMessages(match.id);
   };
@@ -346,6 +367,7 @@ export default function HowlApp() {
 
   const fetchMatches = async () => {
     setMatchesLoading(true);
+    setMatchesError('');
     try {
       const res = await fetch(`${API_URL}/api/users/matches`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -357,9 +379,11 @@ export default function HowlApp() {
         localStorage.removeItem('access_token');
         setView('login');
         setError('Session expired. Please sign in again.');
+      } else {
+        setMatchesError("Couldn't load your matches.");
       }
     } catch {
-      // silently ignore
+      setMatchesError('Network error — check your connection.');
     } finally {
       setMatchesLoading(false);
     }
@@ -368,6 +392,7 @@ export default function HowlApp() {
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
     setUndoMessage('');
+    setSwipeError('');
     try {
       const res = await fetch(`${API_URL}/api/swipes`, {
         method: 'POST',
@@ -375,14 +400,18 @@ export default function HowlApp() {
         body: JSON.stringify({ target_user_id: targetUserId, direction }),
       });
       const data = await res.json();
-      // Remove the top card regardless of outcome
       setDiscoverUsers(prev => prev.slice(1));
       setCanUndo(true);
       if (res.ok && data.matched) {
         setMatchPopup(data.match);
+      } else if (!res.ok) {
+        setSwipeError('Swipe failed — tap to try again.');
+        setTimeout(() => setSwipeError(''), 4000);
       }
     } catch {
       setDiscoverUsers(prev => prev.slice(1));
+      setSwipeError('Network error — swipe may not have saved.');
+      setTimeout(() => setSwipeError(''), 4000);
     } finally {
       setSwipeLoading(false);
     }
@@ -665,6 +694,15 @@ export default function HowlApp() {
                 </button>
               </div>
 
+              {/* Swipe error toast */}
+              {swipeError && (
+                <div style={{ textAlign: 'center', marginTop: '12px' }}>
+                  <span style={{ background: 'rgba(229,62,62,0.9)', color: 'white', fontSize: '13px', padding: '6px 16px', borderRadius: '20px' }}>
+                    ⚠️ {swipeError}
+                  </span>
+                </div>
+              )}
+
               {/* Undo button — one-level, appears after first swipe */}
               <div style={{ textAlign: 'center', marginTop: '16px', minHeight: '32px' }}>
                 {canUndo && (
@@ -735,6 +773,18 @@ export default function HowlApp() {
 
           <h2 style={{ color: 'white', fontSize: '22px', fontWeight: '600', marginBottom: '8px' }}>Your Matches</h2>
           <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', marginBottom: '28px' }}>Spirit animals that connected with yours</p>
+
+          {matchesError && (
+            <div style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: '12px', padding: '20px 24px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+              <p style={{ color: 'white', fontSize: '14px', margin: 0 }}>⚠️ {matchesError}</p>
+              <button
+                onClick={fetchMatches}
+                style={{ padding: '6px 16px', background: 'white', color: '#667eea', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', flexShrink: 0 }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {matchesLoading ? (
             <div style={{ textAlign: 'center', color: 'white', padding: '60px', fontSize: '18px' }}>
@@ -867,7 +917,18 @@ export default function HowlApp() {
 
         {/* Message list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column' }}>
-          {messagesLoading && messages.length === 0 ? (
+          {messagesError ? (
+            <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.85)', marginTop: '60px', padding: '0 20px' }}>
+              <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚠️</div>
+              <p style={{ fontSize: '15px', marginBottom: '16px' }}>{messagesError}</p>
+              <button
+                onClick={() => loadMessages(currentMatch.id)}
+                style={{ padding: '10px 24px', background: 'white', color: '#667eea', border: 'none', borderRadius: '10px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}
+              >
+                Try again
+              </button>
+            </div>
+          ) : messagesLoading && messages.length === 0 ? (
             <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)', marginTop: '40px' }}>
               <div style={{ fontSize: '32px', marginBottom: '8px' }} className="spinner">🐾</div>
               Loading…
@@ -912,8 +973,18 @@ export default function HowlApp() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Send error */}
+        {sendError && (
+          <div style={{ background: '#fff5f5', borderTop: '1px solid #fed7d7', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <p style={{ color: '#c53030', fontSize: '13px', margin: 0 }}>⚠️ {sendError}</p>
+            <button onClick={sendMessage} style={{ padding: '4px 12px', background: '#c53030', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Message input */}
-        <div style={{ background: 'white', padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, borderTop: '1px solid #e2e8f0' }}>
+        <div style={{ background: 'white', padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, borderTop: sendError ? 'none' : '1px solid #e2e8f0' }}>
           <input
             type="text"
             value={messageInput}
