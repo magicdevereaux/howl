@@ -33,6 +33,10 @@ export default function HowlApp() {
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const messagesEndRef = useRef(null);
 
@@ -253,6 +257,43 @@ export default function HowlApp() {
     setSwipeError('');
     setView('login');
     localStorage.removeItem('access_token');
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`${API_URL}/api/profile/me`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 204) {
+        // Wipe all local state then go to register so they can start fresh
+        localStorage.removeItem('access_token');
+        setToken('');
+        setUser(null);
+        setAvatarStatus(null);
+        setEmail('');
+        setPassword('');
+        setName('');
+        setLocation('');
+        setBio('');
+        setDiscoverUsers([]);
+        setMatches([]);
+        setMessages([]);
+        setCurrentMatch(null);
+        setDeleteModalOpen(false);
+        setDeleteConfirmText('');
+        setView('register');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setDeleteError(data.detail || 'Deletion failed — please try again.');
+      }
+    } catch {
+      setDeleteError('Network error — please try again.');
+    } finally {
+      setDeleteLoading(false);
+    }
   };
 
   const loadMessages = async (matchId) => {
@@ -1128,12 +1169,78 @@ export default function HowlApp() {
           </form>
         </div>
 
+        {/* Danger zone */}
+        <div style={{ marginTop: '16px', background: 'white', borderRadius: '16px', padding: '24px 32px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', border: '1px solid #fed7d7' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#c53030', marginBottom: '8px' }}>Danger Zone</h3>
+          <p style={{ color: '#718096', fontSize: '13px', marginBottom: '16px' }}>
+            Permanently delete your account and all data. This cannot be undone.
+          </p>
+          <button
+            onClick={() => { setDeleteModalOpen(true); setDeleteConfirmText(''); setDeleteError(''); }}
+            style={{ padding: '10px 20px', background: 'white', color: '#c53030', border: '2px solid #fc8181', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
+          >
+            Delete Account
+          </button>
+        </div>
+
         <div style={{ marginTop: '24px', textAlign: 'center' }}>
           <a href="https://github.com/magicdevereaux/howl" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', textDecoration: 'none' }}>
             View on GitHub →
           </a>
         </div>
       </div>
+
+      {/* Delete account confirmation modal */}
+      {deleteModalOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: 'white', borderRadius: '16px', padding: '36px 32px', maxWidth: '400px', width: '100%', boxShadow: '0 24px 64px rgba(0,0,0,0.35)' }}>
+            <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '12px' }}>⚠️</div>
+            <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#2d3748', textAlign: 'center', marginBottom: '8px' }}>Delete your account?</h2>
+            <p style={{ color: '#718096', fontSize: '14px', textAlign: 'center', marginBottom: '24px', lineHeight: '1.5' }}>
+              This will permanently erase your profile, matches, and all messages. There is no undo.
+            </p>
+
+            <label style={{ display: 'block', color: '#4a5568', fontSize: '13px', fontWeight: '600', marginBottom: '6px' }}>
+              Type <span style={{ fontFamily: 'monospace', background: '#f7fafc', padding: '1px 6px', borderRadius: '4px' }}>DELETE</span> to confirm
+            </label>
+            <input
+              type="text"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder="DELETE"
+              style={{ width: '100%', padding: '10px 12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '15px', marginBottom: '16px', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              onFocus={(e) => e.target.style.borderColor = '#fc8181'}
+              onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+            />
+
+            {deleteError && (
+              <p style={{ color: '#c53030', fontSize: '13px', marginBottom: '12px', textAlign: 'center' }}>⚠️ {deleteError}</p>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => { setDeleteModalOpen(false); setDeleteConfirmText(''); setDeleteError(''); }}
+                disabled={deleteLoading}
+                style={{ flex: 1, padding: '12px', background: '#f7fafc', color: '#4a5568', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleteConfirmText !== 'DELETE' || deleteLoading}
+                style={{
+                  flex: 1, padding: '12px',
+                  background: (deleteConfirmText === 'DELETE' && !deleteLoading) ? '#c53030' : '#fc8181',
+                  color: 'white', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '700',
+                  cursor: (deleteConfirmText === 'DELETE' && !deleteLoading) ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {deleteLoading ? 'Deleting…' : 'Delete forever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }

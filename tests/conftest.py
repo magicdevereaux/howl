@@ -17,7 +17,7 @@ in-memory database the test itself populates.
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -46,6 +46,14 @@ def engine():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    # SQLite disables FK enforcement by default; enable it so ON DELETE CASCADE
+    # behaves the same as PostgreSQL in production.
+    @event.listens_for(eng, "connect")
+    def set_sqlite_fk_pragma(dbapi_conn, _):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(eng)
     yield eng
     Base.metadata.drop_all(eng)
