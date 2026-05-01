@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function HowlApp() {
-  const [view, setView] = useState('login'); // 'login', 'register', 'profile', 'discover', 'matches', 'chat'
+  // Read password-reset token from URL before any state is initialised.
+  // e.g. https://howl.app?token=abc123  →  open reset-password view directly.
+  const _urlResetToken = new URLSearchParams(window.location.search).get('token') || '';
+
+  const [view, setView] = useState(
+    // 'login' | 'register' | 'profile' | 'discover' | 'matches' | 'chat'
+    // | 'forgot-password' | 'reset-password'
+    _urlResetToken ? 'reset-password' : 'login'
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -37,6 +45,13 @@ export default function HowlApp() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotDone, setForgotDone] = useState(false);
+  const [resetToken, setResetToken] = useState(_urlResetToken);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetDone, setResetDone] = useState(false);
+  const [resetError, setResetError] = useState('');
 
   const messagesEndRef = useRef(null);
 
@@ -293,6 +308,61 @@ export default function HowlApp() {
       setDeleteError('Network error — please try again.');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  // Remove ?token= from the URL so the token isn't visible in browser history.
+  useEffect(() => {
+    if (_urlResetToken) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      await fetch(`${API_URL}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      // Always show success — don't leak whether the email exists
+      setForgotDone(true);
+    } catch {
+      setError('Network error — please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setResetError('');
+    if (newPassword !== confirmPassword) {
+      setResetError('Passwords do not match.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, new_password: newPassword }),
+      });
+      if (res.ok) {
+        setResetDone(true);
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResetError(data.detail || 'Reset failed — the link may have expired.');
+      }
+    } catch {
+      setResetError('Network error — please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -590,6 +660,103 @@ export default function HowlApp() {
   }
 
   // ---------------------------------------------------------------------------
+  // Forgot-password view
+  // ---------------------------------------------------------------------------
+  if (view === 'forgot-password') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div style={{ background: 'white', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <h1 style={{ fontSize: '26px', fontWeight: '700', color: '#2d3748', marginBottom: '8px', textAlign: 'center' }}>Reset your password</h1>
+          <p style={{ color: '#718096', marginBottom: '28px', textAlign: 'center', fontSize: '14px' }}>
+            Enter your email and we'll send you a reset link.
+          </p>
+
+          {forgotDone ? (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>📬</div>
+              <p style={{ color: '#2d3748', fontWeight: '600', marginBottom: '8px' }}>Check your server logs</p>
+              <p style={{ color: '#718096', fontSize: '13px', marginBottom: '24px' }}>
+                (Email delivery goes to console in dev mode — copy the link from there.)
+              </p>
+              <button onClick={() => setView('login')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>
+                Back to Sign In
+              </button>
+            </div>
+          ) : (
+            <>
+              {error && <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '16px', color: '#c53030', fontSize: '13px' }}>{error}</div>}
+              <form onSubmit={handleForgotPassword}>
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Email</label>
+                  <input type="email" value={forgotEmail} onChange={(e) => setForgotEmail(e.target.value)} placeholder="wolf@howl.app" required style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
+                </div>
+                <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', background: loading ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer' }}>
+                  {loading ? 'Sending…' : 'Send Reset Link'}
+                </button>
+              </form>
+              <p style={{ marginTop: '20px', textAlign: 'center', fontSize: '14px' }}>
+                <button onClick={() => setView('login')} style={{ color: '#718096', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px' }}>
+                  Back to Sign In
+                </button>
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reset-password view
+  // ---------------------------------------------------------------------------
+  if (view === 'reset-password') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div style={{ background: 'white', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <h1 style={{ fontSize: '26px', fontWeight: '700', color: '#2d3748', marginBottom: '8px', textAlign: 'center' }}>Set new password</h1>
+
+          {resetDone ? (
+            <div style={{ textAlign: 'center', marginTop: '16px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
+              <p style={{ color: '#2d3748', fontWeight: '600', marginBottom: '8px' }}>Password updated!</p>
+              <p style={{ color: '#718096', fontSize: '13px', marginBottom: '24px' }}>You can now log in with your new password.</p>
+              <button
+                onClick={() => { setView('login'); setResetDone(false); setResetToken(''); }}
+                style={{ padding: '12px 28px', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
+              >
+                Go to Sign In
+              </button>
+            </div>
+          ) : (
+            <>
+              <p style={{ color: '#718096', marginBottom: '24px', textAlign: 'center', fontSize: '14px' }}>Choose a new password (8+ characters).</p>
+              {resetError && <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '16px', color: '#c53030', fontSize: '13px' }}>{resetError}</div>}
+              <form onSubmit={handleResetPassword}>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>New password</label>
+                  <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="••••••••" required minLength={8} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
+                </div>
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Confirm password</label>
+                  <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••" required minLength={8} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
+                </div>
+                <button type="submit" disabled={loading || !newPassword || newPassword !== confirmPassword} style={{ width: '100%', padding: '14px', background: (loading || !newPassword || newPassword !== confirmPassword) ? '#a0aec0' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: '600', cursor: (loading || !newPassword || newPassword !== confirmPassword) ? 'not-allowed' : 'pointer' }}>
+                  {loading ? 'Resetting…' : 'Reset Password'}
+                </button>
+              </form>
+              <p style={{ marginTop: '20px', textAlign: 'center', fontSize: '14px' }}>
+                <button onClick={() => setView('login')} style={{ color: '#718096', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px' }}>
+                  Back to Sign In
+                </button>
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Login view
   // ---------------------------------------------------------------------------
   if (view === 'login') {
@@ -612,7 +779,12 @@ export default function HowlApp() {
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
-          <p style={{ marginTop: '24px', textAlign: 'center', color: '#718096', fontSize: '14px' }}>
+          <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '14px' }}>
+            <button onClick={() => { setView('forgot-password'); setForgotEmail(''); setForgotDone(false); setError(''); }} style={{ color: '#718096', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px' }}>
+              Forgot password?
+            </button>
+          </p>
+          <p style={{ marginTop: '8px', textAlign: 'center', color: '#718096', fontSize: '14px' }}>
             Don't have an account?{' '}
             <button onClick={() => setView('register')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px', fontWeight: '600' }}>Create one</button>
           </p>

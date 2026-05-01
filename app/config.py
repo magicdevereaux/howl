@@ -32,5 +32,8 @@ class Settings(BaseSettings):
     # CORS — comma-separated list of allowed origins
     allowed_origins: str = ""
 
+    # Frontend base URL used in password-reset email links
+    frontend_url: str = "http://localhost:3000"
+
 
 settings = Settings()
