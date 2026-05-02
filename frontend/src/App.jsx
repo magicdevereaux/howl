@@ -13,6 +13,7 @@ export default function HowlApp() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [age, setAge] = useState('');
   const [location, setLocation] = useState('');
   const [bio, setBio] = useState('');
   const [token, setToken] = useState(localStorage.getItem('access_token') || '');
@@ -119,6 +120,7 @@ export default function HowlApp() {
         const data = await res.json();
         setUser(data);
         setName(data.name || '');
+        setAge(data.age ? String(data.age) : '');
         setLocation(data.location || '');
         setBio(data.bio || '');
         setView('profile');
@@ -230,12 +232,13 @@ export default function HowlApp() {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name: name || null, location: location || null, bio })
+        body: JSON.stringify({ name: name || null, age: age ? parseInt(age, 10) : null, location: location || null, bio })
       });
       const data = await res.json();
       if (res.ok) {
         setUser(data);
         setName(data.name || '');
+        setAge(data.age ? String(data.age) : '');
         setLocation(data.location || '');
         setGenerationStartTime(Date.now());
         setGenerationTime(null);
@@ -258,6 +261,7 @@ export default function HowlApp() {
     setEmail('');
     setPassword('');
     setName('');
+    setAge('');
     setLocation('');
     setBio('');
     setDiscoverUsers([]);
@@ -1309,10 +1313,14 @@ export default function HowlApp() {
           )}
 
           <form onSubmit={isStale ? (e) => { e.preventDefault(); handleRegenerate(); } : handleUpdateBio}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 1fr', gap: '16px', marginBottom: '20px' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Name</label>
                 <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name" maxLength={100} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Age</label>
+                <input type="number" value={age} onChange={(e) => setAge(e.target.value)} placeholder="25" min={18} max={120} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Location</label>

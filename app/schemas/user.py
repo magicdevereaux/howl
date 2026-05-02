@@ -28,6 +28,7 @@ class UserOut(BaseModel):
     id: int
     email: str
     name: str | None = None
+    age: int | None = None
     location: str | None = None
     bio: str | None
     animal: str | None
@@ -39,6 +40,7 @@ class UserOut(BaseModel):
 
 class ProfileUpdate(BaseModel):
     name: str | None = None
+    age: int | None = None
     location: str | None = None
     bio: str | None = None
 
@@ -51,6 +53,17 @@ class ProfileUpdate(BaseModel):
         if len(v) > 100:
             raise ValueError("Name must be at most 100 characters")
         return v or None  # treat blank string same as null
+
+    @field_validator("age")
+    @classmethod
+    def validate_age(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if v < 18:
+            raise ValueError("Must be 18 or older")
+        if v > 120:
+            raise ValueError("Age must be 120 or less")
+        return v
 
     @field_validator("location")
     @classmethod

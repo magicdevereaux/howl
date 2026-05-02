@@ -264,6 +264,77 @@ def test_update_profile_with_all_fields(client, auth_headers, monkeypatch):
     assert len(called) == 1
 
 
+# ---------------------------------------------------------------------------
+# Age field
+# ---------------------------------------------------------------------------
+
+def test_update_age_success(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 25})
+    assert res.status_code == 200
+    assert res.json()["age"] == 25
+
+
+def test_update_age_minimum_accepted(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 18})
+    assert res.status_code == 200
+    assert res.json()["age"] == 18
+
+
+def test_update_age_below_18_rejected(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 17})
+    assert res.status_code == 422
+
+
+def test_update_age_zero_rejected(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 0})
+    assert res.status_code == 422
+
+
+def test_update_age_maximum_accepted(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 120})
+    assert res.status_code == 200
+    assert res.json()["age"] == 120
+
+
+def test_update_age_above_120_rejected(client, auth_headers):
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 121})
+    assert res.status_code == 422
+
+
+def test_update_age_null_is_noop(client, db, auth_headers, test_user):
+    """Sending age=null leaves the existing age unchanged."""
+    test_user.age = 30
+    db.commit()
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": None})
+    assert res.status_code == 200
+    assert res.json()["age"] == 30
+
+
+def test_age_exposed_on_get_profile(client, db, auth_headers, test_user):
+    test_user.age = 42
+    db.commit()
+    res = client.get("/api/profile/me", headers=auth_headers)
+    assert res.status_code == 200
+    assert res.json()["age"] == 42
+
+
+def test_age_null_by_default(client, auth_headers):
+    res = client.get("/api/profile/me", headers=auth_headers)
+    assert res.status_code == 200
+    assert res.json()["age"] is None
+
+
+def test_age_does_not_trigger_avatar_reset(client, db, auth_headers, test_user):
+    """Updating only age must not touch avatar_status."""
+    from app.models.user import AvatarStatus
+    test_user.avatar_status = AvatarStatus.ready
+    test_user.animal = "fox"
+    db.commit()
+    res = client.patch("/api/profile/me", headers=auth_headers, json={"age": 28})
+    assert res.status_code == 200
+    assert res.json()["avatar_status"] == "ready"
+
+
 def test_name_location_without_bio_does_not_trigger_avatar(client, db, auth_headers, test_user):
     """Updating only name/location never resets avatar_status or queues a task."""
     from app.models.user import AvatarStatus
