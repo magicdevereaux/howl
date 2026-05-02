@@ -35,5 +35,8 @@ class Settings(BaseSettings):
     # Frontend base URL used in password-reset email links
     frontend_url: str = "http://localhost:3000"
 
+    # Sentry — optional; omitting disables error/performance monitoring
+    sentry_dsn: str | None = None
+
 
 settings = Settings()

@@ -1,8 +1,13 @@
 from pathlib import Path
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from app.api.auth import router as auth_router
 from app.api.avatar import router as avatar_router
@@ -11,6 +16,19 @@ from app.api.profile import router as profile_router
 from app.api.swipes import router as swipes_router
 from app.api.users import router as users_router
 from app.config import settings
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        integrations=[
+            StarletteIntegration(),
+            FastApiIntegration(),
+            CeleryIntegration(),
+            SqlalchemyIntegration(),
+        ],
+        traces_sample_rate=0.2,
+        environment=settings.environment,
+    )
 
 app = FastAPI(
     title="Howl",
