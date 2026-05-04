@@ -179,6 +179,7 @@ export default function HowlApp() {
         const newToken = data.access_token;
         setToken(newToken);
         localStorage.setItem('access_token', newToken);
+        localStorage.setItem('refresh_token', data.refresh_token);
         setUser(data.user);
         setName(data.user.name || '');
         setLocation(data.user.location || '');
@@ -209,6 +210,7 @@ export default function HowlApp() {
       if (res.ok) {
         setToken(data.access_token);
         localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
         setUser(data.user);
         setName(data.user.name || '');
         setLocation(data.user.location || '');
@@ -255,6 +257,14 @@ export default function HowlApp() {
   };
 
   const handleLogout = () => {
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (refreshToken) {
+      fetch(`${API_URL}/api/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      }).catch(() => {}); // fire-and-forget — local state is always cleared
+    }
     setToken('');
     setUser(null);
     setAvatarStatus(null);
@@ -276,6 +286,7 @@ export default function HowlApp() {
     setSwipeError('');
     setView('login');
     localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
   };
 
   const handleDeleteAccount = async () => {
@@ -289,6 +300,7 @@ export default function HowlApp() {
       if (res.status === 204) {
         // Wipe all local state then go to register so they can start fresh
         localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
         setToken('');
         setUser(null);
         setAvatarStatus(null);

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Security - MUST come from env var
     secret_key: str
     access_token_expire_minutes: int = 30
-    refresh_token_expire_days: int = 7
+    refresh_token_expire_days: int = 30
 
     # Anthropic - MUST come from env var
     anthropic_api_key: str

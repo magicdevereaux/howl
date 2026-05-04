@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -22,6 +23,11 @@ def create_access_token(subject: int) -> str:
     )
     payload = {"sub": str(subject), "exp": expire}
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+
+
+def create_refresh_token() -> str:
+    """Return a cryptographically random opaque token for use as a refresh token."""
+    return secrets.token_urlsafe(32)
 
 
 def decode_access_token(token: str) -> int:
