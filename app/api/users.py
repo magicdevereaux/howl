@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -74,57 +74,89 @@ def list_matches(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[MatchOut]:
-    """Return all matches with unread count and last message preview."""
-    matches = (
-        db.query(Match)
-        .filter(
-            or_(
-                Match.user1_id == current_user.id,
-                Match.user2_id == current_user.id,
+    """Return all matches with unread count and last message in a single query.
+
+    Replaces the previous N+1 loop (3 queries per match) with:
+      - one CASE-based JOIN to resolve the other user without a subloop
+      - one ROW_NUMBER window-function subquery to get the newest message per match
+      - one correlated scalar subquery for the per-match unread count
+    Total: one database round-trip regardless of match count.
+    """
+    uid = current_user.id
+
+    # Resolve "the other participant" as a SQL expression so the JOIN is computed
+    # in the database rather than fetched row-by-row in Python.
+    other_id_col = case(
+        (Match.user1_id == uid, Match.user2_id),
+        else_=Match.user1_id,
+    )
+
+    # Rank every message within its match newest-first.
+    # Selecting rn == 1 from this subquery gives the last message per match
+    # without a separate query per match.
+    ranked_msgs = (
+        db.query(
+            Message.match_id.label("match_id"),
+            Message.sender_id.label("sender_id"),
+            Message.content.label("content"),
+            Message.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=Message.match_id,
+                order_by=Message.created_at.desc(),
             )
+            .label("rn"),
         )
+        .subquery("ranked_msgs")
+    )
+
+    # Correlated scalar subquery for unread count.
+    # COUNT(*) always returns an integer (0 when no rows match), so this is
+    # never NULL regardless of whether there are any messages in the match.
+    unread_sq = (
+        select(func.count())
+        .where(
+            Message.match_id == Match.id,
+            Message.sender_id != uid,
+            Message.read_at.is_(None),
+        )
+        .correlate(Match)
+        .scalar_subquery()
+    )
+
+    rows = (
+        db.query(
+            Match,
+            User,
+            unread_sq.label("unread_count"),
+            ranked_msgs.c.sender_id.label("last_sender_id"),
+            ranked_msgs.c.content.label("last_content"),
+            ranked_msgs.c.created_at.label("last_created_at"),
+        )
+        .join(User, User.id == other_id_col)
+        .outerjoin(
+            ranked_msgs,
+            (ranked_msgs.c.match_id == Match.id) & (ranked_msgs.c.rn == 1),
+        )
+        .filter(or_(Match.user1_id == uid, Match.user2_id == uid))
         .order_by(Match.matched_at.desc())
         .all()
     )
-    result = []
-    for m in matches:
-        other_id = m.user2_id if m.user1_id == current_user.id else m.user1_id
-        other = db.query(User).filter(User.id == other_id).first()
-        if not other:
-            continue
 
-        unread = (
-            db.query(Message)
-            .filter(
-                Message.match_id == m.id,
-                Message.sender_id != current_user.id,
-                Message.read_at.is_(None),
-            )
-            .count()
+    return [
+        MatchOut(
+            id=match.id,
+            matched_at=match.matched_at,
+            other_user=MatchedProfileOut.model_validate(other),
+            unread_count=unread_count or 0,
+            last_message=(
+                LastMessageOut(
+                    sender_id=last_sender_id,
+                    content=last_content,
+                    created_at=last_created_at,
+                )
+                if last_content is not None else None
+            ),
         )
-
-        last_msg = (
-            db.query(Message)
-            .filter(Message.match_id == m.id)
-            .order_by(Message.created_at.desc())
-            .first()
-        )
-        last_message_out = (
-            LastMessageOut(
-                sender_id=last_msg.sender_id,
-                content=last_msg.content,
-                created_at=last_msg.created_at,
-            )
-            if last_msg else None
-        )
-
-        result.append(
-            MatchOut(
-                id=m.id,
-                matched_at=m.matched_at,
-                other_user=MatchedProfileOut.model_validate(other),
-                unread_count=unread,
-                last_message=last_message_out,
-            )
-        )
-    return result
+        for match, other, unread_count, last_sender_id, last_content, last_created_at in rows
+    ]
