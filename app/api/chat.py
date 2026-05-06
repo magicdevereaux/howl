@@ -8,6 +8,7 @@ from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.match import Match
 from app.models.message import Message
+from app.models.swipe import Swipe
 from app.models.user import User
 from app.schemas.chat import MessageIn, MessageOut, UnreadCountOut
 
@@ -38,6 +39,33 @@ def _to_out(msg: Message, current_user_id: int) -> MessageOut:
         read_at=msg.read_at,
         is_mine=(msg.sender_id == current_user_id),
     )
+
+
+@router.delete("/{match_id}", status_code=204)
+def unmatch(
+    match_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """
+    Remove a match and its conversation without blocking either user.
+
+    Deletes the match (messages cascade), then removes both swipe records so
+    both parties can rediscover each other organically.
+    """
+    match = _require_match_member(match_id, current_user.id, db)
+    other_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
+
+    db.delete(match)  # messages cascade via FK
+
+    # Remove both swipes so each user reappears in the other's discover queue
+    db.query(Swipe).filter(
+        ((Swipe.user_id == current_user.id) & (Swipe.target_user_id == other_id)) |
+        ((Swipe.user_id == other_id) & (Swipe.target_user_id == current_user.id))
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    logger.info("chat: user %d unmatched match %d", current_user.id, match_id)
 
 
 @router.get("/{match_id}/messages", response_model=list[MessageOut])

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import Nav from './Nav';
 import { animalEmoji, avatarUrl } from '../utils';
 
@@ -10,8 +10,11 @@ export default function ProfileView({
   deleteModalOpen, setDeleteModalOpen,
   deleteConfirmText, setDeleteConfirmText,
   deleteLoading, deleteError, setDeleteError,
-  handleDeleteAccount, navProps,
+  handleDeleteAccount,
+  blocks, blocksLoading, fetchBlocks, handleUnblock,
+  navProps,
 }) {
+  useEffect(() => { fetchBlocks(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const getStatusEmoji = () => {
     if (!user?.bio) return <span>🐺</span>;
     if (!avatarStatus) return <span>🐺</span>;
@@ -147,6 +150,39 @@ export default function ProfileView({
             </button>
           </form>
         </div>
+
+        {/* Blocked users */}
+        {(blocksLoading || blocks.length > 0) && (
+          <div style={{ marginTop: '16px', background: 'white', borderRadius: '16px', padding: '24px 32px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#2d3748', marginBottom: '16px' }}>Blocked Users</h3>
+            {blocksLoading ? (
+              <p style={{ color: '#a0aec0', fontSize: '14px' }}>Loading…</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {blocks.map((b) => (
+                  <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderBottom: '1px solid #f7fafc' }}>
+                    <div style={{ fontSize: '32px', flexShrink: 0 }}>
+                      {b.avatar_url ? (
+                        <img src={avatarUrl(b.avatar_url)} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
+                      ) : null}
+                      <span style={{ display: b.avatar_url ? 'none' : 'block', fontSize: '28px' }}>{animalEmoji(b.animal)}</span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ color: '#2d3748', fontSize: '14px', fontWeight: '600', margin: 0 }}>{b.name || 'Anonymous'}</p>
+                      {b.animal && <p style={{ color: '#a0aec0', fontSize: '12px', margin: '2px 0 0' }}>{b.animal.charAt(0).toUpperCase() + b.animal.slice(1)}</p>}
+                    </div>
+                    <button
+                      onClick={() => handleUnblock(b.id)}
+                      style={{ padding: '6px 14px', background: 'white', color: '#667eea', border: '2px solid #667eea', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      Unblock
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Danger zone */}
         <div style={{ marginTop: '16px', background: 'white', borderRadius: '16px', padding: '24px 32px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', border: '1px solid #fed7d7' }}>

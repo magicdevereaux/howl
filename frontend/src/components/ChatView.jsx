@@ -1,14 +1,16 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { animalEmoji, avatarUrl } from '../utils';
 
 export default function ChatView({
   currentMatch, messages, setMessages,
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
+  handleUnmatch, handleBlock,
   setView, fetchMatches,
 }) {
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
+  const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block' | null
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -43,6 +45,20 @@ export default function ChatView({
         >
           ← Matches
         </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => setPendingAction('unmatch')}
+            style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: 'rgba(255,255,255,0.8)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px' }}
+          >
+            Unmatch
+          </button>
+          <button
+            onClick={() => setPendingAction('block')}
+            style={{ background: 'rgba(229,62,62,0.25)', border: '1px solid rgba(229,62,62,0.4)', color: '#feb2b2', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px' }}
+          >
+            Block
+          </button>
+        </div>
         {other.avatar_url ? (
           <img
             src={avatarUrl(other.avatar_url)}
@@ -160,6 +176,41 @@ export default function ChatView({
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .spinner { display: inline-block; animation: spin 2s linear infinite; }
       `}</style>
+
+      {/* Unmatch / Block confirmation modal */}
+      {pendingAction && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: 'white', borderRadius: '16px', padding: '32px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.35)' }}>
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>{pendingAction === 'block' ? '🚫' : '💔'}</div>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#2d3748', marginBottom: '8px' }}>
+              {pendingAction === 'block' ? `Block ${other.name || 'this user'}?` : `Unmatch ${other.name || 'this user'}?`}
+            </h2>
+            <p style={{ color: '#718096', fontSize: '14px', marginBottom: '24px', lineHeight: '1.5' }}>
+              {pendingAction === 'block'
+                ? 'They\'ll be removed from your matches and won\'t appear in discover. This cannot be undone.'
+                : 'Your match and conversation will be removed. They may reappear in discover.'}
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => setPendingAction(null)}
+                style={{ flex: 1, padding: '11px', background: '#f7fafc', color: '#4a5568', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setPendingAction(null);
+                  if (pendingAction === 'unmatch') handleUnmatch(currentMatch.id);
+                  else handleBlock(other.id);
+                }}
+                style={{ flex: 1, padding: '11px', background: pendingAction === 'block' ? '#c53030' : '#718096', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                {pendingAction === 'block' ? 'Block' : 'Unmatch'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

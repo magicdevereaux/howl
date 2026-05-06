@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import get_current_user
+from app.models.block import Block
 from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
@@ -37,10 +38,20 @@ def discover_users(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[User]:
-    """Return ready users the current user hasn't swiped on yet."""
+    """Return ready users the current user hasn't swiped on or blocked (either direction)."""
     swiped = (
         db.query(Swipe.target_user_id)
         .filter(Swipe.user_id == current_user.id)
+        .scalar_subquery()
+    )
+    blocked_by_me = (
+        db.query(Block.blocked_id)
+        .filter(Block.blocker_id == current_user.id)
+        .scalar_subquery()
+    )
+    blocking_me = (
+        db.query(Block.blocker_id)
+        .filter(Block.blocked_id == current_user.id)
         .scalar_subquery()
     )
     users = (
@@ -49,6 +60,8 @@ def discover_users(
             User.id != current_user.id,
             User.avatar_status == AvatarStatus.ready,
             User.id.notin_(swiped),
+            User.id.notin_(blocked_by_me),
+            User.id.notin_(blocking_me),
         )
         .order_by(User.created_at.desc())
         .all()

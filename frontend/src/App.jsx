@@ -40,6 +40,8 @@ export default function HowlApp() {
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [matchesError, setMatchesError] = useState('');
   const [matchPopup, setMatchPopup] = useState(null);
+  const [blocks, setBlocks] = useState([]);
+  const [blocksLoading, setBlocksLoading] = useState(false);
   const [swipeLoading, setSwipeLoading] = useState(false);
   const [swipeError, setSwipeError] = useState('');
   const [canUndo, setCanUndo] = useState(false);
@@ -435,6 +437,54 @@ export default function HowlApp() {
     loadMessages(match.id);
   };
 
+  const fetchBlocks = async () => {
+    setBlocksLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/blocks`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setBlocks(await res.json());
+    } catch { /* ignore */ }
+    finally { setBlocksLoading(false); }
+  };
+
+  const handleUnmatch = async (matchId) => {
+    await fetch(`${API_URL}/api/matches/${matchId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setCurrentMatch(null);
+    setMessages([]);
+    setView('matches');
+    fetchMatches();
+  };
+
+  const handleBlock = async (userId) => {
+    await fetch(`${API_URL}/api/blocks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ blocked_id: userId }),
+    });
+    // Remove from discover stack if present
+    setDiscoverUsers(prev => prev.filter(u => u.id !== userId));
+    // If blocking from chat, go back to matches
+    if (currentMatch?.other_user?.id === userId) {
+      setCurrentMatch(null);
+      setMessages([]);
+      setView('matches');
+      fetchMatches();
+    }
+    fetchBlocks();
+  };
+
+  const handleUnblock = async (userId) => {
+    await fetch(`${API_URL}/api/blocks/${userId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setBlocks(prev => prev.filter(b => b.id !== userId));
+  };
+
   const handleRegenerate = async () => {
     setError('');
     setLoading(true);
@@ -633,6 +683,7 @@ export default function HowlApp() {
         avatarStatus={avatarStatus}
         handleSwipe={handleSwipe}
         handleUndo={handleUndo}
+        handleBlock={handleBlock}
         fetchDiscoverUsers={fetchDiscoverUsers}
         setView={setView}
         fetchMatches={fetchMatches}
@@ -671,6 +722,8 @@ export default function HowlApp() {
         sendError={sendError}
         sendMessage={sendMessage}
         loadMessages={loadMessages}
+        handleUnmatch={handleUnmatch}
+        handleBlock={handleBlock}
         setView={setView}
         fetchMatches={fetchMatches}
       />
@@ -703,6 +756,10 @@ export default function HowlApp() {
       deleteError={deleteError}
       setDeleteError={setDeleteError}
       handleDeleteAccount={handleDeleteAccount}
+      blocks={blocks}
+      blocksLoading={blocksLoading}
+      fetchBlocks={fetchBlocks}
+      handleUnblock={handleUnblock}
       navProps={navProps}
     />
   );

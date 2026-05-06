@@ -11,6 +11,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from app.api.auth import router as auth_router
 from app.api.avatar import router as avatar_router
+from app.api.blocks import router as blocks_router
 from app.api.chat import router as chat_router
 from app.api.profile import router as profile_router
 from app.api.swipes import router as swipes_router
@@ -59,6 +60,7 @@ app.include_router(avatar_router)
 app.include_router(users_router)
 app.include_router(swipes_router)
 app.include_router(chat_router)
+app.include_router(blocks_router)
 
 
 _avatar_dir = Path("static/avatars")

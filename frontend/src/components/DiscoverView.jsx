@@ -6,9 +6,10 @@ export default function DiscoverView({
   discoverUsers, discoverLoading, discoverError,
   swipeLoading, swipeError, canUndo, undoMessage,
   matchPopup, setMatchPopup, avatarStatus,
-  handleSwipe, handleUndo, fetchDiscoverUsers,
+  handleSwipe, handleUndo, handleBlock, fetchDiscoverUsers,
   setView, fetchMatches, navProps,
 }) {
+  const [blockConfirm, setBlockConfirm] = React.useState(false);
   const currentCard = discoverUsers[0] || null;
 
   return (
@@ -144,6 +145,24 @@ export default function DiscoverView({
               )}
               {undoMessage && (
                 <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: '13px', margin: 0 }}>{undoMessage}</p>
+              )}
+            </div>
+
+            {/* Block button */}
+            <div style={{ textAlign: 'center', marginTop: '12px' }}>
+              {blockConfirm ? (
+                <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', background: 'rgba(0,0,0,0.3)', padding: '8px 16px', borderRadius: '20px' }}>
+                  <span style={{ color: 'white', fontSize: '13px' }}>Block {currentCard.name || 'this user'}?</span>
+                  <button onClick={() => setBlockConfirm(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer', fontSize: '12px' }}>Cancel</button>
+                  <button onClick={() => { setBlockConfirm(false); handleBlock(currentCard.id); }} style={{ background: '#c53030', border: 'none', color: 'white', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Block</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setBlockConfirm(true)}
+                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  Block this person
+                </button>
               )}
             </div>
           </>
