@@ -53,6 +53,7 @@ export default function HowlApp() {
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [emailNotifications, setEmailNotifications] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -130,6 +131,7 @@ export default function HowlApp() {
         setUser(data);
         setName(data.name || '');
         setAge(data.age ? String(data.age) : '');
+        setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setBio(data.bio || '');
         setView('profile');
@@ -250,6 +252,7 @@ export default function HowlApp() {
         setUser(data);
         setName(data.name || '');
         setAge(data.age ? String(data.age) : '');
+        setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setGenerationStartTime(Date.now());
         setGenerationTime(null);
@@ -516,6 +519,17 @@ export default function HowlApp() {
     });
   };
 
+  const handleToggleNotifications = async (enabled) => {
+    setEmailNotifications(enabled);
+    try {
+      await fetch(`${API_URL}/api/profile/me`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ email_notifications: enabled }),
+      });
+    } catch { /* silently revert on network error */ }
+  };
+
   const fetchDiscoverUsers = async () => {
     setDiscoverLoading(true);
     setDiscoverError('');
@@ -756,6 +770,8 @@ export default function HowlApp() {
       deleteError={deleteError}
       setDeleteError={setDeleteError}
       handleDeleteAccount={handleDeleteAccount}
+      emailNotifications={emailNotifications}
+      handleToggleNotifications={handleToggleNotifications}
       blocks={blocks}
       blocksLoading={blocksLoading}
       fetchBlocks={fetchBlocks}

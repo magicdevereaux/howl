@@ -11,6 +11,7 @@ export default function ProfileView({
   deleteConfirmText, setDeleteConfirmText,
   deleteLoading, deleteError, setDeleteError,
   handleDeleteAccount,
+  emailNotifications, handleToggleNotifications,
   blocks, blocksLoading, fetchBlocks, handleUnblock,
   navProps,
 }) {
@@ -149,6 +150,33 @@ export default function ProfileView({
               {loading ? (isStale ? 'Retrying...' : 'Updating...') : isStale ? '⚠️ Try Again' : isGenerating ? 'Generating...' : bio !== user?.bio ? 'Update Bio & Generate Avatar' : 'Regenerate Avatar'}
             </button>
           </form>
+        </div>
+
+        {/* Notification preference */}
+        <div style={{ marginTop: '16px', background: 'white', borderRadius: '16px', padding: '20px 32px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+          <div>
+            <p style={{ color: '#2d3748', fontSize: '15px', fontWeight: '600', margin: 0 }}>Email notifications</p>
+            <p style={{ color: '#718096', fontSize: '13px', margin: '4px 0 0' }}>
+              Get an email when a match messages you (if you haven't been active in 5 min)
+            </p>
+          </div>
+          <button
+            onClick={() => handleToggleNotifications(!emailNotifications)}
+            style={{
+              width: '48px', height: '26px', borderRadius: '13px', border: 'none',
+              background: emailNotifications ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : '#cbd5e0',
+              cursor: 'pointer', position: 'relative', flexShrink: 0, transition: 'background 0.2s',
+            }}
+            aria-label={emailNotifications ? 'Disable email notifications' : 'Enable email notifications'}
+          >
+            <span style={{
+              position: 'absolute', top: '3px',
+              left: emailNotifications ? '25px' : '3px',
+              width: '20px', height: '20px', borderRadius: '50%',
+              background: 'white', transition: 'left 0.2s',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+            }} />
+          </button>
         </div>
 
         {/* Blocked users */}

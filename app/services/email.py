@@ -32,7 +32,33 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
     print(f"{separator}\n")
     logger.info("password_reset: link generated for %s", to_email)
 
-    # ── Production: uncomment and configure one of the blocks below ──────────
+    # ── Production: see commented-out providers below ──────────────────────────
+
+
+def send_message_notification(
+    to_email: str,
+    sender_name: str | None,
+    sender_animal: str | None,
+) -> None:
+    """Notify a user that a match has sent them a new message.
+
+    Message content is intentionally excluded for privacy — only the sender's
+    name and spirit animal are included.
+    Currently logs to stdout (dev / portfolio mode).
+    """
+    display_name = sender_name or "Someone"
+    display_animal = sender_animal.capitalize() if sender_animal else "Unknown"
+
+    separator = "=" * 60
+    print(f"\n{separator}")
+    print(f"  NEW MESSAGE NOTIFICATION (dev mode — no email sent)")
+    print(f"  To:     {to_email}")
+    print(f"  From:   {display_name} (spirit animal: {display_animal})")
+    print(f"  Open Howl to read your message.")
+    print(f"{separator}\n")
+    logger.info("message_notification: sent to %s from %s", to_email, display_name)
+
+    # ── Production: see commented-out providers below ──────────────────────────
     #
     # --- SendGrid ---
     # import sendgrid

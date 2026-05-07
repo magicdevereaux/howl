@@ -34,6 +34,7 @@ class UserOut(BaseModel):
     animal: str | None
     avatar_url: str | None
     avatar_status: AvatarStatus
+    email_notifications: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -43,6 +44,7 @@ class ProfileUpdate(BaseModel):
     age: int | None = None
     location: str | None = None
     bio: str | None = None
+    email_notifications: bool | None = None
 
     @field_validator("name")
     @classmethod

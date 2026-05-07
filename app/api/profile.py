@@ -28,13 +28,15 @@ def update_my_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> User:
-    # Name, age, and location never trigger regeneration — apply unconditionally.
+    # These fields never trigger regeneration — apply unconditionally.
     if payload.name is not None:
         current_user.name = payload.name
     if payload.age is not None:
         current_user.age = payload.age
     if payload.location is not None:
         current_user.location = payload.location
+    if payload.email_notifications is not None:
+        current_user.email_notifications = payload.email_notifications
 
     if payload.bio is not None:
         current_user.bio = payload.bio

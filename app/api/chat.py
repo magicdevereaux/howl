@@ -11,6 +11,7 @@ from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import User
 from app.schemas.chat import MessageIn, MessageOut, UnreadCountOut
+from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def send_message(
     db: Session = Depends(get_db),
 ) -> MessageOut:
     """Send a message to a match. Rate-limited to 10 per 60 seconds."""
-    _require_match_member(match_id, current_user.id, db)
+    match = _require_match_member(match_id, current_user.id, db)
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
     recent = (
@@ -129,6 +130,11 @@ def send_message(
     db.refresh(msg)
 
     logger.info("chat: user=%d sent message to match=%d", current_user.id, match_id)
+
+    # Notify the other participant (fire-and-forget; task handles all skip logic)
+    recipient_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
+    notify_new_message.delay(match_id, recipient_id, current_user.id)
+
     return _to_out(msg, current_user.id)
 
 

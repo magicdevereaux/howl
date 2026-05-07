@@ -6,7 +6,7 @@ celery_app = Celery(
     "howl",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.avatar", "app.tasks.auto_match"],
+    include=["app.tasks.avatar", "app.tasks.auto_match", "app.tasks.notify"],
 )
 
 celery_app.conf.update(
