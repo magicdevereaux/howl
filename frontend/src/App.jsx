@@ -85,6 +85,7 @@ export default function HowlApp() {
     if (token) {
       fetchProfile();
       fetchAvatarStatus();
+      fetchMatches();
     }
   }, [token]);
 
