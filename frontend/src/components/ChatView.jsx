@@ -10,11 +10,22 @@ export default function ChatView({
 }) {
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const wasSending = useRef(false);
   const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block' | null
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Refocus the input whenever a send completes (success or error) so the
+  // user can type their next message without clicking back into the box.
+  useEffect(() => {
+    if (wasSending.current && !sending) {
+      inputRef.current?.focus();
+    }
+    wasSending.current = sending;
+  }, [sending]);
 
   const formatTime = (iso) =>
     new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -149,6 +160,7 @@ export default function ChatView({
         <input
           type="text"
           value={messageInput}
+          ref={inputRef}
           onChange={(e) => setMessageInput(e.target.value.slice(0, 2000))}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
           placeholder={`Message ${other.name || 'them'}…`}
