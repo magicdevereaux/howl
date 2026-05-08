@@ -635,7 +635,8 @@ export default function HowlApp() {
   // Routing
   // ---------------------------------------------------------------------------
 
-  const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout };
+  const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
+  const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread };
 
   if (view === 'privacy' || view === 'terms') {
     return <LegalPage view={view} setView={setView} />;
