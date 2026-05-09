@@ -5,7 +5,7 @@ import { animalEmoji, avatarUrl } from '../utils';
 export default function MatchesView({
   matches, matchesLoading, matchesError,
   fetchMatches, openChat, user,
-  setView, fetchDiscoverUsers, navProps,
+  setView, fetchDiscoverUsers, handleOpenReport, navProps,
 }) {
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '40px 20px' }}>
@@ -74,20 +74,29 @@ export default function MatchesView({
                     {m.other_user.animal ? m.other_user.animal.charAt(0).toUpperCase() + m.other_user.animal.slice(1) : ''}
                   </p>
                 </div>
-                {/* Footer: last message preview or match date */}
-                <div style={{ padding: '12px 16px' }}>
-                  {m.last_message ? (
-                    <p style={{ color: '#4a5568', fontSize: '12px', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      <span style={{ color: '#a0aec0' }}>
-                        {m.last_message.sender_id === user?.id ? 'You: ' : ''}
-                      </span>
-                      {m.last_message.content}
-                    </p>
-                  ) : (
-                    <p style={{ color: '#a0aec0', fontSize: '11px', margin: 0, textAlign: 'center' }}>
-                      Matched {new Date(m.matched_at).toLocaleDateString()}
-                    </p>
-                  )}
+                {/* Footer: last message preview or match date + report */}
+                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {m.last_message ? (
+                      <p style={{ color: '#4a5568', fontSize: '12px', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span style={{ color: '#a0aec0' }}>
+                          {m.last_message.sender_id === user?.id ? 'You: ' : ''}
+                        </span>
+                        {m.last_message.content}
+                      </p>
+                    ) : (
+                      <p style={{ color: '#a0aec0', fontSize: '11px', margin: 0, textAlign: 'center' }}>
+                        Matched {new Date(m.matched_at).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleOpenReport(m.other_user.id, m.other_user.name); }}
+                    title="Report this user"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', opacity: 0.35, flexShrink: 0, padding: '2px 4px' }}
+                  >
+                    🚩
+                  </button>
                 </div>
               </div>
             ))}

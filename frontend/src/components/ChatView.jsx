@@ -5,7 +5,7 @@ export default function ChatView({
   currentMatch, messages, setMessages,
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
-  handleUnmatch, handleBlock,
+  handleUnmatch, handleBlock, handleOpenReport,
   setView, fetchMatches,
 }) {
   const other = currentMatch.other_user;
@@ -69,6 +69,13 @@ export default function ChatView({
           >
             Block
           </button>
+          <button
+            onClick={() => handleOpenReport(other.id, other.name)}
+            title="Report this user"
+            style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', fontSize: '13px' }}
+          >
+            🚩
+          </button>
         </div>
         {other.avatar_url ? (
           <img
@@ -123,7 +130,16 @@ export default function ChatView({
                 </span>
               </div>
               {msgs.map((msg) => (
-                <div key={msg.id} style={{ display: 'flex', justifyContent: msg.is_mine ? 'flex-end' : 'flex-start', marginBottom: '8px' }}>
+                <div key={msg.id} style={{ display: 'flex', justifyContent: msg.is_mine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '6px', marginBottom: '8px' }}>
+                  {!msg.is_mine && (
+                    <button
+                      onClick={() => handleOpenReport(other.id, other.name, msg.id)}
+                      title="Report message"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', opacity: 0.25, padding: '2px', flexShrink: 0, lineHeight: 1 }}
+                    >
+                      🚩
+                    </button>
+                  )}
                   <div style={{
                     maxWidth: '70%',
                     padding: '10px 14px',

@@ -6,7 +6,7 @@ export default function DiscoverView({
   discoverUsers, discoverLoading, discoverError,
   swipeLoading, swipeError, canUndo, undoMessage,
   matchPopup, setMatchPopup, avatarStatus,
-  handleSwipe, handleUndo, handleBlock, fetchDiscoverUsers,
+  handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
   setView, fetchMatches, navProps,
 }) {
   const [blockConfirm, setBlockConfirm] = React.useState(false);
@@ -164,6 +164,14 @@ export default function DiscoverView({
                   Block this person
                 </button>
               )}
+            </div>
+            <div style={{ textAlign: 'center', marginTop: '6px' }}>
+              <button
+                onClick={() => handleOpenReport(currentCard.id, currentCard.name)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Report this person
+              </button>
             </div>
           </>
         )}

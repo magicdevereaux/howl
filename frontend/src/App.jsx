@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_URL } from './utils';
 import ChatView from './components/ChatView';
+import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
 import LegalPage from './components/LegalPage';
 import LoginView from './components/LoginView';
@@ -54,6 +55,9 @@ export default function HowlApp() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
   const [emailNotifications, setEmailNotifications] = useState(true);
+  const [reportModal, setReportModal] = useState(null); // null | { userId, name, messageId? }
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState('');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -520,6 +524,39 @@ export default function HowlApp() {
     });
   };
 
+  const handleOpenReport = (userId, name, messageId = undefined) => {
+    setReportError('');
+    setReportModal({ userId, name, messageId });
+  };
+
+  const handleSubmitReport = async (reason, notes) => {
+    setReportSubmitting(true);
+    setReportError('');
+    try {
+      const body = {
+        reported_user_id: reportModal.userId,
+        reason,
+        ...(notes ? { notes } : {}),
+        ...(reportModal.messageId != null ? { message_id: reportModal.messageId } : {}),
+      };
+      const res = await fetch(`${API_URL}/api/reports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setReportModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setReportError(data.detail || 'Submission failed — please try again.');
+      }
+    } catch {
+      setReportError('Network error — please try again.');
+    } finally {
+      setReportSubmitting(false);
+    }
+  };
+
   const handleToggleNotifications = async (enabled) => {
     setEmailNotifications(enabled);
     try {
@@ -686,99 +723,125 @@ export default function HowlApp() {
 
   if (view === 'discover') {
     return (
-      <DiscoverView
-        discoverUsers={discoverUsers}
-        discoverLoading={discoverLoading}
-        discoverError={discoverError}
-        swipeLoading={swipeLoading}
-        swipeError={swipeError}
-        canUndo={canUndo}
-        undoMessage={undoMessage}
-        matchPopup={matchPopup}
-        setMatchPopup={setMatchPopup}
-        avatarStatus={avatarStatus}
-        handleSwipe={handleSwipe}
-        handleUndo={handleUndo}
-        handleBlock={handleBlock}
-        fetchDiscoverUsers={fetchDiscoverUsers}
-        setView={setView}
-        fetchMatches={fetchMatches}
-        navProps={navProps}
-      />
+      <>
+        <DiscoverView
+          discoverUsers={discoverUsers}
+          discoverLoading={discoverLoading}
+          discoverError={discoverError}
+          swipeLoading={swipeLoading}
+          swipeError={swipeError}
+          canUndo={canUndo}
+          undoMessage={undoMessage}
+          matchPopup={matchPopup}
+          setMatchPopup={setMatchPopup}
+          avatarStatus={avatarStatus}
+          handleSwipe={handleSwipe}
+          handleUndo={handleUndo}
+          handleBlock={handleBlock}
+          handleOpenReport={handleOpenReport}
+          fetchDiscoverUsers={fetchDiscoverUsers}
+          setView={setView}
+          fetchMatches={fetchMatches}
+          navProps={navProps}
+        />
+        {reportModalEl}
+      </>
     );
   }
 
   if (view === 'matches') {
     return (
-      <MatchesView
-        matches={matches}
-        matchesLoading={matchesLoading}
-        matchesError={matchesError}
-        fetchMatches={fetchMatches}
-        openChat={openChat}
-        user={user}
-        setView={setView}
-        fetchDiscoverUsers={fetchDiscoverUsers}
-        navProps={navProps}
-      />
+      <>
+        <MatchesView
+          matches={matches}
+          matchesLoading={matchesLoading}
+          matchesError={matchesError}
+          fetchMatches={fetchMatches}
+          openChat={openChat}
+          user={user}
+          setView={setView}
+          fetchDiscoverUsers={fetchDiscoverUsers}
+          handleOpenReport={handleOpenReport}
+          navProps={navProps}
+        />
+        {reportModalEl}
+      </>
     );
   }
 
   if (view === 'chat' && currentMatch) {
     return (
-      <ChatView
-        currentMatch={currentMatch}
-        messages={messages}
-        setMessages={setMessages}
-        messagesLoading={messagesLoading}
-        messagesError={messagesError}
-        messageInput={messageInput}
-        setMessageInput={setMessageInput}
-        sending={sending}
-        sendError={sendError}
-        sendMessage={sendMessage}
-        loadMessages={loadMessages}
-        handleUnmatch={handleUnmatch}
-        handleBlock={handleBlock}
-        setView={setView}
-        fetchMatches={fetchMatches}
-      />
+      <>
+        <ChatView
+          currentMatch={currentMatch}
+          messages={messages}
+          setMessages={setMessages}
+          messagesLoading={messagesLoading}
+          messagesError={messagesError}
+          messageInput={messageInput}
+          setMessageInput={setMessageInput}
+          sending={sending}
+          sendError={sendError}
+          sendMessage={sendMessage}
+          loadMessages={loadMessages}
+          handleUnmatch={handleUnmatch}
+          handleBlock={handleBlock}
+          handleOpenReport={handleOpenReport}
+          setView={setView}
+          fetchMatches={fetchMatches}
+        />
+        {reportModalEl}
+      </>
     );
   }
 
+  // Report modal — rendered above all views
+  const reportModalEl = (
+    <ReportModal
+      target={reportModal ? { name: reportModal.name, messageId: reportModal.messageId } : null}
+      onClose={() => setReportModal(null)}
+      onSubmit={handleSubmitReport}
+      submitting={reportSubmitting}
+      error={reportError}
+    />
+  );
+
   // Default: profile view
   return (
-    <ProfileView
-      user={user}
-      avatarStatus={avatarStatus}
-      generationTime={generationTime}
-      isStale={isStale}
-      isGenerating={isGenerating}
-      name={name} setName={setName}
-      age={age} setAge={setAge}
-      location={location} setLocation={setLocation}
-      bio={bio} setBio={setBio}
-      error={error}
-      loading={loading}
-      copied={copied}
-      handleUpdateBio={handleUpdateBio}
-      handleRegenerate={handleRegenerate}
-      handleCopyAnimal={handleCopyAnimal}
-      deleteModalOpen={deleteModalOpen}
-      setDeleteModalOpen={setDeleteModalOpen}
-      deleteConfirmText={deleteConfirmText}
-      setDeleteConfirmText={setDeleteConfirmText}
-      deleteLoading={deleteLoading}
-      deleteError={deleteError}
-      setDeleteError={setDeleteError}
-      handleDeleteAccount={handleDeleteAccount}
-      emailNotifications={emailNotifications}
-      handleToggleNotifications={handleToggleNotifications}
-      blocks={blocks}
-      blocksLoading={blocksLoading}
-      fetchBlocks={fetchBlocks}
-      handleUnblock={handleUnblock}
-      navProps={navProps}
-    />
+    <>
+      <ProfileView
+        user={user}
+        avatarStatus={avatarStatus}
+        generationTime={generationTime}
+        isStale={isStale}
+        isGenerating={isGenerating}
+        name={name} setName={setName}
+        age={age} setAge={setAge}
+        location={location} setLocation={setLocation}
+        bio={bio} setBio={setBio}
+        error={error}
+        loading={loading}
+        copied={copied}
+        handleUpdateBio={handleUpdateBio}
+        handleRegenerate={handleRegenerate}
+        handleCopyAnimal={handleCopyAnimal}
+        deleteModalOpen={deleteModalOpen}
+        setDeleteModalOpen={setDeleteModalOpen}
+        deleteConfirmText={deleteConfirmText}
+        setDeleteConfirmText={setDeleteConfirmText}
+        deleteLoading={deleteLoading}
+        deleteError={deleteError}
+        setDeleteError={setDeleteError}
+        handleDeleteAccount={handleDeleteAccount}
+        emailNotifications={emailNotifications}
+        handleToggleNotifications={handleToggleNotifications}
+        blocks={blocks}
+        blocksLoading={blocksLoading}
+        fetchBlocks={fetchBlocks}
+        handleUnblock={handleUnblock}
+        navProps={navProps}
+      />
+      {reportModalEl}
+    </>
   );
 }
