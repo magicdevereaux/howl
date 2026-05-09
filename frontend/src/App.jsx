@@ -673,6 +673,20 @@ export default function HowlApp() {
   // Routing
   // ---------------------------------------------------------------------------
 
+  // Declared here — before any conditional returns — to avoid the TDZ.
+  // const bindings are in the temporal dead zone until their declaration
+  // is reached, so any early return above this point would throw if it
+  // referenced reportModalEl.
+  const reportModalEl = (
+    <ReportModal
+      target={reportModal ? { name: reportModal.name, messageId: reportModal.messageId } : null}
+      onClose={() => setReportModal(null)}
+      onSubmit={handleSubmitReport}
+      submitting={reportSubmitting}
+      error={reportError}
+    />
+  );
+
   const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
   const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread };
 
@@ -794,17 +808,6 @@ export default function HowlApp() {
       </>
     );
   }
-
-  // Report modal — rendered above all views
-  const reportModalEl = (
-    <ReportModal
-      target={reportModal ? { name: reportModal.name, messageId: reportModal.messageId } : null}
-      onClose={() => setReportModal(null)}
-      onSubmit={handleSubmitReport}
-      submitting={reportSubmitting}
-      error={reportError}
-    />
-  );
 
   // Default: profile view
   return (
