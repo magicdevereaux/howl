@@ -37,6 +37,16 @@ def update_my_profile(
         current_user.location = payload.location
     if payload.email_notifications is not None:
         current_user.email_notifications = payload.email_notifications
+    if payload.gender is not None:
+        current_user.gender = payload.gender
+    if payload.sexuality is not None:
+        current_user.sexuality = payload.sexuality
+    if payload.looking_for is not None:
+        current_user.looking_for = payload.looking_for
+    if payload.age_preference_min is not None:
+        current_user.age_preference_min = payload.age_preference_min
+    if payload.age_preference_max is not None:
+        current_user.age_preference_max = payload.age_preference_max
 
     if payload.bio is not None:
         current_user.bio = payload.bio

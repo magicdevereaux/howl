@@ -29,6 +29,11 @@ class UserOut(BaseModel):
     email: str
     name: str | None = None
     age: int | None = None
+    gender: str | None = None
+    sexuality: str | None = None
+    looking_for: str | None = None
+    age_preference_min: int | None = None
+    age_preference_max: int | None = None
     location: str | None = None
     bio: str | None
     animal: str | None
@@ -39,9 +44,19 @@ class UserOut(BaseModel):
     updated_at: datetime
 
 
+_GENDERS = {'man', 'woman', 'non-binary', 'other'}
+_SEXUALITIES = {'straight', 'gay', 'lesbian', 'bisexual', 'pansexual', 'other'}
+_LOOKING_FOR = {'men', 'women', 'non-binary', 'everyone'}
+
+
 class ProfileUpdate(BaseModel):
     name: str | None = None
     age: int | None = None
+    gender: str | None = None
+    sexuality: str | None = None
+    looking_for: str | None = None
+    age_preference_min: int | None = None
+    age_preference_max: int | None = None
     location: str | None = None
     bio: str | None = None
     email_notifications: bool | None = None
@@ -65,6 +80,41 @@ class ProfileUpdate(BaseModel):
             raise ValueError("Must be 18 or older")
         if v > 120:
             raise ValueError("Age must be 120 or less")
+        return v
+
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, v: str | None) -> str | None:
+        if v is not None and v not in _GENDERS:
+            raise ValueError(f"gender must be one of {sorted(_GENDERS)}")
+        return v
+
+    @field_validator("sexuality")
+    @classmethod
+    def validate_sexuality(cls, v: str | None) -> str | None:
+        if v is not None and v not in _SEXUALITIES:
+            raise ValueError(f"sexuality must be one of {sorted(_SEXUALITIES)}")
+        return v
+
+    @field_validator("looking_for")
+    @classmethod
+    def validate_looking_for(cls, v: str | None) -> str | None:
+        if v is not None and v not in _LOOKING_FOR:
+            raise ValueError(f"looking_for must be one of {sorted(_LOOKING_FOR)}")
+        return v
+
+    @field_validator("age_preference_min")
+    @classmethod
+    def validate_age_pref_min(cls, v: int | None) -> int | None:
+        if v is not None and (v < 18 or v > 120):
+            raise ValueError("age_preference_min must be between 18 and 120")
+        return v
+
+    @field_validator("age_preference_max")
+    @classmethod
+    def validate_age_pref_max(cls, v: int | None) -> int | None:
+        if v is not None and (v < 18 or v > 120):
+            raise ValueError("age_preference_max must be between 18 and 120")
         return v
 
     @field_validator("location")

@@ -2,6 +2,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
+# Maps looking_for values to the corresponding gender stored on User rows.
+_LOOKING_FOR_TO_GENDER = {
+    "men": "man",
+    "women": "woman",
+    "non-binary": "non-binary",
+}
+
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.block import Block
@@ -38,7 +45,13 @@ def discover_users(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[User]:
-    """Return ready users the current user hasn't swiped on or blocked (either direction)."""
+    """Return ready users the current user hasn't swiped on or blocked (either direction).
+
+    Preference filtering is opt-in: a filter is only applied when the current
+    user has set the corresponding preference.  Users who have not filled in
+    their own age or gender are always included so incomplete profiles are not
+    unfairly hidden.
+    """
     swiped = (
         db.query(Swipe.target_user_id)
         .filter(Swipe.user_id == current_user.id)
@@ -54,7 +67,7 @@ def discover_users(
         .filter(Block.blocked_id == current_user.id)
         .scalar_subquery()
     )
-    users = (
+    q = (
         db.query(User)
         .filter(
             User.id != current_user.id,
@@ -63,10 +76,27 @@ def discover_users(
             User.id.notin_(blocked_by_me),
             User.id.notin_(blocking_me),
         )
-        .order_by(User.created_at.desc())
-        .all()
     )
-    return users
+
+    # Age range preference — include profiles that haven't set their age
+    if current_user.age_preference_min is not None:
+        q = q.filter(
+            or_(User.age.is_(None), User.age >= current_user.age_preference_min)
+        )
+    if current_user.age_preference_max is not None:
+        q = q.filter(
+            or_(User.age.is_(None), User.age <= current_user.age_preference_max)
+        )
+
+    # Gender/looking_for — include profiles that haven't set their gender
+    if current_user.looking_for and current_user.looking_for != "everyone":
+        target_gender = _LOOKING_FOR_TO_GENDER.get(current_user.looking_for)
+        if target_gender:
+            q = q.filter(
+                or_(User.gender.is_(None), User.gender == target_gender)
+            )
+
+    return q.order_by(User.created_at.desc()).all()
 
 
 @router.get("/matches", response_model=list[MatchOut])

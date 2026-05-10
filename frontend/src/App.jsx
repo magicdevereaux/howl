@@ -24,6 +24,11 @@ export default function HowlApp() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
+  const [gender, setGender] = useState('');
+  const [sexuality, setSexuality] = useState('');
+  const [lookingFor, setLookingFor] = useState('');
+  const [agePrefMin, setAgePrefMin] = useState('');
+  const [agePrefMax, setAgePrefMax] = useState('');
   const [location, setLocation] = useState('');
   const [bio, setBio] = useState('');
   const [token, setToken] = useState(localStorage.getItem('access_token') || '');
@@ -136,6 +141,11 @@ export default function HowlApp() {
         setUser(data);
         setName(data.name || '');
         setAge(data.age ? String(data.age) : '');
+        setGender(data.gender || '');
+        setSexuality(data.sexuality || '');
+        setLookingFor(data.looking_for || '');
+        setAgePrefMin(data.age_preference_min ? String(data.age_preference_min) : '');
+        setAgePrefMax(data.age_preference_max ? String(data.age_preference_max) : '');
         setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setBio(data.bio || '');
@@ -250,13 +260,28 @@ export default function HowlApp() {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name: name || null, age: age ? parseInt(age, 10) : null, location: location || null, bio })
+        body: JSON.stringify({
+          name: name || null,
+          age: age ? parseInt(age, 10) : null,
+          gender: gender || null,
+          sexuality: sexuality || null,
+          looking_for: lookingFor || null,
+          age_preference_min: agePrefMin ? parseInt(agePrefMin, 10) : null,
+          age_preference_max: agePrefMax ? parseInt(agePrefMax, 10) : null,
+          location: location || null,
+          bio,
+        })
       });
       const data = await res.json();
       if (res.ok) {
         setUser(data);
         setName(data.name || '');
         setAge(data.age ? String(data.age) : '');
+        setGender(data.gender || '');
+        setSexuality(data.sexuality || '');
+        setLookingFor(data.looking_for || '');
+        setAgePrefMin(data.age_preference_min ? String(data.age_preference_min) : '');
+        setAgePrefMax(data.age_preference_max ? String(data.age_preference_max) : '');
         setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setGenerationStartTime(Date.now());
@@ -289,6 +314,11 @@ export default function HowlApp() {
     setPassword('');
     setName('');
     setAge('');
+    setGender('');
+    setSexuality('');
+    setLookingFor('');
+    setAgePrefMin('');
+    setAgePrefMax('');
     setLocation('');
     setBio('');
     setDiscoverUsers([]);
@@ -820,6 +850,11 @@ export default function HowlApp() {
         isGenerating={isGenerating}
         name={name} setName={setName}
         age={age} setAge={setAge}
+        gender={gender} setGender={setGender}
+        sexuality={sexuality} setSexuality={setSexuality}
+        lookingFor={lookingFor} setLookingFor={setLookingFor}
+        agePrefMin={agePrefMin} setAgePrefMin={setAgePrefMin}
+        agePrefMax={agePrefMax} setAgePrefMax={setAgePrefMax}
         location={location} setLocation={setLocation}
         bio={bio} setBio={setBio}
         error={error}
