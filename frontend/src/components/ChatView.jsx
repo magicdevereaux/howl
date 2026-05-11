@@ -151,6 +151,11 @@ export default function ChatView({
                     <p style={{ margin: 0, fontSize: '15px', lineHeight: '1.45', wordBreak: 'break-word' }}>{msg.content}</p>
                     <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
                       {formatTime(msg.created_at)}
+                      {msg.is_mine && (
+                        <span style={{ marginLeft: '5px', color: msg.read_at ? '#667eea' : '#a0aec0' }}>
+                          {msg.read_at ? '✓✓' : '✓'}
+                        </span>
+                      )}
                     </p>
                   </div>
                 </div>
