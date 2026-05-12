@@ -3,6 +3,12 @@
 import pytest
 
 from app.models.match import Match
+
+
+@pytest.fixture(autouse=True)
+def _mock_notify(monkeypatch):
+    """Suppress notify_new_message.delay so tests don't require Redis."""
+    monkeypatch.setattr("app.api.chat.notify_new_message.delay", lambda *_: None)
 from app.models.message import Message
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
@@ -100,7 +106,8 @@ def test_get_messages_empty_conversation(client, db, test_user, auth_headers):
     m = _make_match(db, test_user, other)
     res = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers)
     assert res.status_code == 200
-    assert res.json() == []
+    assert res.json()["messages"] == []
+    assert res.json()["has_more"] is False
 
 
 def test_get_messages_returns_correct_fields(client, db, test_user, auth_headers):
@@ -110,7 +117,7 @@ def test_get_messages_returns_correct_fields(client, db, test_user, auth_headers
 
     res = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers)
     assert res.status_code == 200
-    msg = res.json()[0]
+    msg = res.json()["messages"][0]
     assert msg["content"] == "Hello!"
     assert msg["sender_id"] == test_user.id
     assert msg["is_mine"] is True
@@ -125,7 +132,7 @@ def test_get_messages_is_mine_false_for_other_sender(client, db, test_user, auth
 
     res = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers)
     assert res.status_code == 200
-    assert res.json()[0]["is_mine"] is False
+    assert res.json()["messages"][0]["is_mine"] is False
 
 
 def test_get_messages_returns_oldest_first(client, db, test_user, auth_headers):
@@ -135,7 +142,7 @@ def test_get_messages_returns_oldest_first(client, db, test_user, auth_headers):
     _send(db, match_id=m.id, sender_id=other.id, content="Second")
     _send(db, match_id=m.id, sender_id=test_user.id, content="Third")
 
-    msgs = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    msgs = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()["messages"]
     assert [m["content"] for m in msgs] == ["First", "Second", "Third"]
 
 
@@ -171,7 +178,7 @@ def test_get_messages_isolation(client, db, test_user, auth_headers):
     _send(db, match_id=match_a.id, sender_id=test_user.id, content="In A")
 
     msgs = client.get(f"/api/matches/{match_b.id}/messages", headers=auth_headers).json()
-    assert msgs == []
+    assert msgs["messages"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +251,7 @@ def test_send_multiple_messages_ordered(client, db, test_user, auth_headers):
     for i in range(3):
         client.post(f"/api/matches/{m.id}/messages", headers=auth_headers, json={"content": str(i)})
 
-    msgs = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    msgs = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()["messages"]
     assert [msg["content"] for msg in msgs] == ["0", "1", "2"]
 
 
@@ -337,3 +344,101 @@ def test_matches_list_last_message_null_for_new_match(client, db, test_user, aut
 
     res = client.get("/api/users/matches", headers=auth_headers)
     assert res.json()[0]["last_message"] is None
+
+
+# ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+
+def test_response_has_messages_and_has_more_fields(client, db, test_user, auth_headers):
+    other = _make_user(db, email="page_shape@howl.app")
+    m = _make_match(db, test_user, other)
+    _send(db, match_id=m.id, sender_id=test_user.id, content="hi")
+
+    res = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "messages" in data
+    assert "has_more" in data
+
+
+def test_has_more_false_when_under_limit(client, db, test_user, auth_headers):
+    other = _make_user(db, email="page_few@howl.app")
+    m = _make_match(db, test_user, other)
+    for i in range(5):
+        _send(db, match_id=m.id, sender_id=test_user.id, content=str(i))
+
+    data = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    assert data["has_more"] is False
+    assert len(data["messages"]) == 5
+
+
+def test_has_more_true_when_over_limit(client, db, test_user, auth_headers):
+    other = _make_user(db, email="page_many@howl.app")
+    m = _make_match(db, test_user, other)
+    for i in range(55):  # more than the 50-message page size
+        _send(db, match_id=m.id, sender_id=test_user.id, content=str(i))
+
+    data = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    assert data["has_more"] is True
+    assert len(data["messages"]) == 50
+
+
+def test_default_returns_most_recent_messages(client, db, test_user, auth_headers):
+    """Without before_id, the endpoint returns the newest 50 messages."""
+    other = _make_user(db, email="page_recent@howl.app")
+    m = _make_match(db, test_user, other)
+    for i in range(55):
+        _send(db, match_id=m.id, sender_id=test_user.id, content=str(i))
+
+    data = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    contents = [msg["content"] for msg in data["messages"]]
+    # Should be messages 5-54 (the newest 50), in ascending order
+    assert contents == [str(i) for i in range(5, 55)]
+
+
+def test_before_id_returns_older_messages(client, db, test_user, auth_headers):
+    other = _make_user(db, email="page_cursor@howl.app")
+    m = _make_match(db, test_user, other)
+    msgs = [_send(db, match_id=m.id, sender_id=test_user.id, content=str(i)) for i in range(10)]
+    cursor_id = msgs[5].id  # cursor at the 6th message
+
+    data = client.get(
+        f"/api/matches/{m.id}/messages?before_id={cursor_id}",
+        headers=auth_headers,
+    ).json()
+    # Should return the 5 messages before cursor_id
+    ids = [msg["id"] for msg in data["messages"]]
+    assert all(mid < cursor_id for mid in ids)
+    assert len(ids) == 5
+
+
+def test_before_id_has_more_false_at_oldest(client, db, test_user, auth_headers):
+    """When before_id points to a message with fewer than 50 predecessors, has_more is False."""
+    other = _make_user(db, email="page_oldest@howl.app")
+    m = _make_match(db, test_user, other)
+    msgs = [_send(db, match_id=m.id, sender_id=test_user.id, content=str(i)) for i in range(10)]
+    # Use the 8th message as cursor → only 7 messages before it
+    cursor_id = msgs[7].id
+
+    data = client.get(
+        f"/api/matches/{m.id}/messages?before_id={cursor_id}",
+        headers=auth_headers,
+    ).json()
+    assert data["has_more"] is False
+    assert len(data["messages"]) == 7
+
+
+def test_messages_returned_in_ascending_order_with_cursor(client, db, test_user, auth_headers):
+    """Paginated results must still be oldest-first for correct display."""
+    other = _make_user(db, email="page_order@howl.app")
+    m = _make_match(db, test_user, other)
+    msgs = [_send(db, match_id=m.id, sender_id=test_user.id, content=str(i)) for i in range(55)]
+    cursor_id = msgs[54].id  # newest message
+
+    data = client.get(
+        f"/api/matches/{m.id}/messages?before_id={cursor_id}",
+        headers=auth_headers,
+    ).json()
+    ids = [msg["id"] for msg in data["messages"]]
+    assert ids == sorted(ids)  # ascending

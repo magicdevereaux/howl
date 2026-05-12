@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -10,7 +10,7 @@ from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import User
-from app.schemas.chat import MessageIn, MessageOut, UnreadCountOut
+from app.schemas.chat import MessageIn, MessageOut, MessagePageOut, UnreadCountOut
 from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/matches", tags=["chat"])
 
 _RATE_LIMIT_MAX = 10       # messages per window
 _RATE_LIMIT_WINDOW_S = 60  # seconds
+_PAGE_SIZE = 50            # messages returned per request
 
 
 def _require_match_member(match_id: int, user_id: int, db: Session) -> Match:
@@ -69,21 +70,33 @@ def unmatch(
     logger.info("chat: user %d unmatched match %d", current_user.id, match_id)
 
 
-@router.get("/{match_id}/messages", response_model=list[MessageOut])
+@router.get("/{match_id}/messages", response_model=MessagePageOut)
 def get_messages(
     match_id: int,
+    before_id: int | None = Query(default=None, description="Cursor: return messages with id < before_id"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[MessageOut]:
-    """Fetch conversation history and mark incoming messages as read."""
+) -> MessagePageOut:
+    """
+    Fetch paginated conversation history and mark incoming messages as read.
+
+    Returns the _PAGE_SIZE most recent messages by default.  Pass
+    ``before_id`` to page backward (load older messages).  The response
+    includes ``has_more`` so the client knows whether a previous page exists.
+    """
     _require_match_member(match_id, current_user.id, db)
 
-    messages = (
-        db.query(Message)
-        .filter(Message.match_id == match_id)
-        .order_by(Message.created_at.asc())
-        .all()
-    )
+    q = db.query(Message).filter(Message.match_id == match_id)
+    if before_id is not None:
+        q = q.filter(Message.id < before_id)
+
+    # Fetch newest-first so LIMIT gives us the _PAGE_SIZE most recent rows;
+    # then reverse to restore chronological (ascending) display order.
+    raw = q.order_by(Message.id.desc()).limit(_PAGE_SIZE + 1).all()
+    has_more = len(raw) > _PAGE_SIZE
+    if has_more:
+        raw = raw[:_PAGE_SIZE]
+    messages = list(reversed(raw))
 
     now = datetime.now(timezone.utc)
     marked = False
@@ -94,7 +107,10 @@ def get_messages(
     if marked:
         db.commit()
 
-    return [_to_out(msg, current_user.id) for msg in messages]
+    return MessagePageOut(
+        messages=[_to_out(msg, current_user.id) for msg in messages],
+        has_more=has_more,
+    )
 
 
 @router.post("/{match_id}/messages", response_model=MessageOut, status_code=201)

@@ -56,6 +56,8 @@ export default function HowlApp() {
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState('');
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -110,6 +112,7 @@ export default function HowlApp() {
   }, [avatarStatus?.avatar_status, user?.bio, isStale]);
 
   // Poll for new messages every 3 s while the chat view is open.
+  // Merges incoming messages so "load more" history is not lost on each poll.
   useEffect(() => {
     if (view !== 'chat' || !currentMatch) return;
     const poll = async () => {
@@ -117,7 +120,15 @@ export default function HowlApp() {
         const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (res.ok) setMessages(await res.json());
+        if (res.ok) {
+          const data = await res.json();
+          setMessages((prev) => {
+            if (!prev.length) return data.messages;
+            const maxId = Math.max(...prev.map((m) => m.id));
+            const newer = data.messages.filter((m) => m.id > maxId);
+            return newer.length ? [...prev, ...newer] : prev;
+          });
+        }
       } catch { /* ignore */ }
     };
     const interval = setInterval(poll, 3000);
@@ -428,7 +439,9 @@ export default function HowlApp() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        setMessages(await res.json());
+        const data = await res.json();
+        setMessages(data.messages);
+        setHasMoreMessages(data.has_more);
       } else {
         setMessagesError("Couldn't load messages.");
       }
@@ -437,6 +450,24 @@ export default function HowlApp() {
     } finally {
       setMessagesLoading(false);
     }
+  };
+
+  const loadMoreMessages = async () => {
+    if (!currentMatch || loadingMore || !hasMoreMessages || messages.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const oldestId = Math.min(...messages.map((m) => m.id));
+      const res = await fetch(
+        `${API_URL}/api/matches/${currentMatch.id}/messages?before_id=${oldestId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setMessages((prev) => [...data.messages, ...prev]);
+        setHasMoreMessages(data.has_more);
+      }
+    } catch { /* ignore */ }
+    finally { setLoadingMore(false); }
   };
 
   const sendMessage = async () => {
@@ -828,6 +859,9 @@ export default function HowlApp() {
           sendError={sendError}
           sendMessage={sendMessage}
           loadMessages={loadMessages}
+          hasMoreMessages={hasMoreMessages}
+          loadingMore={loadingMore}
+          loadMoreMessages={loadMoreMessages}
           handleUnmatch={handleUnmatch}
           handleBlock={handleBlock}
           handleOpenReport={handleOpenReport}

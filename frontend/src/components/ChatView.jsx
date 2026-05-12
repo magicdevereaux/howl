@@ -5,18 +5,33 @@ export default function ChatView({
   currentMatch, messages, setMessages,
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
+  hasMoreMessages, loadingMore, loadMoreMessages,
   handleUnmatch, handleBlock, handleOpenReport,
   setView, fetchMatches,
 }) {
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const prevScrollHeightRef = useRef(null); // set before prepend; triggers scroll restore
   const inputRef = useRef(null);
   const wasSending = useRef(false);
   const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block' | null
 
   useEffect(() => {
+    if (prevScrollHeightRef.current !== null && scrollContainerRef.current) {
+      // Older messages were prepended — restore position so the view doesn't jump.
+      const delta = scrollContainerRef.current.scrollHeight - prevScrollHeightRef.current;
+      scrollContainerRef.current.scrollTop = delta;
+      prevScrollHeightRef.current = null;
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const handleLoadMore = () => {
+    prevScrollHeightRef.current = scrollContainerRef.current?.scrollHeight ?? null;
+    loadMoreMessages();
+  };
 
   // Refocus the input whenever a send completes (success or error) so the
   // user can type their next message without clicking back into the box.
@@ -95,7 +110,21 @@ export default function ChatView({
       </div>
 
       {/* Message list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column' }}>
+      <div ref={scrollContainerRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column' }}>
+
+        {/* Load older messages */}
+        {hasMoreMessages && !messagesError && (
+          <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+            <button
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+              style={{ padding: '6px 18px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '20px', fontSize: '12px', fontWeight: '500', cursor: loadingMore ? 'not-allowed' : 'pointer', opacity: loadingMore ? 0.6 : 1 }}
+            >
+              {loadingMore ? 'Loading…' : '↑ Load older messages'}
+            </button>
+          </div>
+        )}
+
         {messagesError ? (
           <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.85)', marginTop: '60px', padding: '0 20px' }}>
             <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚠️</div>

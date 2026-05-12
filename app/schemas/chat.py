@@ -18,3 +18,8 @@ class MessageOut(BaseModel):
 
 class UnreadCountOut(BaseModel):
     count: int
+
+
+class MessagePageOut(BaseModel):
+    messages: list[MessageOut]
+    has_more: bool
