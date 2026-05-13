@@ -1,12 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { animalEmoji, avatarUrl } from '../utils';
 
+const REPORT_REASONS = [
+  { value: 'spam_scam',             label: 'Spam or scam' },
+  { value: 'inappropriate_content', label: 'Inappropriate content' },
+  { value: 'harassment',            label: 'Harassment or abuse' },
+  { value: 'fake_profile',          label: 'Fake or impersonating profile' },
+  { value: 'underage_user',         label: 'Underage user' },
+  { value: 'other',                 label: 'Other' },
+];
+
 export default function ChatView({
   currentMatch, messages, setMessages,
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
   hasMoreMessages, loadingMore, loadMoreMessages,
-  handleUnmatch, handleBlock, handleOpenReport,
+  handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
   setView, fetchMatches,
 }) {
   const other = currentMatch.other_user;
@@ -15,7 +24,18 @@ export default function ChatView({
   const prevScrollHeightRef = useRef(null); // set before prepend; triggers scroll restore
   const inputRef = useRef(null);
   const wasSending = useRef(false);
-  const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block' | null
+  const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block-report' | null
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [blockReportReason, setBlockReportReason] = useState('');
+  const [blockReportNotes, setBlockReportNotes] = useState('');
+
+  // Close the ⋯ menu when the user clicks anywhere else on the page
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [menuOpen]);
 
   useEffect(() => {
     if (prevScrollHeightRef.current !== null && scrollContainerRef.current) {
@@ -71,26 +91,36 @@ export default function ChatView({
         >
           ← Matches
         </button>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+        {/* ⋯ action menu */}
+        <div style={{ marginLeft: 'auto', position: 'relative' }}>
           <button
-            onClick={() => setPendingAction('unmatch')}
-            style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: 'rgba(255,255,255,0.8)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px' }}
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+            style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: 'white', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}
+            title="More options"
           >
-            Unmatch
+            ⋯
           </button>
-          <button
-            onClick={() => setPendingAction('block')}
-            style={{ background: 'rgba(229,62,62,0.25)', border: '1px solid rgba(229,62,62,0.4)', color: '#feb2b2', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px' }}
-          >
-            Block
-          </button>
-          <button
-            onClick={() => handleOpenReport(other.id, other.name)}
-            title="Report this user"
-            style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', fontSize: '13px' }}
-          >
-            🚩
-          </button>
+          {menuOpen && (
+            <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, background: 'white', borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', overflow: 'hidden', minWidth: '180px', zIndex: 200 }}>
+              <button
+                onClick={() => { setMenuOpen(false); setPendingAction('unmatch'); }}
+                style={{ display: 'block', width: '100%', padding: '13px 18px', background: 'none', border: 'none', textAlign: 'left', fontSize: '14px', color: '#4a5568', cursor: 'pointer', fontWeight: '500' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f7fafc'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+              >
+                💔 Unmatch
+              </button>
+              <div style={{ height: '1px', background: '#e2e8f0' }} />
+              <button
+                onClick={() => { setMenuOpen(false); setBlockReportReason(''); setBlockReportNotes(''); setPendingAction('block-report'); }}
+                style={{ display: 'block', width: '100%', padding: '13px 18px', background: 'none', border: 'none', textAlign: 'left', fontSize: '14px', color: '#c53030', cursor: 'pointer', fontWeight: '500' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#fff5f5'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+              >
+                🚫 Block &amp; Report
+              </button>
+            </div>
+          )}
         </div>
         {other.avatar_url ? (
           <img
@@ -239,35 +269,86 @@ export default function ChatView({
         .spinner { display: inline-block; animation: spin 2s linear infinite; }
       `}</style>
 
-      {/* Unmatch / Block confirmation modal */}
-      {pendingAction && (
+      {/* Unmatch confirmation modal */}
+      {pendingAction === 'unmatch' && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: 'white', borderRadius: '16px', padding: '32px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.35)' }}>
-            <div style={{ fontSize: '36px', marginBottom: '12px' }}>{pendingAction === 'block' ? '🚫' : '💔'}</div>
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>💔</div>
             <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#2d3748', marginBottom: '8px' }}>
-              {pendingAction === 'block' ? `Block ${other.name || 'this user'}?` : `Unmatch ${other.name || 'this user'}?`}
+              Unmatch {other.name || 'this user'}?
             </h2>
             <p style={{ color: '#718096', fontSize: '14px', marginBottom: '24px', lineHeight: '1.5' }}>
-              {pendingAction === 'block'
-                ? 'They\'ll be removed from your matches and won\'t appear in discover. This cannot be undone.'
-                : 'Your match and conversation will be removed. They may reappear in discover.'}
+              Your match and conversation will be removed. They may reappear in discover.
             </p>
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => setPendingAction(null)}
-                style={{ flex: 1, padding: '11px', background: '#f7fafc', color: '#4a5568', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
-              >
+              <button onClick={() => setPendingAction(null)} style={{ flex: 1, padding: '11px', background: '#f7fafc', color: '#4a5568', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
                 Cancel
               </button>
               <button
+                onClick={() => { setPendingAction(null); handleUnmatch(currentMatch.id); }}
+                style={{ flex: 1, padding: '11px', background: '#718096', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                Unmatch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block & Report modal */}
+      {pendingAction === 'block-report' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: 'white', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 24px 64px rgba(0,0,0,0.35)' }}>
+            <div style={{ fontSize: '36px', textAlign: 'center', marginBottom: '10px' }}>🚫</div>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#2d3748', textAlign: 'center', marginBottom: '6px' }}>
+              Block &amp; Report {other.name || 'this user'}?
+            </h2>
+            <p style={{ color: '#718096', fontSize: '13px', textAlign: 'center', marginBottom: '20px', lineHeight: '1.5' }}>
+              They'll be blocked and removed from your matches. A report will be sent to our team for review.
+            </p>
+
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', color: '#4a5568', fontSize: '13px', fontWeight: '600', marginBottom: '6px' }}>
+                Reason <span style={{ color: '#c53030' }}>*</span>
+              </label>
+              <select
+                value={blockReportReason}
+                onChange={(e) => setBlockReportReason(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', background: 'white', boxSizing: 'border-box', cursor: 'pointer' }}
+              >
+                <option value="">Select a reason…</option>
+                {REPORT_REASONS.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', color: '#4a5568', fontSize: '13px', fontWeight: '600', marginBottom: '6px' }}>
+                Additional notes <span style={{ color: '#a0aec0', fontWeight: '400' }}>(optional)</span>
+              </label>
+              <textarea
+                value={blockReportNotes}
+                onChange={(e) => setBlockReportNotes(e.target.value.slice(0, 500))}
+                placeholder="Any additional context…"
+                rows={3}
+                style={{ width: '100%', padding: '10px 12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setPendingAction(null)} style={{ flex: 1, padding: '11px', background: '#f7fafc', color: '#4a5568', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button
+                disabled={!blockReportReason}
                 onClick={() => {
                   setPendingAction(null);
-                  if (pendingAction === 'unmatch') handleUnmatch(currentMatch.id);
-                  else handleBlock(other.id);
+                  handleBlockAndReport(other.id, blockReportReason, blockReportNotes.trim() || undefined);
                 }}
-                style={{ flex: 1, padding: '11px', background: pendingAction === 'block' ? '#c53030' : '#718096', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+                style={{ flex: 1, padding: '11px', background: blockReportReason ? '#c53030' : '#fc8181', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: blockReportReason ? 'pointer' : 'not-allowed' }}
               >
-                {pendingAction === 'block' ? 'Block' : 'Unmatch'}
+                Block &amp; Report
               </button>
             </div>
           </div>

@@ -528,6 +528,21 @@ export default function HowlApp() {
     fetchMatches();
   };
 
+  const handleBlockAndReport = async (userId, reason, notes) => {
+    await handleBlock(userId); // navigate away and reload matches
+    try {
+      await fetch(`${API_URL}/api/reports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          reported_user_id: userId,
+          reason,
+          ...(notes ? { notes } : {}),
+        }),
+      });
+    } catch { /* block succeeded — report failure is non-critical */ }
+  };
+
   const handleBlock = async (userId) => {
     await fetch(`${API_URL}/api/blocks`, {
       method: 'POST',
@@ -864,6 +879,7 @@ export default function HowlApp() {
           loadMoreMessages={loadMoreMessages}
           handleUnmatch={handleUnmatch}
           handleBlock={handleBlock}
+          handleBlockAndReport={handleBlockAndReport}
           handleOpenReport={handleOpenReport}
           setView={setView}
           fetchMatches={fetchMatches}
