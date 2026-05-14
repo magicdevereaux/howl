@@ -36,9 +36,11 @@ def _to_out(msg: Message, current_user_id: int) -> MessageOut:
     return MessageOut(
         id=msg.id,
         sender_id=msg.sender_id,
-        content=msg.content,
+        # Hide content for soft-deleted messages so neither party sees the original text
+        content=None if msg.deleted_at else msg.content,
         created_at=msg.created_at,
         read_at=msg.read_at,
+        deleted_at=msg.deleted_at,
         is_mine=(msg.sender_id == current_user_id),
     )
 
@@ -68,6 +70,34 @@ def unmatch(
 
     db.commit()
     logger.info("chat: user %d unmatched match %d", current_user.id, match_id)
+
+
+@router.delete("/{match_id}/messages/{message_id}", response_model=MessageOut, status_code=200)
+def delete_message(
+    match_id: int,
+    message_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MessageOut:
+    """Soft-delete a sent message. Only the original sender may delete it."""
+    _require_match_member(match_id, current_user.id, db)
+
+    msg = db.query(Message).filter(
+        Message.id == message_id,
+        Message.match_id == match_id,
+    ).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found.")
+    if msg.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Cannot delete a message you did not send.")
+    if msg.deleted_at:
+        return _to_out(msg, current_user.id)  # idempotent
+
+    msg.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(msg)
+    logger.info("chat: user %d soft-deleted message %d", current_user.id, message_id)
+    return _to_out(msg, current_user.id)
 
 
 @router.get("/{match_id}/messages", response_model=MessagePageOut)

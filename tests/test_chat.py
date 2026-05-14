@@ -98,6 +98,117 @@ def test_get_messages_nonexistent_match_returns_404(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
+# DELETE /api/matches/{id}/messages/{message_id}  (soft delete)
+# ---------------------------------------------------------------------------
+
+def test_delete_own_message_returns_200(client, db, test_user, auth_headers):
+    other = _make_user(db, email="del_ok@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="I'll regret this")
+
+    res = client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == msg.id
+    assert data["content"] is None       # content hidden after deletion
+    assert data["deleted_at"] is not None
+
+
+def test_delete_sets_deleted_at_in_db(client, db, test_user, auth_headers):
+    other = _make_user(db, email="del_db@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="bye")
+    assert msg.deleted_at is None
+
+    client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+
+    db.refresh(msg)
+    assert msg.deleted_at is not None
+    assert msg.content == "bye"          # original text preserved in DB for audit
+
+
+def test_delete_received_message_returns_403(client, db, test_user, auth_headers):
+    other = _make_user(db, email="del_403@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=other.id, content="you can't delete this")
+
+    res = client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+    assert res.status_code == 403
+
+
+def test_delete_nonexistent_message_returns_404(client, db, test_user, auth_headers):
+    other = _make_user(db, email="del_404@howl.app")
+    m = _make_match(db, test_user, other)
+
+    res = client.delete(f"/api/matches/{m.id}/messages/99999", headers=auth_headers)
+    assert res.status_code == 404
+
+
+def test_delete_from_wrong_match_returns_404(client, db, test_user, auth_headers):
+    """A message from match A cannot be deleted via match B's URL."""
+    other = _make_user(db, email="del_wrong_a@howl.app")
+    third = _make_user(db, email="del_wrong_b@howl.app")
+    m_a = _make_match(db, test_user, other)
+    m_b = _make_match(db, test_user, third)
+    msg = _send(db, match_id=m_a.id, sender_id=test_user.id, content="in match A")
+
+    res = client.delete(f"/api/matches/{m_b.id}/messages/{msg.id}", headers=auth_headers)
+    assert res.status_code == 404
+
+
+def test_delete_unauthenticated_returns_401(client, db, test_user):
+    other = _make_user(db, email="del_auth@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="hi")
+
+    res = client.delete(f"/api/matches/{m.id}/messages/{msg.id}")
+    assert res.status_code == 401
+
+
+def test_delete_is_idempotent(client, db, test_user, auth_headers):
+    """Deleting an already-deleted message returns 200 with the same tombstone."""
+    other = _make_user(db, email="del_idem@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="once")
+
+    first = client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+    second = client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["deleted_at"] == first.json()["deleted_at"]  # same timestamp
+
+
+def test_deleted_message_appears_as_placeholder_in_get(client, db, test_user, auth_headers):
+    """GET /messages returns deleted messages with content=null and deleted_at set."""
+    other = _make_user(db, email="del_get@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="secret")
+    client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+
+    msgs = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()["messages"]
+    deleted = next(m for m in msgs if m["id"] == msg.id)
+    assert deleted["content"] is None
+    assert deleted["deleted_at"] is not None
+
+
+def test_deletion_visible_to_other_user(client, db, test_user):
+    """The recipient also sees the placeholder when they fetch messages."""
+    from app.security import create_access_token
+    other = _make_user(db, email="del_other@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="see ya")
+
+    sender_headers = {"Authorization": f"Bearer {create_access_token(test_user.id)}"}
+    client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=sender_headers)
+
+    other_headers = {"Authorization": f"Bearer {create_access_token(other.id)}"}
+    msgs = client.get(f"/api/matches/{m.id}/messages", headers=other_headers).json()["messages"]
+    deleted = next(m for m in msgs if m["id"] == msg.id)
+    assert deleted["content"] is None
+    assert deleted["deleted_at"] is not None
+
+
+# ---------------------------------------------------------------------------
 # GET /api/matches/{id}/messages
 # ---------------------------------------------------------------------------
 

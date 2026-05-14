@@ -124,9 +124,10 @@ export default function HowlApp() {
           const data = await res.json();
           setMessages((prev) => {
             if (!prev.length) return data.messages;
-            const maxId = Math.max(...prev.map((m) => m.id));
-            const newer = data.messages.filter((m) => m.id > maxId);
-            return newer.length ? [...prev, ...newer] : prev;
+            // Merge: update existing messages (e.g. deleted_at changed) and append new ones
+            const byId = new Map(prev.map((m) => [m.id, m]));
+            for (const m of data.messages) byId.set(m.id, m);
+            return Array.from(byId.values()).sort((a, b) => a.id - b.id);
           });
         }
       } catch { /* ignore */ }
@@ -450,6 +451,20 @@ export default function HowlApp() {
     } finally {
       setMessagesLoading(false);
     }
+  };
+
+  const handleDeleteMessage = async (messageId) => {
+    if (!currentMatch) return;
+    try {
+      const res = await fetch(
+        `${API_URL}/api/matches/${currentMatch.id}/messages/${messageId}`,
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.ok) {
+        const updated = await res.json();
+        setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      }
+    } catch { /* ignore */ }
   };
 
   const loadMoreMessages = async () => {
@@ -877,6 +892,7 @@ export default function HowlApp() {
           hasMoreMessages={hasMoreMessages}
           loadingMore={loadingMore}
           loadMoreMessages={loadMoreMessages}
+          handleDeleteMessage={handleDeleteMessage}
           handleUnmatch={handleUnmatch}
           handleBlock={handleBlock}
           handleBlockAndReport={handleBlockAndReport}

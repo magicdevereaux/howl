@@ -27,6 +27,7 @@ class Message(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<Message id={self.id} match={self.match_id} sender={self.sender_id}>"

@@ -15,6 +15,7 @@ export default function ChatView({
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
   hasMoreMessages, loadingMore, loadMoreMessages,
+  handleDeleteMessage,
   handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
   setView, fetchMatches,
 }) {
@@ -28,14 +29,23 @@ export default function ChatView({
   const [menuOpen, setMenuOpen] = useState(false);
   const [blockReportReason, setBlockReportReason] = useState('');
   const [blockReportNotes, setBlockReportNotes] = useState('');
+  const [clickedMsgId, setClickedMsgId] = useState(null);
 
-  // Close the ⋯ menu when the user clicks anywhere else on the page
+  // Close the ⋯ header menu when clicking elsewhere
   useEffect(() => {
     if (!menuOpen) return;
     const close = () => setMenuOpen(false);
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [menuOpen]);
+
+  // Close the per-message delete menu when clicking elsewhere
+  useEffect(() => {
+    if (!clickedMsgId) return;
+    const close = () => setClickedMsgId(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [clickedMsgId]);
 
   useEffect(() => {
     if (prevScrollHeightRef.current !== null && scrollContainerRef.current) {
@@ -190,7 +200,8 @@ export default function ChatView({
               </div>
               {msgs.map((msg) => (
                 <div key={msg.id} style={{ display: 'flex', justifyContent: msg.is_mine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '6px', marginBottom: '8px' }}>
-                  {!msg.is_mine && (
+                  {/* Report flag on incoming messages */}
+                  {!msg.is_mine && !msg.deleted_at && (
                     <button
                       onClick={() => handleOpenReport(other.id, other.name, msg.id)}
                       title="Report message"
@@ -199,24 +210,62 @@ export default function ChatView({
                       🚩
                     </button>
                   )}
+
+                  {/* Message bubble */}
                   <div style={{
                     maxWidth: '70%',
-                    padding: '10px 14px',
+                    padding: msg.deleted_at ? '8px 14px' : '10px 14px',
                     borderRadius: msg.is_mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                    background: msg.is_mine ? 'white' : 'rgba(255,255,255,0.15)',
+                    background: msg.deleted_at
+                      ? (msg.is_mine ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.06)')
+                      : (msg.is_mine ? 'white' : 'rgba(255,255,255,0.15)'),
                     color: msg.is_mine ? '#2d3748' : 'white',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                    boxShadow: msg.deleted_at ? 'none' : '0 1px 4px rgba(0,0,0,0.15)',
+                    border: msg.deleted_at ? '1px dashed rgba(255,255,255,0.2)' : 'none',
                   }}>
-                    <p style={{ margin: 0, fontSize: '15px', lineHeight: '1.45', wordBreak: 'break-word' }}>{msg.content}</p>
-                    <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
-                      {formatTime(msg.created_at)}
-                      {msg.is_mine && (
-                        <span style={{ marginLeft: '5px', color: msg.read_at ? '#667eea' : '#a0aec0' }}>
-                          {msg.read_at ? '✓✓' : '✓'}
-                        </span>
-                      )}
-                    </p>
+                    {msg.deleted_at ? (
+                      <p style={{ margin: 0, fontSize: '13px', fontStyle: 'italic', opacity: 0.45, color: 'white' }}>
+                        🗑 Message deleted
+                      </p>
+                    ) : (
+                      <>
+                        <p style={{ margin: 0, fontSize: '15px', lineHeight: '1.45', wordBreak: 'break-word' }}>{msg.content}</p>
+                        <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
+                          {formatTime(msg.created_at)}
+                          {msg.is_mine && (
+                            <span style={{ marginLeft: '5px', color: msg.read_at ? '#667eea' : '#a0aec0' }}>
+                              {msg.read_at ? '✓✓' : '✓'}
+                            </span>
+                          )}
+                        </p>
+                      </>
+                    )}
                   </div>
+
+                  {/* ⋮ delete menu on sent messages (hidden for deleted) */}
+                  {msg.is_mine && !msg.deleted_at && (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setClickedMsgId(clickedMsgId === msg.id ? null : msg.id); }}
+                        title="Message options"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', fontSize: '16px', lineHeight: 1, padding: '2px 4px' }}
+                      >
+                        ⋮
+                      </button>
+                      {clickedMsgId === msg.id && (
+                        <div style={{ position: 'absolute', bottom: '100%', right: 0, background: 'white', borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.2)', overflow: 'hidden', minWidth: '160px', zIndex: 100, marginBottom: '4px' }}>
+                          <button
+                            onClick={() => { setClickedMsgId(null); handleDeleteMessage(msg.id); }}
+                            style={{ display: 'block', width: '100%', padding: '11px 16px', background: 'none', border: 'none', textAlign: 'left', fontSize: '14px', color: '#c53030', cursor: 'pointer', fontWeight: '500' }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#fff5f5'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                          >
+                            🗑 Delete message
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

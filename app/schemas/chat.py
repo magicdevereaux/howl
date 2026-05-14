@@ -10,9 +10,10 @@ class MessageIn(BaseModel):
 class MessageOut(BaseModel):
     id: int
     sender_id: int
-    content: str
+    content: str | None  # null when the message has been soft-deleted
     created_at: datetime
     read_at: datetime | None = None
+    deleted_at: datetime | None = None
     is_mine: bool
 
 
