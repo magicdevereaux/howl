@@ -2,13 +2,9 @@ import React, { useEffect } from 'react';
 import Nav from './Nav';
 import { animalEmoji, avatarUrl } from '../utils';
 
-const sel = { width: '100%', padding: '10px 12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '15px', background: 'white', boxSizing: 'border-box', cursor: 'pointer' };
-
 export default function ProfileView({
   user, avatarStatus, generationTime, isStale, isGenerating,
   name, setName, age, setAge,
-  gender, setGender, sexuality, setSexuality,
-  lookingFor, setLookingFor, agePrefMin, setAgePrefMin, agePrefMax, setAgePrefMax,
   location, setLocation, bio, setBio,
   error, loading, copied,
   handleUpdateBio, handleRegenerate, handleCopyAnimal,
@@ -134,60 +130,6 @@ export default function ProfileView({
                 <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500', fontSize: '14px' }}>Location</label>
                 <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="City, State" maxLength={100} style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
               </div>
-            </div>
-
-            {/* Dating Preferences */}
-            <div style={{ marginBottom: '20px', paddingTop: '4px' }}>
-              <p style={{ color: '#4a5568', fontWeight: '600', fontSize: '13px', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Dating Preferences
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', color: '#4a5568', fontWeight: '500', fontSize: '13px' }}>Gender</label>
-                  <select value={gender} onChange={(e) => setGender(e.target.value)} style={sel} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}>
-                    <option value="">Prefer not to say</option>
-                    <option value="man">Man</option>
-                    <option value="woman">Woman</option>
-                    <option value="non-binary">Non-binary</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', color: '#4a5568', fontWeight: '500', fontSize: '13px' }}>Sexuality</label>
-                  <select value={sexuality} onChange={(e) => setSexuality(e.target.value)} style={sel} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}>
-                    <option value="">Prefer not to say</option>
-                    <option value="straight">Straight</option>
-                    <option value="gay">Gay</option>
-                    <option value="lesbian">Lesbian</option>
-                    <option value="bisexual">Bisexual</option>
-                    <option value="pansexual">Pansexual</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px', gap: '14px' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', color: '#4a5568', fontWeight: '500', fontSize: '13px' }}>Looking for</label>
-                  <select value={lookingFor} onChange={(e) => setLookingFor(e.target.value)} style={sel} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}>
-                    <option value="">Everyone</option>
-                    <option value="men">Men</option>
-                    <option value="women">Women</option>
-                    <option value="non-binary">Non-binary</option>
-                    <option value="everyone">Everyone</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', color: '#4a5568', fontWeight: '500', fontSize: '13px' }}>Age min</label>
-                  <input type="number" value={agePrefMin} onChange={(e) => setAgePrefMin(e.target.value)} placeholder="18" min={18} max={120} style={{ ...sel, padding: '10px 8px' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', color: '#4a5568', fontWeight: '500', fontSize: '13px' }}>Age max</label>
-                  <input type="number" value={agePrefMax} onChange={(e) => setAgePrefMax(e.target.value)} placeholder="99" min={18} max={120} style={{ ...sel, padding: '10px 8px' }} onFocus={(e) => e.target.style.borderColor = '#667eea'} onBlur={(e) => e.target.style.borderColor = '#e2e8f0'} />
-                </div>
-              </div>
-              <p style={{ fontSize: '11px', color: '#a0aec0', marginTop: '8px' }}>
-                Preferences filter your Discover results. Leave blank to see everyone.
-              </p>
             </div>
 
             <div style={{ marginBottom: '20px' }}>

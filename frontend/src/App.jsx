@@ -275,11 +275,6 @@ export default function HowlApp() {
         body: JSON.stringify({
           name: name || null,
           age: age ? parseInt(age, 10) : null,
-          gender: gender || null,
-          sexuality: sexuality || null,
-          looking_for: lookingFor || null,
-          age_preference_min: agePrefMin ? parseInt(agePrefMin, 10) : null,
-          age_preference_max: agePrefMax ? parseInt(agePrefMax, 10) : null,
           location: location || null,
           bio,
         })
@@ -648,6 +643,28 @@ export default function HowlApp() {
     }
   };
 
+  const handleSaveFilters = async ({ lookingFor: lf, gender: g, sexuality: s, agePrefMin: amin, agePrefMax: amax }) => {
+    setLookingFor(lf);
+    setGender(g);
+    setSexuality(s);
+    setAgePrefMin(amin);
+    setAgePrefMax(amax);
+    try {
+      await fetch(`${API_URL}/api/profile/me`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          looking_for: lf || null,
+          gender: g || null,
+          sexuality: s || null,
+          age_preference_min: amin ? parseInt(amin, 10) : null,
+          age_preference_max: amax ? parseInt(amax, 10) : null,
+        }),
+      });
+    } catch { /* ignore */ }
+    fetchDiscoverUsers();
+  };
+
   const handleToggleNotifications = async (enabled) => {
     setEmailNotifications(enabled);
     try {
@@ -840,6 +857,8 @@ export default function HowlApp() {
           matchPopup={matchPopup}
           setMatchPopup={setMatchPopup}
           avatarStatus={avatarStatus}
+          preferenceFilters={{ lookingFor, gender, sexuality, agePrefMin, agePrefMax }}
+          handleSaveFilters={handleSaveFilters}
           handleSwipe={handleSwipe}
           handleUndo={handleUndo}
           handleBlock={handleBlock}
@@ -916,11 +935,6 @@ export default function HowlApp() {
         isGenerating={isGenerating}
         name={name} setName={setName}
         age={age} setAge={setAge}
-        gender={gender} setGender={setGender}
-        sexuality={sexuality} setSexuality={setSexuality}
-        lookingFor={lookingFor} setLookingFor={setLookingFor}
-        agePrefMin={agePrefMin} setAgePrefMin={setAgePrefMin}
-        agePrefMax={agePrefMax} setAgePrefMax={setAgePrefMax}
         location={location} setLocation={setLocation}
         bio={bio} setBio={setBio}
         error={error}
