@@ -1,5 +1,8 @@
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
+// Derive WebSocket base URL from the HTTP API URL automatically
+export const WS_URL = API_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+
 const ANIMAL_EMOJI = {
   wolf: '🐺', fox: '🦊', deer: '🦌', bear: '🐻', owl: '🦉',
   cat: '🐱', lion: '🦁', otter: '🦦', eagle: '🦅', panther: '🐆',

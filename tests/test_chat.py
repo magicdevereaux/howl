@@ -458,6 +458,87 @@ def test_matches_list_last_message_null_for_new_match(client, db, test_user, aut
 
 
 # ---------------------------------------------------------------------------
+# WebSocket — connection, auth, and broadcast
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def _ws_db(db, monkeypatch):
+    """Wire the WebSocket handler's SessionLocal() to the test SQLite session."""
+    monkeypatch.setattr("app.api.chat.SessionLocal", lambda: db)
+
+
+def test_ws_connect_valid_credentials(client, db, test_user, _ws_db):
+    other = _make_user(db, email="ws_ok@howl.app")
+    m = _make_match(db, test_user, other)
+    token = create_access_token(test_user.id)
+
+    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+        pass  # connection accepted and closed cleanly
+
+
+def test_ws_invalid_token_closes_with_4001(client, db, test_user):
+    other = _make_user(db, email="ws_bad@howl.app")
+    m = _make_match(db, test_user, other)
+
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/api/matches/{m.id}/ws?token=notavalidtoken") as ws:
+            ws.receive_json()
+
+    assert exc_info.value.code == 4001
+
+
+def test_ws_not_in_match_closes_with_4003(client, db, test_user, _ws_db):
+    a = _make_user(db, email="ws_a@howl.app")
+    b = _make_user(db, email="ws_b@howl.app")
+    m = _make_match(db, a, b)
+    token = create_access_token(test_user.id)  # test_user is NOT in this match
+
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+            ws.receive_json()
+
+    assert exc_info.value.code == 4003
+
+
+def test_ws_receives_new_message_via_broadcast(client, db, test_user, auth_headers, _ws_db):
+    """Sending a message via HTTP POST delivers it through the WebSocket."""
+    other = _make_user(db, email="ws_msg@howl.app")
+    m = _make_match(db, test_user, other)
+    token = create_access_token(test_user.id)
+
+    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+        client.post(
+            f"/api/matches/{m.id}/messages",
+            headers=auth_headers,
+            json={"content": "hello via ws"},
+        )
+        data = ws.receive_json()
+
+    assert data["type"] == "new_message"
+    assert data["message"]["content"] == "hello via ws"
+    assert data["message"]["sender_id"] == test_user.id
+    assert data["message"]["is_mine"] is True  # sender's own connection
+
+
+def test_ws_receives_deleted_message_event(client, db, test_user, auth_headers, _ws_db):
+    other = _make_user(db, email="ws_del@howl.app")
+    m = _make_match(db, test_user, other)
+    msg = _send(db, match_id=m.id, sender_id=test_user.id, content="delete me")
+    token = create_access_token(test_user.id)
+
+    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+        client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
+        data = ws.receive_json()
+
+    assert data["type"] == "message_deleted"
+    assert data["message"]["id"] == msg.id
+    assert data["message"]["content"] is None
+    assert data["message"]["deleted_at"] is not None
+
+
+# ---------------------------------------------------------------------------
 # Pagination
 # ---------------------------------------------------------------------------
 

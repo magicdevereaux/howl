@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_URL } from './utils';
+import { API_URL, WS_URL } from './utils';
 import ChatView from './components/ChatView';
 import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
@@ -111,29 +111,55 @@ export default function HowlApp() {
     }
   }, [avatarStatus?.avatar_status, user?.bio, isStale]);
 
-  // Poll for new messages every 3 s while the chat view is open.
-  // Merges incoming messages so "load more" history is not lost on each poll.
+  // WebSocket connection for real-time chat delivery.
+  // Replaces the previous 3-second polling approach.
+  // Reconnects automatically after a 3-second backoff whenever the
+  // connection drops (network glitch, server restart, etc.).
   useEffect(() => {
     if (view !== 'chat' || !currentMatch) return;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setMessages((prev) => {
-            if (!prev.length) return data.messages;
-            // Merge: update existing messages (e.g. deleted_at changed) and append new ones
-            const byId = new Map(prev.map((m) => [m.id, m]));
-            for (const m of data.messages) byId.set(m.id, m);
-            return Array.from(byId.values()).sort((a, b) => a.id - b.id);
-          });
+
+    const wsUrl = `${WS_URL}/api/matches/${currentMatch.id}/ws?token=${token}`;
+    let ws = null;
+    let reconnectTimer = null;
+    let active = true; // false after cleanup so reconnect attempts stop
+
+    const connect = () => {
+      if (!active) return;
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (event) => {
+        try {
+          const { type, message } = JSON.parse(event.data);
+          if (type === 'new_message') {
+            setMessages((prev) => {
+              const byId = new Map(prev.map((m) => [m.id, m]));
+              byId.set(message.id, message);
+              return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+            });
+          } else if (type === 'message_deleted') {
+            setMessages((prev) => prev.map((m) => m.id === message.id ? message : m));
+          }
+        } catch { /* ignore malformed frames */ }
+      };
+
+      ws.onclose = () => {
+        if (active) {
+          reconnectTimer = setTimeout(connect, 3000);
         }
-      } catch { /* ignore */ }
+      };
+
+      ws.onerror = () => {
+        ws.close(); // triggers onclose → schedules reconnect
+      };
     };
-    const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
+
+    connect();
+
+    return () => {
+      active = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
   }, [view, currentMatch?.id, token]);
 
   // Remove ?token= from the URL so the token isn't visible in browser history.

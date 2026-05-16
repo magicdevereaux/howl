@@ -1,16 +1,18 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from jose import JWTError
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import User
 from app.schemas.chat import MessageIn, MessageOut, MessagePageOut, UnreadCountOut
+from app.security import decode_access_token
 from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,76 @@ router = APIRouter(prefix="/api/matches", tags=["chat"])
 _RATE_LIMIT_MAX = 10       # messages per window
 _RATE_LIMIT_WINDOW_S = 60  # seconds
 _PAGE_SIZE = 50            # messages returned per request
+
+
+# ---------------------------------------------------------------------------
+# WebSocket connection manager
+#
+# Tracks open WebSocket connections per match.  Stores user_id alongside
+# each connection so that is_mine can be computed correctly per recipient
+# without an extra DB call.
+#
+# This is an in-process singleton.  On a multi-instance deployment (multiple
+# Railway replicas or Gunicorn workers) connections are not shared between
+# processes — add Redis pub/sub if that becomes a requirement.
+# ---------------------------------------------------------------------------
+
+class ConnectionManager:
+    def __init__(self) -> None:
+        # match_id → {WebSocket: user_id}
+        self._conns: dict[int, dict[WebSocket, int]] = {}
+
+    async def connect(self, match_id: int, user_id: int, ws: WebSocket) -> None:
+        await ws.accept()
+        self._conns.setdefault(match_id, {})[ws] = user_id
+        logger.debug("ws: user %d connected to match %d", user_id, match_id)
+
+    def disconnect(self, match_id: int, ws: WebSocket) -> None:
+        conns = self._conns.get(match_id, {})
+        uid = conns.pop(ws, None)
+        if not conns:
+            self._conns.pop(match_id, None)
+        if uid is not None:
+            logger.debug("ws: user %d disconnected from match %d", uid, match_id)
+
+    async def broadcast(self, match_id: int, event: dict) -> None:
+        """Push event to all connections for a match.
+
+        event must have a "message" dict containing at least "sender_id".
+        is_mine is computed per recipient so each client receives the
+        correct value without the server needing to send separate payloads.
+        """
+        conns = self._conns.get(match_id)
+        if not conns:
+            return
+        msg = event.get("message", {})
+        sender_id = msg.get("sender_id")
+        dead: list[WebSocket] = []
+        for ws, uid in list(conns.items()):
+            try:
+                await ws.send_json({**event, "message": {**msg, "is_mine": uid == sender_id}})
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            conns.pop(ws, None)
+
+
+manager = ConnectionManager()
+
+
+def _msg_event(event_type: str, msg: Message) -> dict:
+    """Serialise a Message row into a broadcastable event dict (no is_mine)."""
+    return {
+        "type": event_type,
+        "message": {
+            "id": msg.id,
+            "sender_id": msg.sender_id,
+            "content": None if msg.deleted_at else msg.content,
+            "created_at": msg.created_at.isoformat(),
+            "read_at": msg.read_at.isoformat() if msg.read_at else None,
+            "deleted_at": msg.deleted_at.isoformat() if msg.deleted_at else None,
+        },
+    }
 
 
 def _require_match_member(match_id: int, user_id: int, db: Session) -> Match:
@@ -43,6 +115,63 @@ def _to_out(msg: Message, current_user_id: int) -> MessageOut:
         deleted_at=msg.deleted_at,
         is_mine=(msg.sender_id == current_user_id),
     )
+
+
+@router.websocket("/{match_id}/ws")
+async def chat_websocket(
+    match_id: int,
+    ws: WebSocket,
+    token: str = Query(..., description="JWT access token for authentication"),
+) -> None:
+    """
+    Persistent WebSocket connection for real-time chat delivery.
+
+    The client authenticates by passing the JWT as a query parameter:
+        ws://host/api/matches/{id}/ws?token=<JWT>
+
+    After authentication the server keeps the connection open and pushes
+    events of the form:
+        {"type": "new_message",    "message": {...MessageOut fields...}}
+        {"type": "message_deleted","message": {...MessageOut fields...}}
+
+    is_mine is computed per-recipient server-side so each client receives
+    the correct value without any client-side state lookup.
+    """
+    # ── Authenticate ─────────────────────────────────────────────────────────
+    db = SessionLocal()
+    try:
+        user_id = decode_access_token(token)
+        user = db.get(User, user_id)
+        if not user:
+            raise JWTError("user not found")
+    except JWTError:
+        await ws.accept()
+        await ws.close(code=4001)
+        return
+    finally:
+        db.close()
+
+    # ── Authorise ─────────────────────────────────────────────────────────────
+    db = SessionLocal()
+    try:
+        match = db.get(Match, match_id)
+        if not match or user_id not in (match.user1_id, match.user2_id):
+            await ws.accept()
+            await ws.close(code=4003)
+            return
+    finally:
+        db.close()
+
+    # ── Register and keep alive ───────────────────────────────────────────────
+    await manager.connect(match_id, user_id, ws)
+    try:
+        while True:
+            # The client can send pings or we just wait for disconnect
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect(match_id, ws)
 
 
 @router.delete("/{match_id}", status_code=204)
@@ -76,6 +205,7 @@ def unmatch(
 def delete_message(
     match_id: int,
     message_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageOut:
@@ -97,6 +227,7 @@ def delete_message(
     db.commit()
     db.refresh(msg)
     logger.info("chat: user %d soft-deleted message %d", current_user.id, message_id)
+    background_tasks.add_task(manager.broadcast, match_id, _msg_event("message_deleted", msg))
     return _to_out(msg, current_user.id)
 
 
@@ -147,6 +278,7 @@ def get_messages(
 def send_message(
     match_id: int,
     body: MessageIn,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageOut:
@@ -177,7 +309,10 @@ def send_message(
 
     logger.info("chat: user=%d sent message to match=%d", current_user.id, match_id)
 
-    # Notify the other participant (fire-and-forget; task handles all skip logic)
+    # Push to open WebSocket connections (real-time delivery)
+    background_tasks.add_task(manager.broadcast, match_id, _msg_event("new_message", msg))
+
+    # Email notification for offline recipients (Celery task handles all skip logic)
     recipient_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
     notify_new_message.delay(match_id, recipient_id, current_user.id)
 
