@@ -520,7 +520,11 @@ export default function HowlApp() {
       });
       if (res.ok) {
         const msg = await res.json();
-        setMessages(prev => [...prev, msg]);
+        setMessages(prev => {
+          const byId = new Map(prev.map((m) => [m.id, m]));
+          byId.set(msg.id, msg);
+          return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+        });
       } else {
         setMessageInput(content);
         setSendError("Message failed to send — please try again.");
