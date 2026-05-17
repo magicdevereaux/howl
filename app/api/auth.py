@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,6 +15,13 @@ from app.models.user import User
 from app.schemas.user import TokenOut, UserLogin, UserOut, UserRegister
 from app.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.services.email import send_password_reset_email
+from app.services.rate_limit import (
+    _EMAIL_LIMIT,
+    _IP_LIMIT,
+    _WINDOW_SECONDS,
+    check_rate_limit,
+    login_rate_limit_keys,
+)
 
 _TOKEN_EXPIRY_HOURS = 1
 
@@ -64,7 +71,31 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/login", response_model=TokenOut)
-def login(payload: UserLogin, db: Session = Depends(get_db)) -> dict:
+def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)) -> dict:
+    # Resolve the real client IP (respects X-Forwarded-For from Railway / reverse proxies)
+    forwarded = request.headers.get("X-Forwarded-For")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
+
+    ip_key, email_key = login_rate_limit_keys(client_ip, payload.email)
+
+    limited, retry_after = check_rate_limit(ip_key, _IP_LIMIT, _WINDOW_SECONDS)
+    if limited:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts from this IP. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    limited, retry_after = check_rate_limit(email_key, _EMAIL_LIMIT, _WINDOW_SECONDS)
+    if limited:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts for this account. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
