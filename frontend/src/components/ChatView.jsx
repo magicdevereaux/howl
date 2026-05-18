@@ -16,6 +16,7 @@ export default function ChatView({
   sending, sendError, sendMessage, loadMessages,
   hasMoreMessages, loadingMore, loadMoreMessages,
   handleDeleteMessage,
+  typingUser, sendTypingEvent,
   handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
   setView, fetchMatches,
 }) {
@@ -26,6 +27,11 @@ export default function ChatView({
   const inputRef = useRef(null);
   const wasSending = useRef(false);
   const [pendingAction, setPendingAction] = useState(null); // 'unmatch' | 'block-report' | null
+  const typingDebounceRef = useRef(null);
+
+  // Clean up debounce timer when the chat unmounts or the match changes
+  useEffect(() => () => { if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current); }, []);
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [blockReportReason, setBlockReportReason] = useState('');
   const [blockReportNotes, setBlockReportNotes] = useState('');
@@ -274,6 +280,15 @@ export default function ChatView({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Typing indicator */}
+      {typingUser && (
+        <div style={{ padding: '4px 20px 6px', flexShrink: 0 }}>
+          <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontStyle: 'italic' }}>
+            {typingUser} is typing…
+          </span>
+        </div>
+      )}
+
       {/* Send error */}
       {sendError && (
         <div style={{ background: '#fff5f5', borderTop: '1px solid #fed7d7', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
@@ -290,7 +305,11 @@ export default function ChatView({
           type="text"
           value={messageInput}
           ref={inputRef}
-          onChange={(e) => setMessageInput(e.target.value.slice(0, 2000))}
+          onChange={(e) => {
+            setMessageInput(e.target.value.slice(0, 2000));
+            if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current);
+            typingDebounceRef.current = setTimeout(() => sendTypingEvent?.(), 500);
+          }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
           placeholder={`Message ${other.name || 'them'}…`}
           disabled={sending}

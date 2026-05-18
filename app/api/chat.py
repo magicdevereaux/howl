@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -38,21 +39,21 @@ _PAGE_SIZE = 50            # messages returned per request
 
 class ConnectionManager:
     def __init__(self) -> None:
-        # match_id → {WebSocket: user_id}
-        self._conns: dict[int, dict[WebSocket, int]] = {}
+        # match_id → {WebSocket: (user_id, display_name)}
+        self._conns: dict[int, dict[WebSocket, tuple[int, str | None]]] = {}
 
-    async def connect(self, match_id: int, user_id: int, ws: WebSocket) -> None:
+    async def connect(self, match_id: int, user_id: int, display_name: str | None, ws: WebSocket) -> None:
         await ws.accept()
-        self._conns.setdefault(match_id, {})[ws] = user_id
+        self._conns.setdefault(match_id, {})[ws] = (user_id, display_name)
         logger.debug("ws: user %d connected to match %d", user_id, match_id)
 
     def disconnect(self, match_id: int, ws: WebSocket) -> None:
         conns = self._conns.get(match_id, {})
-        uid = conns.pop(ws, None)
+        entry = conns.pop(ws, None)
         if not conns:
             self._conns.pop(match_id, None)
-        if uid is not None:
-            logger.debug("ws: user %d disconnected from match %d", uid, match_id)
+        if entry is not None:
+            logger.debug("ws: user %d disconnected from match %d", entry[0], match_id)
 
     async def broadcast(self, match_id: int, event: dict) -> None:
         """Push event to all connections for a match.
@@ -67,9 +68,30 @@ class ConnectionManager:
         msg = event.get("message", {})
         sender_id = msg.get("sender_id")
         dead: list[WebSocket] = []
-        for ws, uid in list(conns.items()):
+        for ws, (uid, _name) in list(conns.items()):
             try:
                 await ws.send_json({**event, "message": {**msg, "is_mine": uid == sender_id}})
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            conns.pop(ws, None)
+
+    async def broadcast_typing(self, match_id: int, sender_user_id: int) -> None:
+        """Notify everyone else in the match that sender_user_id is typing."""
+        conns = self._conns.get(match_id)
+        if not conns:
+            return
+        sender_name = next(
+            (name for _ws, (uid, name) in conns.items() if uid == sender_user_id),
+            None,
+        )
+        display = sender_name or "Someone"
+        dead: list[WebSocket] = []
+        for ws, (uid, _name) in list(conns.items()):
+            if uid == sender_user_id:
+                continue  # don't echo back to the typer
+            try:
+                await ws.send_json({"type": "typing", "user_name": display})
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -162,14 +184,20 @@ async def chat_websocket(
     finally:
         db.close()
 
-    # ── Register and keep alive ───────────────────────────────────────────────
-    await manager.connect(match_id, user_id, ws)
+    # ── Register and handle incoming events ──────────────────────────────────
+    await manager.connect(match_id, user_id, user.name, ws)
     try:
         while True:
-            # The client can send pings or we just wait for disconnect
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        pass
+            try:
+                raw = await ws.receive_text()
+            except WebSocketDisconnect:
+                break
+            try:
+                data = json.loads(raw)
+                if data.get("type") == "typing":
+                    await manager.broadcast_typing(match_id, user_id)
+            except Exception:
+                pass  # malformed input — keep the connection alive
     finally:
         manager.disconnect(match_id, ws)
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { API_URL, WS_URL } from './utils';
 import ChatView from './components/ChatView';
 import ReportModal from './components/ReportModal';
@@ -61,6 +61,10 @@ export default function HowlApp() {
   const [messageInput, setMessageInput] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [typingUser, setTypingUser] = useState(null); // display name of who's typing
+
+  const chatWsRef = useRef(null);       // holds the live WebSocket for sending
+  const typingTimerRef = useRef(null);  // auto-clears the typing indicator
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [reportModal, setReportModal] = useState(null); // null | { userId, name, messageId? }
   const [reportSubmitting, setReportSubmitting] = useState(false);
@@ -127,22 +131,33 @@ export default function HowlApp() {
       if (!active) return;
       ws = new WebSocket(wsUrl);
 
+      chatWsRef.current = ws;
+
       ws.onmessage = (event) => {
         try {
-          const { type, message } = JSON.parse(event.data);
+          const data = JSON.parse(event.data);
+          const { type, message, user_name } = data;
           if (type === 'new_message') {
             setMessages((prev) => {
               const byId = new Map(prev.map((m) => [m.id, m]));
               byId.set(message.id, message);
               return Array.from(byId.values()).sort((a, b) => a.id - b.id);
             });
+            // They sent a message — clear the typing indicator immediately
+            setTypingUser(null);
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
           } else if (type === 'message_deleted') {
             setMessages((prev) => prev.map((m) => m.id === message.id ? message : m));
+          } else if (type === 'typing') {
+            setTypingUser(user_name || 'Someone');
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+            typingTimerRef.current = setTimeout(() => setTypingUser(null), 2500);
           }
         } catch { /* ignore malformed frames */ }
       };
 
       ws.onclose = () => {
+        chatWsRef.current = null;
         if (active) {
           reconnectTimer = setTimeout(connect, 3000);
         }
@@ -157,7 +172,10 @@ export default function HowlApp() {
 
     return () => {
       active = false;
+      chatWsRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      setTypingUser(null);
       if (ws) ws.close();
     };
   }, [view, currentMatch?.id, token]);
@@ -537,7 +555,16 @@ export default function HowlApp() {
     }
   };
 
+  const sendTypingEvent = () => {
+    const ws = chatWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'typing' }));
+    }
+  };
+
   const openChat = (match) => {
+    setTypingUser(null);
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     setCurrentMatch(match);
     setMessages([]);
     setMessagesError('');
@@ -942,6 +969,8 @@ export default function HowlApp() {
           loadingMore={loadingMore}
           loadMoreMessages={loadMoreMessages}
           handleDeleteMessage={handleDeleteMessage}
+          typingUser={typingUser}
+          sendTypingEvent={sendTypingEvent}
           handleUnmatch={handleUnmatch}
           handleBlock={handleBlock}
           handleBlockAndReport={handleBlockAndReport}
