@@ -48,6 +48,21 @@ export default function ProfileView({
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
         <Nav {...navProps} />
 
+        {/* Unverified email banner */}
+        {user && !user.is_email_verified && (
+          <div style={{ background: 'rgba(246,173,85,0.2)', border: '1px solid rgba(246,173,85,0.5)', borderRadius: '12px', padding: '14px 20px', marginBottom: '20px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+            <span style={{ fontSize: '20px', flexShrink: 0 }}>📧</span>
+            <div>
+              <p style={{ color: 'white', fontWeight: '600', fontSize: '14px', margin: 0 }}>
+                Please verify your email address
+              </p>
+              <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '13px', margin: '4px 0 0', lineHeight: '1.4' }}>
+                A verification link was sent when you registered — check your server logs in dev mode. Verifying unlocks your full account.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Avatar Status Card */}
         <div style={{ background: 'white', borderRadius: '16px', padding: '32px', marginBottom: '24px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', textAlign: 'center' }}>
           {avatarStatus?.avatar_status === 'ready' && avatarStatus?.avatar_url ? (

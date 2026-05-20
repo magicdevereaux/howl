@@ -14,6 +14,7 @@ export default function HowlApp() {
   // Read password-reset token from URL before any state is initialised.
   // e.g. https://howl.app?token=abc123  →  open reset-password view directly.
   const _urlResetToken = new URLSearchParams(window.location.search).get('token') || '';
+  const _urlVerifyToken = new URLSearchParams(window.location.search).get('verify') || '';
 
   const [view, setView] = useState(
     // 'login' | 'register' | 'profile' | 'discover' | 'matches' | 'chat'
@@ -180,11 +181,28 @@ export default function HowlApp() {
     };
   }, [view, currentMatch?.id, token]);
 
-  // Remove ?token= from the URL so the token isn't visible in browser history.
+  // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser history.
   useEffect(() => {
-    if (_urlResetToken) {
+    if (_urlResetToken || _urlVerifyToken) {
       window.history.replaceState({}, '', window.location.pathname);
     }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Process an email verification link clicked from the user's inbox.
+  useEffect(() => {
+    if (!_urlVerifyToken) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/auth/verify-email`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: _urlVerifyToken }),
+        });
+        if (res.ok) {
+          setUser(prev => prev ? { ...prev, is_email_verified: true } : prev);
+        }
+      } catch { /* ignore — the banner stays until the next profile fetch */ }
+    })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchProfile = async () => {

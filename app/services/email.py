@@ -35,6 +35,23 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
     # ── Production: see commented-out providers below ──────────────────────────
 
 
+def send_verification_email(to_email: str, token: str) -> None:
+    """Send an email verification link to a newly registered user.
+
+    Currently logs to stdout (dev / portfolio mode).
+    Swap the body for a transactional-email call in production.
+    """
+    verify_link = f"{settings.frontend_url}?verify={token}"
+
+    separator = "=" * 60
+    print(f"\n{separator}")
+    print(f"  EMAIL VERIFICATION (dev mode — no email sent)")
+    print(f"  To:   {to_email}")
+    print(f"  Link: {verify_link}")
+    print(f"{separator}\n")
+    logger.info("email_verification: link generated for %s", to_email)
+
+
 def send_message_notification(
     to_email: str,
     sender_name: str | None,

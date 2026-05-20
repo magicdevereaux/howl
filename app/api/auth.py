@@ -14,7 +14,7 @@ from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.user import TokenOut, UserLogin, UserOut, UserRegister
 from app.security import create_access_token, create_refresh_token, hash_password, verify_password
-from app.services.email import send_password_reset_email
+from app.services.email import send_password_reset_email, send_verification_email
 from app.services.rate_limit import (
     _EMAIL_LIMIT,
     _IP_LIMIT,
@@ -40,6 +40,10 @@ def _issue_tokens(user: User, db: Session) -> dict:
     return {"access_token": access, "refresh_token": raw_refresh, "user": user}
 
 
+class VerifyEmailIn(BaseModel):
+    token: str
+
+
 class ForgotPasswordIn(BaseModel):
     email: EmailStr
 
@@ -51,11 +55,19 @@ class ResetPasswordIn(BaseModel):
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+_VERIFICATION_TOKEN_EXPIRY_HOURS = 24
+
+
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
+    verification_token = secrets.token_urlsafe(32)
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
+        email_verification_token=verification_token,
+        email_verification_token_expires_at=(
+            datetime.now(timezone.utc) + timedelta(hours=_VERIFICATION_TOKEN_EXPIRY_HOURS)
+        ),
     )
     db.add(user)
     try:
@@ -67,7 +79,37 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
             detail="Email already registered",
         )
     db.refresh(user)
+    send_verification_email(user.email, verification_token)
     return _issue_tokens(user, db)
+
+
+@router.post("/verify-email", status_code=200)
+def verify_email(payload: VerifyEmailIn, db: Session = Depends(get_db)) -> dict:
+    """Consume an email verification token and mark the account as verified."""
+    _INVALID = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired verification token.",
+    )
+    user = db.query(User).filter(
+        User.email_verification_token == payload.token
+    ).first()
+    if not user:
+        raise _INVALID
+
+    expires_at = user.email_verification_token_expires_at
+    if expires_at is None:
+        raise _INVALID
+    # Normalise naive datetime (SQLite) vs aware datetime (PostgreSQL)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        raise _INVALID
+
+    user.is_email_verified = True
+    user.email_verification_token = None
+    user.email_verification_token_expires_at = None
+    db.commit()
+    return {"message": "Email verified successfully."}
 
 
 @router.post("/login", response_model=TokenOut)

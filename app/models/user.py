@@ -59,6 +59,16 @@ class User(Base):
         default=True,
         server_default="true",
     )
+    is_email_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    email_verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email_verification_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_premium: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

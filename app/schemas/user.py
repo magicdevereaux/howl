@@ -39,6 +39,7 @@ class UserOut(BaseModel):
     animal: str | None
     avatar_url: str | None
     avatar_status: AvatarStatus
+    is_email_verified: bool = False
     email_notifications: bool = True
     is_premium: bool = False
     daily_swipes: int = 0
