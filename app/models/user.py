@@ -59,6 +59,22 @@ class User(Base):
         default=True,
         server_default="true",
     )
+    is_premium: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    daily_swipes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    swipes_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} animal={self.animal!r}>"

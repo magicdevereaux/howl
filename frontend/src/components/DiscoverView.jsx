@@ -18,6 +18,7 @@ export default function DiscoverView({
   swipeLoading, swipeError, canUndo, undoMessage,
   matchPopup, setMatchPopup, avatarStatus,
   preferenceFilters, handleSaveFilters,
+  swipeLimitReached, swipesRemaining, swipesResetAt,
   handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
   setView, fetchMatches, navProps,
 }) {
@@ -127,7 +128,23 @@ export default function DiscoverView({
           )}
         </div>
 
-        {discoverLoading ? (
+        {swipeLimitReached ? (
+          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.9)', padding: '48px 24px', background: 'rgba(255,255,255,0.12)', borderRadius: '20px' }}>
+            <div style={{ fontSize: '56px', marginBottom: '16px' }}>🐾</div>
+            <p style={{ fontSize: '20px', fontWeight: '700', marginBottom: '8px' }}>You're out of swipes!</p>
+            <p style={{ fontSize: '14px', opacity: 0.8, marginBottom: '4px' }}>
+              You've used all 20 free swipes for today.
+            </p>
+            {swipesResetAt && (
+              <p style={{ fontSize: '13px', opacity: 0.65, marginBottom: '20px' }}>
+                Resets in ~{Math.ceil((new Date(swipesResetAt).getTime() + 86400000 - Date.now()) / 3600000)}h
+              </p>
+            )}
+            <p style={{ fontSize: '13px', opacity: 0.7, fontStyle: 'italic' }}>
+              Upgrade to premium for unlimited swiping.
+            </p>
+          </div>
+        ) : discoverLoading ? (
           <div style={{ textAlign: 'center', color: 'white', padding: '60px', fontSize: '18px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }} className="spinner">🐾</div>
             Finding spirit animals…
@@ -148,9 +165,16 @@ export default function DiscoverView({
           </div>
         ) : (
           <>
-            <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>
-              {discoverUsers.length} {discoverUsers.length === 1 ? 'person' : 'people'} left
-            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', margin: 0 }}>
+                {discoverUsers.length} {discoverUsers.length === 1 ? 'person' : 'people'} left
+              </p>
+              {swipesRemaining !== null && swipesRemaining <= 5 && (
+                <p style={{ color: swipesRemaining <= 2 ? '#fc8181' : 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: '600', margin: 0 }}>
+                  {swipesRemaining} swipe{swipesRemaining !== 1 ? 's' : ''} left today
+                </p>
+              )}
+            </div>
 
             {/* Card */}
             <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 16px 48px rgba(0,0,0,0.25)' }}>

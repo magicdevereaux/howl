@@ -781,6 +781,8 @@ export default function HowlApp() {
     }
   };
 
+  const DAILY_SWIPE_LIMIT = 20;
+
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
     setUndoMessage('');
@@ -792,6 +794,13 @@ export default function HowlApp() {
         body: JSON.stringify({ target_user_id: targetUserId, direction }),
       });
       const data = await res.json();
+
+      if (res.status === 429 && data.detail?.code === 'daily_limit_reached') {
+        // Update local user state to reflect the exhausted limit without a full refetch
+        setUser(prev => prev ? { ...prev, daily_swipes: DAILY_SWIPE_LIMIT } : prev);
+        return;
+      }
+
       setDiscoverUsers(prev => prev.slice(1));
       setCanUndo(true);
       if (res.ok && data.matched) {
@@ -799,6 +808,9 @@ export default function HowlApp() {
       } else if (!res.ok) {
         setSwipeError('Swipe failed — tap to try again.');
         setTimeout(() => setSwipeError(''), 4000);
+      }
+      if (res.ok) {
+        setUser(prev => prev ? { ...prev, daily_swipes: (prev.daily_swipes || 0) + 1 } : prev);
       }
     } catch {
       setDiscoverUsers(prev => prev.slice(1));
@@ -854,6 +866,9 @@ export default function HowlApp() {
 
   const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
   const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread };
+
+  const swipeLimitReached = !user?.is_premium && (user?.daily_swipes || 0) >= DAILY_SWIPE_LIMIT;
+  const swipesRemaining = user?.is_premium ? null : Math.max(0, DAILY_SWIPE_LIMIT - (user?.daily_swipes || 0));
 
   if (view === 'privacy' || view === 'terms') {
     return <LegalPage view={view} setView={setView} />;
@@ -916,6 +931,9 @@ export default function HowlApp() {
           avatarStatus={avatarStatus}
           preferenceFilters={{ lookingFor, gender, sexuality, agePrefMin, agePrefMax }}
           handleSaveFilters={handleSaveFilters}
+          swipeLimitReached={swipeLimitReached}
+          swipesRemaining={swipesRemaining}
+          swipesResetAt={user?.swipes_reset_at}
           handleSwipe={handleSwipe}
           handleUndo={handleUndo}
           handleBlock={handleBlock}

@@ -40,6 +40,9 @@ class UserOut(BaseModel):
     avatar_url: str | None
     avatar_status: AvatarStatus
     email_notifications: bool = True
+    is_premium: bool = False
+    daily_swipes: int = 0
+    swipes_reset_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

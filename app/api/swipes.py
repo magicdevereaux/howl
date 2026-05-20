@@ -1,5 +1,6 @@
 import logging
 import random
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -14,11 +15,48 @@ from app.tasks.auto_match import auto_match_demo_user
 
 logger = logging.getLogger(__name__)
 
-# Seconds to wait before the demo user "responds". Change to random.randint(600, 3600)
-# (10–60 min) for production; 30 s is convenient for local testing.
-_DEMO_REPLY_DELAY_S = 30
+_DEMO_REPLY_DELAY_S = 30        # see comment on auto_match task
+_DAILY_SWIPE_LIMIT = 20         # free-tier swipes per 24-hour window
+_SWIPE_WINDOW_SECONDS = 86400   # 24 h
 
 router = APIRouter(prefix="/api/swipes", tags=["swipes"])
+
+
+def _enforce_swipe_limit(user: User, db: Session) -> None:
+    """Check and reset the daily swipe counter; raise 429 when the limit is exceeded.
+
+    Only called for non-premium users.  Resets the counter if the 24-hour
+    window has expired so the first swipe of a new day always succeeds.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Normalise the stored timestamp — SQLite returns naive datetimes even for
+    # DateTime(timezone=True) columns, so we add UTC info when it is missing.
+    reset_at = user.swipes_reset_at
+    if reset_at is not None and reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+
+    window_expired = reset_at is None or (now - reset_at).total_seconds() >= _SWIPE_WINDOW_SECONDS
+    if window_expired:
+        user.daily_swipes = 0
+        user.swipes_reset_at = now
+        db.flush()
+        return  # counter just reset — definitely under the limit
+
+    if user.daily_swipes >= _DAILY_SWIPE_LIMIT:
+        resets_at = reset_at + timedelta(seconds=_SWIPE_WINDOW_SECONDS)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "daily_limit_reached",
+                "message": (
+                    f"You've used all {_DAILY_SWIPE_LIMIT} free swipes for today. "
+                    "Upgrade to premium for unlimited swiping."
+                ),
+                "limit": _DAILY_SWIPE_LIMIT,
+                "resets_at": resets_at.isoformat(),
+            },
+        )
 
 
 @router.post("", response_model=SwipeOut, status_code=200)
@@ -28,6 +66,9 @@ def record_swipe(
     db: Session = Depends(get_db),
 ) -> SwipeOut:
     """Record a like or pass, and create a Match if mutual like."""
+    if not current_user.is_premium:
+        _enforce_swipe_limit(current_user, db)
+
     if body.target_user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot swipe on yourself.")
 
@@ -50,6 +91,10 @@ def record_swipe(
     )
     db.add(swipe)
     db.flush()
+
+    # Count successful swipes against the daily limit (only after a valid swipe is created)
+    if not current_user.is_premium:
+        current_user.daily_swipes += 1
 
     matched = False
     match_out = None
