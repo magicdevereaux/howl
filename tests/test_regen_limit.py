@@ -1,0 +1,175 @@
+"""Tests for the monthly avatar regeneration limit."""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.models.user import AvatarStatus, User
+from app.security import hash_password, create_access_token
+from app.api.avatar import _MONTHLY_REGEN_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _mock_generate(monkeypatch):
+    """Prevent real Celery calls in all tests in this module."""
+    monkeypatch.setattr("app.api.avatar.generate_avatar.delay", lambda *_: None)
+    monkeypatch.setattr("app.api.profile.generate_avatar.delay", lambda *_: None)
+
+
+def _make_user(db, *, email: str, is_premium: bool = False, bio: str = "A wolf who howls at the moon under the night sky.") -> User:
+    user = User(
+        email=email,
+        password_hash=hash_password("testpass"),
+        avatar_status=AvatarStatus.ready,
+        bio=bio,
+        is_premium=is_premium,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _h(user: User) -> dict:
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+def _regen(client, user):
+    return client.post("/api/avatar/regenerate", headers=_h(user))
+
+
+# ---------------------------------------------------------------------------
+# Basic limit enforcement
+# ---------------------------------------------------------------------------
+
+def test_free_user_can_regenerate_once(client, db):
+    user = _make_user(db, email="once@howl.app")
+    res = _regen(client, user)
+    assert res.status_code == 200
+
+
+def test_free_user_blocked_on_second_regeneration(client, db):
+    user = _make_user(db, email="twice@howl.app")
+    _regen(client, user)   # first: allowed
+    res = _regen(client, user)  # second: blocked
+    assert res.status_code == 429
+
+
+def test_premium_user_can_regenerate_multiple_times(client, db):
+    user = _make_user(db, email="prem@howl.app", is_premium=True)
+    for _ in range(_MONTHLY_REGEN_LIMIT + 3):
+        res = _regen(client, user)
+        assert res.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Response shape
+# ---------------------------------------------------------------------------
+
+def test_429_response_has_structured_detail(client, db):
+    user = _make_user(db, email="shape@howl.app")
+    _regen(client, user)
+    res = _regen(client, user)
+    assert res.status_code == 429
+    detail = res.json()["detail"]
+    assert detail["code"] == "regeneration_limit_reached"
+    assert str(_MONTHLY_REGEN_LIMIT) in detail["message"]
+    assert "resets_at" in detail
+    assert detail["limit"] == _MONTHLY_REGEN_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# Counter persistence
+# ---------------------------------------------------------------------------
+
+def test_counter_increments_after_manual_regeneration(client, db):
+    user = _make_user(db, email="count@howl.app")
+    assert user.avatar_regenerations_this_month == 0
+    _regen(client, user)
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == 1
+
+
+def test_premium_counter_stays_at_zero(client, db):
+    user = _make_user(db, email="nocount@howl.app", is_premium=True)
+    _regen(client, user)
+    _regen(client, user)
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == 0
+
+
+def test_bio_update_does_not_count_against_limit(client, db):
+    """System-triggered regenerations from profile bio changes must not decrement the quota."""
+    user = _make_user(db, email="bio@howl.app")
+    assert user.avatar_regenerations_this_month == 0
+
+    # Trigger a system regeneration via bio update
+    client.patch(
+        "/api/profile/me",
+        headers=_h(user),
+        json={"bio": "A completely new bio that is long enough to trigger regeneration."},
+    )
+
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == 0  # must be unchanged
+
+    # The manual regeneration slot should still be available
+    res = _regen(client, user)
+    assert res.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 30-day window reset logic
+# ---------------------------------------------------------------------------
+
+def test_counter_resets_after_30_day_window(client, db):
+    """A user who used their regeneration 31 days ago should get a fresh slot."""
+    user = _make_user(db, email="reset@howl.app")
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=31)
+    db.commit()
+
+    res = _regen(client, user)
+    assert res.status_code == 200
+
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == 1  # reset to 0, then incremented once
+
+
+def test_counter_does_not_reset_within_window(client, db):
+    """Within the 30-day window the accumulated count is preserved."""
+    user = _make_user(db, email="notreset@howl.app")
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT - 1
+    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=10)
+    db.commit()
+
+    res = _regen(client, user)
+    assert res.status_code == 200
+
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == _MONTHLY_REGEN_LIMIT
+
+
+def test_blocked_within_active_window(client, db):
+    user = _make_user(db, email="blocked@howl.app")
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=10)
+    db.commit()
+
+    res = _regen(client, user)
+    assert res.status_code == 429
+
+
+def test_first_regeneration_sets_reset_timestamp(client, db):
+    """regenerations_reset_at is null for new users; the first regeneration sets it."""
+    user = _make_user(db, email="first@howl.app")
+    assert user.regenerations_reset_at is None
+
+    _regen(client, user)
+
+    db.refresh(user)
+    assert user.regenerations_reset_at is not None

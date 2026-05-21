@@ -75,6 +75,16 @@ class User(Base):
         default=False,
         server_default="false",
     )
+    avatar_regenerations_this_month: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    regenerations_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     daily_swipes: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

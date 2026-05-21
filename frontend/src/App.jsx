@@ -667,8 +667,12 @@ export default function HowlApp() {
         setGenerationStartTime(Date.now());
         setGenerationTime(null);
         setAvatarStatus(data);
+      } else if (res.status === 429 && data.detail?.code === 'regeneration_limit_reached') {
+        const resets = new Date(data.detail.resets_at);
+        const resetStr = resets.toLocaleDateString([], { month: 'long', day: 'numeric' });
+        setError(`You've used your free regeneration for this month. Resets on ${resetStr}.`);
       } else {
-        setError(data.detail || 'Regeneration failed');
+        setError(typeof data.detail === 'string' ? data.detail : 'Regeneration failed');
       }
     } catch (err) {
       setError('Network error');
