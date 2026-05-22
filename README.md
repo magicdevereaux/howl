@@ -8,10 +8,13 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 ![Login](screenshots/login.png)
 
 ### Profile & Spirit Animal
-![Profile](screenshots/profile-wolf.png)
+![Profile](screenshots/profile-deer.png)
 
 ### Browse Other Users
 ![Browse](screenshots/browse.png)
+
+### Matches
+![Matches](screenshots/matches.png)
 
 ## Features
 
