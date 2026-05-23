@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { animalEmoji, avatarUrl } from '../utils';
+import { API_URL, animalEmoji, avatarUrl } from '../utils';
 
 const REPORT_REASONS = [
   { value: 'spam_scam',             label: 'Spam or scam' },
@@ -33,6 +33,20 @@ export default function ChatView({
   useEffect(() => () => { if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current); }, []);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileData, setProfileData] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  const openProfileModal = async () => {
+    setShowProfileModal(true);
+    if (profileData) return; // already fetched
+    setProfileLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/profile/${other.id}`);
+      if (res.ok) setProfileData(await res.json());
+    } catch { /* show what we already have from other */ }
+    finally { setProfileLoading(false); }
+  };
   const [blockReportReason, setBlockReportReason] = useState('');
   const [blockReportNotes, setBlockReportNotes] = useState('');
   const [clickedMsgId, setClickedMsgId] = useState(null);
@@ -138,21 +152,30 @@ export default function ChatView({
             </div>
           )}
         </div>
-        {other.avatar_url ? (
-          <img
-            src={avatarUrl(other.avatar_url)}
-            alt={other.animal || 'avatar'}
-            onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
-            style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.4)', flexShrink: 0 }}
-          />
-        ) : null}
-        <div style={{ fontSize: '36px', lineHeight: 1, display: other.avatar_url ? 'none' : 'block' }}>{animalEmoji(other.animal)}</div>
-        <div>
-          <p style={{ color: 'white', fontWeight: '700', fontSize: '17px', margin: 0 }}>{other.name || 'Anonymous'}</p>
-          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', margin: 0 }}>
-            {other.animal ? other.animal.charAt(0).toUpperCase() + other.animal.slice(1) : ''}
-          </p>
-        </div>
+        {/* Clickable avatar + name → opens profile modal */}
+        <button
+          onClick={openProfileModal}
+          style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px', borderRadius: '10px', transition: 'background 0.15s' }}
+          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+          title="View profile"
+        >
+          {other.avatar_url ? (
+            <img
+              src={avatarUrl(other.avatar_url)}
+              alt={other.animal || 'avatar'}
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+              style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.4)', flexShrink: 0 }}
+            />
+          ) : null}
+          <div style={{ fontSize: '36px', lineHeight: 1, display: other.avatar_url ? 'none' : 'block' }}>{animalEmoji(other.animal)}</div>
+          <div style={{ textAlign: 'left' }}>
+            <p style={{ color: 'white', fontWeight: '700', fontSize: '17px', margin: 0 }}>{other.name || 'Anonymous'}</p>
+            <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', margin: 0 }}>
+              {other.animal ? other.animal.charAt(0).toUpperCase() + other.animal.slice(1) : ''}
+            </p>
+          </div>
+        </button>
       </div>
 
       {/* Message list */}
@@ -418,6 +441,103 @@ export default function ChatView({
               >
                 Block &amp; Report
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Profile modal */}
+      {showProfileModal && (
+        <div
+          onClick={() => setShowProfileModal(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050, padding: '20px' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'white', borderRadius: '20px', maxWidth: '400px', width: '100%', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.4)', maxHeight: '90vh', overflowY: 'auto' }}
+          >
+            {/* Header with gradient + avatar */}
+            <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '32px 24px 24px', textAlign: 'center', position: 'relative' }}>
+              <button
+                onClick={() => setShowProfileModal(false)}
+                style={{ position: 'absolute', top: '14px', right: '14px', background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ✕
+              </button>
+
+              {profileLoading && !profileData ? (
+                <div style={{ fontSize: '64px', marginBottom: '12px' }} className="spinner">🐾</div>
+              ) : (
+                <>
+                  {(profileData?.avatar_url || other.avatar_url) ? (
+                    <img
+                      src={avatarUrl(profileData?.avatar_url || other.avatar_url)}
+                      alt="avatar"
+                      onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+                      style={{ width: '96px', height: '96px', borderRadius: '50%', objectFit: 'cover', border: '4px solid rgba(255,255,255,0.4)', marginBottom: '14px' }}
+                    />
+                  ) : null}
+                  <div style={{ fontSize: '80px', lineHeight: 1, marginBottom: '14px', display: (profileData?.avatar_url || other.avatar_url) ? 'none' : 'block' }}>
+                    {animalEmoji(profileData?.animal || other.animal)}
+                  </div>
+                  <h2 style={{ color: 'white', fontSize: '22px', fontWeight: '800', margin: '0 0 4px' }}>
+                    {profileData?.name || other.name || 'Anonymous'}
+                    {profileData?.age ? <span style={{ fontWeight: '400', fontSize: '18px', opacity: 0.85 }}>, {profileData.age}</span> : null}
+                  </h2>
+                  <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', margin: 0 }}>
+                    {(() => { const a = profileData?.animal || other.animal; return a ? a.charAt(0).toUpperCase() + a.slice(1) : ''; })()}
+                  </p>
+                  {profileData?.location && (
+                    <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '13px', marginTop: '6px' }}>📍 {profileData.location}</p>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: '20px 24px 24px' }}>
+              {profileData?.personality_traits?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
+                  {profileData.personality_traits.map((t, i) => (
+                    <span key={i} style={{ background: '#eef2ff', color: '#667eea', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}>
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {(profileData?.bio || profileData?.avatar_description) && (
+                <p style={{ color: '#4a5568', fontSize: '14px', lineHeight: '1.6', marginBottom: '16px' }}>
+                  {profileData.bio || profileData.avatar_description}
+                </p>
+              )}
+
+              {profileLoading && !profileData && (
+                <p style={{ color: '#a0aec0', fontSize: '13px', textAlign: 'center', marginBottom: '16px' }}>Loading profile…</p>
+              )}
+
+              {/* Divider */}
+              <div style={{ height: '1px', background: '#e2e8f0', margin: '4px 0 16px' }} />
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => { setShowProfileModal(false); handleOpenReport(other.id, other.name); }}
+                  style={{ flex: 1, padding: '10px', background: 'white', color: '#718096', border: '2px solid #e2e8f0', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+                  onMouseEnter={(e) => e.currentTarget.style.borderColor = '#cbd5e0'}
+                  onMouseLeave={(e) => e.currentTarget.style.borderColor = '#e2e8f0'}
+                >
+                  🚩 Report
+                </button>
+                <button
+                  onClick={() => { setShowProfileModal(false); setBlockReportReason(''); setBlockReportNotes(''); setPendingAction('block-report'); }}
+                  style={{ flex: 1, padding: '10px', background: 'white', color: '#c53030', border: '2px solid #fed7d7', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+                  onMouseEnter={(e) => e.currentTarget.style.borderColor = '#fc8181'}
+                  onMouseLeave={(e) => e.currentTarget.style.borderColor = '#fed7d7'}
+                >
+                  🚫 Block
+                </button>
+              </div>
             </div>
           </div>
         </div>
