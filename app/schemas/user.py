@@ -37,6 +37,8 @@ class UserOut(BaseModel):
     location: str | None = None
     bio: str | None
     animal: str | None
+    personality_traits: list[str] | None = None
+    avatar_description: str | None = None
     avatar_url: str | None
     avatar_status: AvatarStatus
     is_email_verified: bool = False

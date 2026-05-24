@@ -496,20 +496,36 @@ export default function ChatView({
 
             {/* Body */}
             <div style={{ padding: '20px 24px 24px' }}>
+              {profileData?.bio && (
+                <p style={{ color: '#4a5568', fontSize: '14px', lineHeight: '1.6', marginBottom: '16px' }}>
+                  {profileData.bio}
+                </p>
+              )}
+
               {profileData?.personality_traits?.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
-                  {profileData.personality_traits.map((t, i) => (
-                    <span key={i} style={{ background: '#eef2ff', color: '#667eea', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}>
-                      {t}
-                    </span>
-                  ))}
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ color: '#a0aec0', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 8px' }}>
+                    Personality
+                  </p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {profileData.personality_traits.map((t, i) => (
+                      <span key={i} style={{ background: '#eef2ff', color: '#667eea', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}>
+                        {t}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {(profileData?.bio || profileData?.avatar_description) && (
-                <p style={{ color: '#4a5568', fontSize: '14px', lineHeight: '1.6', marginBottom: '16px' }}>
-                  {profileData.bio || profileData.avatar_description}
-                </p>
+              {profileData?.avatar_description && (
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ color: '#a0aec0', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 8px' }}>
+                    Spirit Animal
+                  </p>
+                  <p style={{ color: '#718096', fontSize: '13px', lineHeight: '1.65', fontStyle: 'italic', margin: 0 }}>
+                    {profileData.avatar_description}
+                  </p>
+                </div>
               )}
 
               {profileLoading && !profileData && (
