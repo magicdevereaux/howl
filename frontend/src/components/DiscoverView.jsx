@@ -165,16 +165,13 @@ export default function DiscoverView({
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', margin: 0 }}>
-                {discoverUsers.length} {discoverUsers.length === 1 ? 'person' : 'people'} left
-              </p>
-              {swipesRemaining !== null && swipesRemaining <= 5 && (
+            {swipesRemaining !== null && swipesRemaining <= 5 && (
+              <div style={{ textAlign: 'right', marginBottom: '16px' }}>
                 <p style={{ color: swipesRemaining <= 2 ? '#fc8181' : 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: '600', margin: 0 }}>
                   {swipesRemaining} swipe{swipesRemaining !== 1 ? 's' : ''} left today
                 </p>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Card */}
             <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 16px 48px rgba(0,0,0,0.25)' }}>
