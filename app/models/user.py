@@ -69,6 +69,12 @@ class User(Base):
     email_verification_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    profile_needs_regen: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     is_premium: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

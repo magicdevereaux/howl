@@ -102,12 +102,16 @@ def test_premium_counter_stays_at_zero(client, db):
     assert user.avatar_regenerations_this_month == 0
 
 
-def test_bio_update_does_not_count_against_limit(client, db):
-    """System-triggered regenerations from profile bio changes must not decrement the quota."""
+def test_bio_update_counts_against_shared_limit(client, db):
+    """Bio changes via PATCH and manual regens share the same monthly quota.
+
+    Previously bio changes bypassed the limit; now they consume a slot so
+    users who save profile changes can't circumvent the regeneration cap.
+    """
     user = _make_user(db, email="bio@howl.app")
     assert user.avatar_regenerations_this_month == 0
 
-    # Trigger a system regeneration via bio update
+    # Bio update consumes the one free slot
     client.patch(
         "/api/profile/me",
         headers=_h(user),
@@ -115,11 +119,11 @@ def test_bio_update_does_not_count_against_limit(client, db):
     )
 
     db.refresh(user)
-    assert user.avatar_regenerations_this_month == 0  # must be unchanged
+    assert user.avatar_regenerations_this_month == 1  # slot consumed
 
-    # The manual regeneration slot should still be available
+    # The manual regen is now blocked — quota exhausted
     res = _regen(client, user)
-    assert res.status_code == 200
+    assert res.status_code == 429
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,7 @@ def regenerate_avatar(
     current_user.avatar_url = None
     current_user.avatar_status = AvatarStatus.pending
     current_user.avatar_status_updated_at = datetime.now(timezone.utc)
+    current_user.profile_needs_regen = False  # avatar now reflects current profile
 
     if not current_user.is_premium:
         current_user.avatar_regenerations_this_month += 1

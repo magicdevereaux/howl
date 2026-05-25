@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +15,37 @@ from app.tasks.avatar import generate_avatar
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+
+_MONTHLY_REGEN_LIMIT = 1
+_REGEN_WINDOW_SECONDS = 30 * 24 * 3600  # 30-day window (mirrors avatar.py)
+
+
+def _try_consume_regen_slot(user: User, db: Session) -> bool:
+    """Try to consume one monthly regeneration slot.
+
+    Returns True if a slot was available (and the counter is incremented).
+    Returns False if the limit is exhausted for the current window.
+    Premium users always get True without touching any counter.
+    """
+    if user.is_premium:
+        return True
+
+    now = datetime.now(timezone.utc)
+    reset_at = user.regenerations_reset_at
+    if reset_at is not None and reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+
+    window_expired = reset_at is None or (now - reset_at).total_seconds() >= _REGEN_WINDOW_SECONDS
+    if window_expired:
+        user.avatar_regenerations_this_month = 0
+        user.regenerations_reset_at = now
+        db.flush()
+
+    if user.avatar_regenerations_this_month >= _MONTHLY_REGEN_LIMIT:
+        return False
+
+    user.avatar_regenerations_this_month += 1
+    return True
 
 
 @router.get("/me", response_model=UserOut)
@@ -48,18 +79,29 @@ def update_my_profile(
     if payload.age_preference_max is not None:
         current_user.age_preference_max = payload.age_preference_max
 
-    if payload.bio is not None:
+    if payload.bio is not None and payload.bio != current_user.bio:
         current_user.bio = payload.bio
-        # Reset avatar so it gets regenerated from the new bio
-        current_user.animal = None
-        current_user.personality_traits = None
-        current_user.avatar_description = None
-        current_user.avatar_url = None
-        current_user.avatar_status = AvatarStatus.pending
-        current_user.avatar_status_updated_at = datetime.now(timezone.utc)
+        can_regen = _try_consume_regen_slot(current_user, db)
+        if can_regen:
+            # Slot available — reset the avatar and queue generation
+            current_user.animal = None
+            current_user.personality_traits = None
+            current_user.avatar_description = None
+            current_user.avatar_url = None
+            current_user.avatar_status = AvatarStatus.pending
+            current_user.avatar_status_updated_at = datetime.now(timezone.utc)
+            current_user.profile_needs_regen = False
+        else:
+            # No slots left — flag that the avatar no longer matches the profile
+            current_user.profile_needs_regen = True
         db.commit()
         db.refresh(current_user)
-        generate_avatar.delay(current_user.id)
+        if can_regen:
+            generate_avatar.delay(current_user.id)
+    elif payload.bio is not None:
+        # Bio sent but unchanged — still save other fields
+        db.commit()
+        db.refresh(current_user)
     else:
         db.commit()
         db.refresh(current_user)

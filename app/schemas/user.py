@@ -41,6 +41,7 @@ class UserOut(BaseModel):
     avatar_description: str | None = None
     avatar_url: str | None
     avatar_status: AvatarStatus
+    profile_needs_regen: bool = False
     is_email_verified: bool = False
     email_notifications: bool = True
     is_premium: bool = False

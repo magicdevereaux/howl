@@ -202,8 +202,9 @@ def test_regenerate_from_ready_state_clears_all_avatar_data(client, db, auth_hea
 
 
 def test_regenerate_is_idempotent(client, db, auth_headers, test_user):
-    """Calling regenerate multiple times never errors."""
+    """Calling regenerate multiple times never errors for premium users."""
     test_user.bio = "A playful otter who loves rivers and solving puzzles."
+    test_user.is_premium = True  # premium bypasses the monthly limit
     db.commit()
 
     for _ in range(3):

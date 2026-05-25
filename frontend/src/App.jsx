@@ -326,6 +326,45 @@ export default function HowlApp() {
     }
   };
 
+  // handleSaveProfile — used by the Profile edit/save flow.
+  // Takes draft values explicitly so ProfileView can own its own editing state.
+  // Returns true on success so ProfileView can exit edit mode.
+  const handleSaveProfile = async ({ name: n, age: a, location: l, bio: b }) => {
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/profile/me`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: n || null, age: a ? parseInt(a, 10) : null, location: l || null, bio: b || null }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUser(data);
+        setName(data.name || '');
+        setAge(data.age ? String(data.age) : '');
+        setLocation(data.location || '');
+        setBio(data.bio || '');
+        // If the backend queued a regen, start the generation spinner
+        if (data.avatar_status === 'pending') {
+          setGenerationStartTime(Date.now());
+          setGenerationTime(null);
+          setAvatarStatus({ avatar_status: 'generating', animal: null });
+          setTimeout(fetchAvatarStatus, 2000);
+        }
+        return true;
+      } else {
+        setError(typeof data.detail === 'string' ? data.detail : 'Update failed');
+        return false;
+      }
+    } catch {
+      setError('Network error');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleUpdateBio = async (e) => {
     e.preventDefault();
     setError('');
@@ -1039,7 +1078,7 @@ export default function HowlApp() {
         error={error}
         loading={loading}
         copied={copied}
-        handleUpdateBio={handleUpdateBio}
+        handleSaveProfile={handleSaveProfile}
         handleRegenerate={handleRegenerate}
         handleCopyAnimal={handleCopyAnimal}
         deleteModalOpen={deleteModalOpen}
