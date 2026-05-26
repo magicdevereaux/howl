@@ -63,7 +63,7 @@ def test_delete_unauthenticated(client):
 
 
 def test_delete_invalid_token(client):
-    res = client.delete("/api/profile/me", headers={"Authorization": "Bearer garbage"})
+    res = client.delete("/api/profile/me", headers={"Cookie": "access_token=garbage.token.here"})
     assert res.status_code == 401
 
 

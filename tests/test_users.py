@@ -36,7 +36,7 @@ def test_browse_unauthenticated(client):
 def test_browse_invalid_token(client):
     res = client.get(
         "/api/users/browse",
-        headers={"Authorization": "Bearer garbage.token.here"},
+        headers={"Cookie": "access_token=garbage.token.here"},
     )
     assert res.status_code == 401
 

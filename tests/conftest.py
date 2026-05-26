@@ -113,5 +113,6 @@ def test_user(db) -> User:
 
 @pytest.fixture()
 def auth_headers(test_user: User) -> dict[str, str]:
+    """Supply auth via Cookie header (httpOnly cookie-based auth)."""
     token = create_access_token(test_user.id)
-    return {"Authorization": f"Bearer {token}"}
+    return {"Cookie": f"access_token={token}"}

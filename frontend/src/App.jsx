@@ -32,7 +32,7 @@ export default function HowlApp() {
   const [agePrefMax, setAgePrefMax] = useState('');
   const [location, setLocation] = useState('');
   const [bio, setBio] = useState('');
-  const [token, setToken] = useState(localStorage.getItem('access_token') || '');
+  // Auth is now handled via httpOnly cookies — no token in JS state.
   const [user, setUser] = useState(null);
   const [avatarStatus, setAvatarStatus] = useState(null);
   const [error, setError] = useState('');
@@ -97,13 +97,11 @@ export default function HowlApp() {
     !!user?.bio &&
     !isStale;
 
+  // On mount, attempt to restore session via cookie — fetchProfile navigates to
+  // 'profile' on success or stays on 'login' silently on 401.
   useEffect(() => {
-    if (token) {
-      fetchProfile();
-      fetchAvatarStatus();
-      fetchMatches();
-    }
-  }, [token]);
+    fetchProfile();
+  }, []);
 
   useEffect(() => {
     const shouldPoll =
@@ -123,7 +121,7 @@ export default function HowlApp() {
   useEffect(() => {
     if (view !== 'chat' || !currentMatch) return;
 
-    const wsUrl = `${WS_URL}/api/matches/${currentMatch.id}/ws?token=${token}`;
+    const wsUrl = `${WS_URL}/api/matches/${currentMatch.id}/ws`;
     let ws = null;
     let reconnectTimer = null;
     let active = true; // false after cleanup so reconnect attempts stop
@@ -179,7 +177,7 @@ export default function HowlApp() {
       setTypingUser(null);
       if (ws) ws.close();
     };
-  }, [view, currentMatch?.id, token]);
+  }, [view, currentMatch?.id]);
 
   // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser history.
   useEffect(() => {
@@ -208,7 +206,7 @@ export default function HowlApp() {
   const fetchProfile = async () => {
     try {
       const res = await fetch(`${API_URL}/api/profile/me`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include'
       });
       if (res.ok) {
         const data = await res.json();
@@ -224,21 +222,16 @@ export default function HowlApp() {
         setLocation(data.location || '');
         setBio(data.bio || '');
         setView('profile');
-      } else {
-        setToken('');
-        localStorage.removeItem('access_token');
+        fetchAvatarStatus();
+        fetchMatches();
       }
-    } catch (err) {
-      setError('Failed to fetch profile');
-    }
+      // 401 means no valid cookie — stay on login view silently
+    } catch { /* network error — stay on login */ }
   };
 
-  const fetchAvatarStatus = async (currentToken) => {
-    const authToken = currentToken !== undefined ? currentToken : token;
+  const fetchAvatarStatus = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/avatar/status`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
+      const res = await fetch(`${API_URL}/api/avatar/status`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setAvatarStatus(prev => {
@@ -254,10 +247,7 @@ export default function HowlApp() {
           return data;
         });
       } else if (res.status === 401) {
-        setToken('');
-        localStorage.removeItem('access_token');
         setView('login');
-        setError('Session expired. Please sign in again.');
       }
     } catch (err) {
       console.error('Failed to fetch avatar status', err);
@@ -276,16 +266,14 @@ export default function HowlApp() {
       });
       const data = await res.json();
       if (res.ok) {
-        const newToken = data.access_token;
-        setToken(newToken);
-        localStorage.setItem('access_token', newToken);
-        localStorage.setItem('refresh_token', data.refresh_token);
+        // Cookie is set by the server; just update local UI state
         setUser(data.user);
         setName(data.user.name || '');
         setLocation(data.user.location || '');
         setBio(data.user.bio || '');
         setView('profile');
-        fetchAvatarStatus(newToken);
+        fetchAvatarStatus();
+        fetchMatches();
       } else {
         setError(data.detail || 'Login failed');
       }
@@ -308,9 +296,6 @@ export default function HowlApp() {
       });
       const data = await res.json();
       if (res.ok) {
-        setToken(data.access_token);
-        localStorage.setItem('access_token', data.access_token);
-        localStorage.setItem('refresh_token', data.refresh_token);
         setUser(data.user);
         setName(data.user.name || '');
         setLocation(data.user.location || '');
@@ -335,7 +320,8 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: n || null, age: a ? parseInt(a, 10) : null, location: l || null, bio: b || null }),
       });
       const data = await res.json();
@@ -372,7 +358,8 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           name: name || null,
           age: age ? parseInt(age, 10) : null,
@@ -407,15 +394,8 @@ export default function HowlApp() {
   };
 
   const handleLogout = () => {
-    const refreshToken = localStorage.getItem('refresh_token');
-    if (refreshToken) {
-      fetch(`${API_URL}/api/auth/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      }).catch(() => {}); // fire-and-forget — local state is always cleared
-    }
-    setToken('');
+    // Server clears both cookies; fire-and-forget
+    fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     setUser(null);
     setAvatarStatus(null);
     setEmail('');
@@ -440,8 +420,6 @@ export default function HowlApp() {
     setSendError('');
     setSwipeError('');
     setView('login');
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
   };
 
   const handleDeleteAccount = async () => {
@@ -450,12 +428,9 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/profile/me`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.status === 204) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        setToken('');
         setUser(null);
         setAvatarStatus(null);
         setEmail('');
@@ -533,7 +508,7 @@ export default function HowlApp() {
     setMessagesError('');
     try {
       const res = await fetch(`${API_URL}/api/matches/${matchId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.ok) {
         const data = await res.json();
@@ -554,7 +529,7 @@ export default function HowlApp() {
     try {
       const res = await fetch(
         `${API_URL}/api/matches/${currentMatch.id}/messages/${messageId}`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+        { method: 'DELETE', credentials: 'include' },
       );
       if (res.ok) {
         const updated = await res.json();
@@ -570,7 +545,7 @@ export default function HowlApp() {
       const oldestId = Math.min(...messages.map((m) => m.id));
       const res = await fetch(
         `${API_URL}/api/matches/${currentMatch.id}/messages?before_id=${oldestId}`,
-        { headers: { Authorization: `Bearer ${token}` } },
+        { credentials: 'include' },
       );
       if (res.ok) {
         const data = await res.json();
@@ -590,7 +565,8 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ content }),
       });
       if (res.ok) {
@@ -634,7 +610,7 @@ export default function HowlApp() {
     setBlocksLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/blocks`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.ok) setBlocks(await res.json());
     } catch { /* ignore */ }
@@ -644,7 +620,7 @@ export default function HowlApp() {
   const handleUnmatch = async (matchId) => {
     await fetch(`${API_URL}/api/matches/${matchId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     });
     setCurrentMatch(null);
     setMessages([]);
@@ -657,7 +633,8 @@ export default function HowlApp() {
     try {
       await fetch(`${API_URL}/api/reports`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           reported_user_id: userId,
           reason,
@@ -670,7 +647,8 @@ export default function HowlApp() {
   const handleBlock = async (userId) => {
     await fetch(`${API_URL}/api/blocks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       body: JSON.stringify({ blocked_id: userId }),
     });
     // Remove from discover stack if present
@@ -688,7 +666,7 @@ export default function HowlApp() {
   const handleUnblock = async (userId) => {
     await fetch(`${API_URL}/api/blocks/${userId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     });
     setBlocks(prev => prev.filter(b => b.id !== userId));
   };
@@ -699,7 +677,7 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/avatar/regenerate`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       const data = await res.json();
       if (res.ok) {
@@ -745,7 +723,8 @@ export default function HowlApp() {
       };
       const res = await fetch(`${API_URL}/api/reports`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(body),
       });
       if (res.ok) {
@@ -770,7 +749,8 @@ export default function HowlApp() {
     try {
       await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           looking_for: lf || null,
           gender: g || null,
@@ -788,7 +768,8 @@ export default function HowlApp() {
     try {
       await fetch(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email_notifications: enabled }),
       });
     } catch { /* silently revert on network error */ }
@@ -799,13 +780,11 @@ export default function HowlApp() {
     setDiscoverError('');
     try {
       const res = await fetch(`${API_URL}/api/users/discover`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.ok) {
         setDiscoverUsers(await res.json());
       } else if (res.status === 401) {
-        setToken('');
-        localStorage.removeItem('access_token');
         setView('login');
         setError('Session expired. Please sign in again.');
       } else {
@@ -823,13 +802,11 @@ export default function HowlApp() {
     setMatchesError('');
     try {
       const res = await fetch(`${API_URL}/api/users/matches`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.ok) {
         setMatches(await res.json());
       } else if (res.status === 401) {
-        setToken('');
-        localStorage.removeItem('access_token');
         setView('login');
         setError('Session expired. Please sign in again.');
       } else {
@@ -851,7 +828,8 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/swipes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ target_user_id: targetUserId, direction }),
       });
       const data = await res.json();
@@ -888,7 +866,7 @@ export default function HowlApp() {
     try {
       const res = await fetch(`${API_URL}/api/swipes/last`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (res.ok) {
         const data = await res.json();

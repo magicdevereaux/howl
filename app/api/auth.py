@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,7 +12,7 @@ from app.dependencies import get_current_user
 from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
-from app.schemas.user import TokenOut, UserLogin, UserOut, UserRegister
+from app.schemas.user import AuthOut, UserLogin, UserOut, UserRegister
 from app.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.services.email import send_password_reset_email, send_verification_email
 from app.services.rate_limit import (
@@ -25,19 +25,33 @@ from app.services.rate_limit import (
 
 _TOKEN_EXPIRY_HOURS = 1
 
+# Cookie settings: secure + samesite=none required for cross-origin (Vercel ↔ Railway).
+# In debug mode, use lax + insecure so localhost HTTP works.
+_COOKIE_SECURE   = not settings.debug
+_COOKIE_SAMESITE: str = "none" if not settings.debug else "lax"
 
-class RefreshIn(BaseModel):
-    refresh_token: str
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    kw = dict(httponly=True, secure=_COOKIE_SECURE, samesite=_COOKIE_SAMESITE, path="/")
+    response.set_cookie("access_token",  access_token,  max_age=settings.access_token_expire_minutes * 60,        **kw)
+    response.set_cookie("refresh_token", refresh_token, max_age=settings.refresh_token_expire_days * 86400, **kw)
 
 
-def _issue_tokens(user: User, db: Session) -> dict:
-    """Create a new access + refresh token pair, persist the refresh token."""
+def _clear_auth_cookies(response: Response) -> None:
+    kw = dict(httponly=True, secure=_COOKIE_SECURE, samesite=_COOKIE_SAMESITE, path="/")
+    response.delete_cookie("access_token",  **kw)
+    response.delete_cookie("refresh_token", **kw)
+
+
+def _issue_tokens(user: User, db: Session, response: Response) -> dict:
+    """Create a new access + refresh token pair, persist the refresh token, set cookies."""
     access = create_access_token(user.id)
     raw_refresh = create_refresh_token()
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     db.add(RefreshToken(user_id=user.id, token=raw_refresh, expires_at=expires_at))
     db.commit()
-    return {"access_token": access, "refresh_token": raw_refresh, "user": user}
+    _set_auth_cookies(response, access, raw_refresh)
+    return {"user": user}
 
 
 class VerifyEmailIn(BaseModel):
@@ -58,8 +72,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _VERIFICATION_TOKEN_EXPIRY_HOURS = 24
 
 
-@router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
-def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
+@router.post("/register", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
+def register(payload: UserRegister, response: Response, db: Session = Depends(get_db)) -> dict:
     verification_token = secrets.token_urlsafe(32)
     user = User(
         email=payload.email,
@@ -80,7 +94,7 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
         )
     db.refresh(user)
     send_verification_email(user.email, verification_token)
-    return _issue_tokens(user, db)
+    return _issue_tokens(user, db, response)
 
 
 @router.post("/verify-email", status_code=200)
@@ -112,8 +126,8 @@ def verify_email(payload: VerifyEmailIn, db: Session = Depends(get_db)) -> dict:
     return {"message": "Email verified successfully."}
 
 
-@router.post("/login", response_model=TokenOut)
-def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)) -> dict:
+@router.post("/login", response_model=AuthOut)
+def login(payload: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     # Resolve the real client IP (respects X-Forwarded-For from Railway / reverse proxies)
     forwarded = request.headers.get("X-Forwarded-For")
     client_ip = forwarded.split(",")[0].strip() if forwarded else (
@@ -145,7 +159,7 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)) -
             detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return _issue_tokens(user, db)
+    return _issue_tokens(user, db, response)
 
 
 @router.get("/me", response_model=UserOut)
@@ -153,18 +167,18 @@ def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-@router.post("/refresh")
-def refresh(payload: RefreshIn, db: Session = Depends(get_db)) -> dict:
-    """Exchange a valid refresh token for a new access token."""
+@router.post("/refresh", response_model=AuthOut)
+def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    """Exchange the refresh-token cookie for a new access-token cookie."""
     _INVALID = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired refresh token.",
     )
-    record = (
-        db.query(RefreshToken)
-        .filter(RefreshToken.token == payload.refresh_token)
-        .first()
-    )
+    raw_refresh = request.cookies.get("refresh_token")
+    if not raw_refresh:
+        raise _INVALID
+
+    record = db.query(RefreshToken).filter(RefreshToken.token == raw_refresh).first()
     if record is None or record.revoked:
         raise _INVALID
 
@@ -174,20 +188,24 @@ def refresh(payload: RefreshIn, db: Session = Depends(get_db)) -> dict:
     if expires_at <= datetime.now(timezone.utc):
         raise _INVALID
 
-    return {"access_token": create_access_token(record.user_id), "token_type": "bearer"}
+    new_access = create_access_token(record.user_id)
+    kw = dict(httponly=True, secure=_COOKIE_SECURE, samesite=_COOKIE_SAMESITE, path="/")
+    response.set_cookie("access_token", new_access, max_age=settings.access_token_expire_minutes * 60, **kw)
+
+    user = db.get(User, record.user_id)
+    return {"user": user}
 
 
 @router.post("/logout", status_code=204)
-def logout(payload: RefreshIn, db: Session = Depends(get_db)) -> None:
-    """Revoke a refresh token. Idempotent — silently ignores unknown tokens."""
-    record = (
-        db.query(RefreshToken)
-        .filter(RefreshToken.token == payload.refresh_token)
-        .first()
-    )
-    if record and not record.revoked:
-        record.revoked = True
-        db.commit()
+def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> None:
+    """Revoke the refresh-token cookie and clear both auth cookies."""
+    raw_refresh = request.cookies.get("refresh_token")
+    if raw_refresh:
+        record = db.query(RefreshToken).filter(RefreshToken.token == raw_refresh).first()
+        if record and not record.revoked:
+            record.revoked = True
+            db.commit()
+    _clear_auth_cookies(response)
 
 
 @router.post("/forgot-password", status_code=200)

@@ -1,8 +1,23 @@
-"""Tests for /api/auth endpoints: register, login, /me, refresh, and logout."""
+"""Tests for /api/auth endpoints: register, login, /me, refresh, and logout.
+
+Tokens are now delivered as httpOnly cookies, not in the response body.
+The TestClient stores and re-sends cookies automatically between calls on
+the same client instance.  Cookies can also be injected via the Cookie
+request header for unit-testing individual endpoints in isolation.
+"""
 
 import pytest
 
 from app.models.refresh_token import RefreshToken
+from app.security import create_access_token
+
+
+# ---------------------------------------------------------------------------
+# Helper — auth cookie header for one-off requests
+# ---------------------------------------------------------------------------
+
+def _cookie(token: str) -> dict:
+    return {"Cookie": f"access_token={token}"}
 
 
 # ---------------------------------------------------------------------------
@@ -16,23 +31,41 @@ def test_register_success(client):
     )
     assert res.status_code == 201
     data = res.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
-    assert data["token_type"] == "bearer"
+    # Tokens are in cookies, not the body
+    assert "access_token" not in data
+    assert "refresh_token" not in data
     assert data["user"]["email"] == "new@howl.app"
     assert "password_hash" not in data["user"]
     assert data["user"]["avatar_status"] == "pending"
+    # Cookies must be set
+    assert "access_token" in res.cookies
+    assert "refresh_token" in res.cookies
 
 
-def test_register_returns_usable_token(client):
+def test_register_sets_httponly_cookies(client):
     res = client.post(
         "/api/auth/register",
-        json={"email": "token@howl.app", "password": "securepassword"},
+        json={"email": "cookie@howl.app", "password": "securepassword"},
     )
-    token = res.json()["access_token"]
-    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 201
+    # TestClient exposes Set-Cookie headers; verify both tokens are set
+    set_cookies = res.headers.get_list("set-cookie") if hasattr(res.headers, "get_list") else [
+        v for k, v in res.headers.items() if k.lower() == "set-cookie"
+    ]
+    assert any("access_token" in c for c in set_cookies)
+    assert any("refresh_token" in c for c in set_cookies)
+
+
+def test_register_cookie_allows_subsequent_requests(client):
+    """Cookie set by register is automatically sent by the TestClient."""
+    client.post(
+        "/api/auth/register",
+        json={"email": "subsequent@howl.app", "password": "securepassword"},
+    )
+    # Cookie is stored in client.cookies; /me should work without explicit header
+    me = client.get("/api/auth/me")
     assert me.status_code == 200
-    assert me.json()["email"] == "token@howl.app"
+    assert me.json()["email"] == "subsequent@howl.app"
 
 
 def test_register_duplicate_email(client, test_user):
@@ -45,18 +78,12 @@ def test_register_duplicate_email(client, test_user):
 
 
 def test_register_password_too_short(client):
-    res = client.post(
-        "/api/auth/register",
-        json={"email": "short@howl.app", "password": "abc123"},
-    )
+    res = client.post("/api/auth/register", json={"email": "short@howl.app", "password": "abc123"})
     assert res.status_code == 422
 
 
 def test_register_invalid_email(client):
-    res = client.post(
-        "/api/auth/register",
-        json={"email": "not-an-email", "password": "securepassword"},
-    )
+    res = client.post("/api/auth/register", json={"email": "not-an-email", "password": "securepassword"})
     assert res.status_code == 422
 
 
@@ -76,37 +103,27 @@ def test_login_success(client, test_user):
     )
     assert res.status_code == 200
     data = res.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
-    assert data["token_type"] == "bearer"
+    assert "access_token" not in data
     assert data["user"]["email"] == test_user.email
+    assert "access_token" in res.cookies
+
+
+def test_login_cookie_allows_subsequent_requests(client, test_user):
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json()["email"] == test_user.email
 
 
 def test_login_wrong_password(client, test_user):
-    res = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "wrongpassword"},
-    )
+    res = client.post("/api/auth/login", json={"email": test_user.email, "password": "wrongpassword"})
     assert res.status_code == 401
     assert "Invalid" in res.json()["detail"]
 
 
 def test_login_unknown_email(client):
-    res = client.post(
-        "/api/auth/login",
-        json={"email": "ghost@howl.app", "password": "securepassword"},
-    )
+    res = client.post("/api/auth/login", json={"email": "ghost@howl.app", "password": "securepassword"})
     assert res.status_code == 401
-
-
-def test_login_returns_usable_token(client, test_user):
-    res = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    token = res.json()["access_token"]
-    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert me.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -122,21 +139,13 @@ def test_me_authenticated(client, auth_headers, test_user):
     assert "password_hash" not in data
 
 
-def test_me_no_token(client):
+def test_me_no_cookie_returns_401(client):
     res = client.get("/api/auth/me")
     assert res.status_code == 401
 
 
-def test_me_invalid_token(client):
-    res = client.get(
-        "/api/auth/me",
-        headers={"Authorization": "Bearer this.is.garbage"},
-    )
-    assert res.status_code == 401
-
-
-def test_me_malformed_header(client):
-    res = client.get("/api/auth/me", headers={"Authorization": "NotBearer token"})
+def test_me_invalid_cookie_returns_401(client):
+    res = client.get("/api/auth/me", headers={"Cookie": "access_token=garbage.token.here"})
     assert res.status_code == 401
 
 
@@ -144,50 +153,37 @@ def test_me_malformed_header(client):
 # POST /api/auth/refresh
 # ---------------------------------------------------------------------------
 
-def test_refresh_returns_new_access_token(client, test_user):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    refresh_token = login.json()["refresh_token"]
-
-    res = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+def test_refresh_returns_user_and_sets_new_cookie(client, test_user):
+    """Login sets both cookies; calling /refresh re-issues a new access_token cookie."""
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    res = client.post("/api/auth/refresh")
     assert res.status_code == 200
-    data = res.json()
-    assert "access_token" in data
-    assert data["token_type"] == "bearer"
+    assert "user" in res.json()
+    assert "access_token" in res.cookies  # new access cookie set
 
 
-def test_refresh_token_gives_working_access_token(client, test_user):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    refresh_token = login.json()["refresh_token"]
-
-    new_access = client.post(
-        "/api/auth/refresh", json={"refresh_token": refresh_token}
-    ).json()["access_token"]
-
-    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {new_access}"})
+def test_refresh_new_cookie_allows_auth(client, test_user):
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    client.post("/api/auth/refresh")  # rotates access cookie
+    me = client.get("/api/auth/me")   # new cookie sent automatically
     assert me.status_code == 200
     assert me.json()["email"] == test_user.email
 
 
-def test_refresh_invalid_token_returns_401(client):
-    res = client.post("/api/auth/refresh", json={"refresh_token": "notarealtoken"})
+def test_refresh_no_cookie_returns_401(client):
+    res = client.post("/api/auth/refresh")
+    assert res.status_code == 401
+
+
+def test_refresh_invalid_cookie_returns_401(client):
+    res = client.post("/api/auth/refresh", headers={"Cookie": "refresh_token=notarealtoken"})
     assert res.status_code == 401
 
 
 def test_refresh_persists_token_in_db(client, db, test_user):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    raw = login.json()["refresh_token"]
-    record = db.query(RefreshToken).filter(RefreshToken.token == raw).first()
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    record = db.query(RefreshToken).filter(RefreshToken.user_id == test_user.id).first()
     assert record is not None
-    assert record.user_id == test_user.id
     assert not record.revoked
 
 
@@ -200,8 +196,7 @@ def test_refresh_expired_token_returns_401(client, db, test_user):
         expires_at=datetime.now(timezone.utc) - timedelta(days=1),
     ))
     db.commit()
-
-    res = client.post("/api/auth/refresh", json={"refresh_token": raw})
+    res = client.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={raw}"})
     assert res.status_code == 401
 
 
@@ -215,8 +210,7 @@ def test_refresh_revoked_token_returns_401(client, db, test_user):
         revoked=True,
     ))
     db.commit()
-
-    res = client.post("/api/auth/refresh", json={"refresh_token": raw})
+    res = client.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={raw}"})
     assert res.status_code == 401
 
 
@@ -224,64 +218,51 @@ def test_refresh_revoked_token_returns_401(client, db, test_user):
 # POST /api/auth/logout
 # ---------------------------------------------------------------------------
 
-def test_logout_revokes_refresh_token(client, db, test_user):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    raw = login.json()["refresh_token"]
-
-    res = client.post("/api/auth/logout", json={"refresh_token": raw})
+def test_logout_clears_cookies(client, test_user):
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    res = client.post("/api/auth/logout")
     assert res.status_code == 204
+    # Cookies should be cleared (expired/deleted) in the response
+    set_cookies = [v for k, v in res.headers.items() if k.lower() == "set-cookie"]
+    assert any("access_token" in c and ("expires" in c.lower() or "max-age=0" in c.lower()) for c in set_cookies)
 
-    record = db.query(RefreshToken).filter(RefreshToken.token == raw).first()
+
+def test_logout_revokes_refresh_token_in_db(client, db, test_user):
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    record = db.query(RefreshToken).filter(RefreshToken.user_id == test_user.id).first()
+    raw = record.token
+
+    client.post("/api/auth/logout")
+
     db.refresh(record)
     assert record.revoked is True
 
 
-def test_logout_then_refresh_returns_401(client, test_user):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    raw = login.json()["refresh_token"]
+def test_logout_then_refresh_returns_401(client, db, test_user):
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    record = db.query(RefreshToken).filter(RefreshToken.user_id == test_user.id).first()
+    raw = record.token
 
-    client.post("/api/auth/logout", json={"refresh_token": raw})
+    client.post("/api/auth/logout")
 
-    res = client.post("/api/auth/refresh", json={"refresh_token": raw})
+    # Manually inject the revoked token as a cookie to simulate a stale browser
+    res = client.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={raw}"})
     assert res.status_code == 401
 
 
-def test_logout_unknown_token_is_silent(client):
-    """Logging out with an unrecognised token returns 204 — no error."""
-    res = client.post("/api/auth/logout", json={"refresh_token": "unknowntoken"})
-    assert res.status_code == 204
-
-
-def test_logout_idempotent(client, test_user):
-    """Logging out twice with the same token is safe."""
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    raw = login.json()["refresh_token"]
-
-    client.post("/api/auth/logout", json={"refresh_token": raw})
-    res = client.post("/api/auth/logout", json={"refresh_token": raw})
+def test_logout_without_cookie_is_silent(client):
+    """Logging out without a session returns 204 — no error."""
+    res = client.post("/api/auth/logout")
     assert res.status_code == 204
 
 
 def test_refresh_token_cascade_deleted_with_account(client, db, test_user):
     """Deleting an account removes all its refresh tokens via CASCADE."""
-    from app.security import create_access_token
-    login = client.post(
-        "/api/auth/login",
-        json={"email": test_user.email, "password": "hunter2secure"},
-    )
-    raw = login.json()["refresh_token"]
+    client.post("/api/auth/login", json={"email": test_user.email, "password": "hunter2secure"})
+    record = db.query(RefreshToken).filter(RefreshToken.user_id == test_user.id).first()
+    raw = record.token
     assert db.query(RefreshToken).filter(RefreshToken.token == raw).count() == 1
 
-    headers = {"Authorization": f"Bearer {create_access_token(test_user.id)}"}
-    client.delete("/api/profile/me", headers=headers)
+    client.delete("/api/profile/me", headers={"Cookie": f"access_token={create_access_token(test_user.id)}"})
 
     assert db.query(RefreshToken).filter(RefreshToken.token == raw).count() == 0

@@ -1,7 +1,14 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+// In development the Vite proxy forwards /api/* to the FastAPI backend so
+// the browser always talks to the same origin (localhost:3000).  Use an
+// empty string for API_URL so all requests are relative (no CORS needed).
+// In production set VITE_API_URL to the full backend URL.
+export const API_URL = import.meta.env.VITE_API_URL || '';
 
-// Derive WebSocket base URL from the HTTP API URL automatically
-export const WS_URL = API_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+// Derive the WebSocket base URL from the current page origin in dev
+// (the Vite proxy forwards WS connections too), or from VITE_API_URL in prod.
+export const WS_URL = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+  : `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws'}://${typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}`;
 
 const ANIMAL_EMOJI = {
   wolf: '🐺', fox: '🦊', deer: '🦌', bear: '🐻', owl: '🦉',

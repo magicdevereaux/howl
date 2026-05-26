@@ -25,7 +25,7 @@ def test_status_unauthenticated(client):
 def test_status_invalid_token(client):
     res = client.get(
         "/api/avatar/status",
-        headers={"Authorization": "Bearer garbage.token.here"},
+        headers={"Cookie": "access_token=garbage.token.here"},
     )
     assert res.status_code == 401
 
@@ -118,7 +118,7 @@ def test_regenerate_unauthenticated(client):
 def test_regenerate_invalid_token(client):
     res = client.post(
         "/api/avatar/regenerate",
-        headers={"Authorization": "Bearer garbage.token.here"},
+        headers={"Cookie": "access_token=garbage.token.here"},
     )
     assert res.status_code == 401
 

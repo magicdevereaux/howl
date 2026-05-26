@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+# Query kept for before_id pagination param
 from jose import JWTError
 from sqlalchemy.orm import Session
 
@@ -143,7 +144,6 @@ def _to_out(msg: Message, current_user_id: int) -> MessageOut:
 async def chat_websocket(
     match_id: int,
     ws: WebSocket,
-    token: str = Query(..., description="JWT access token for authentication"),
 ) -> None:
     """
     Persistent WebSocket connection for real-time chat delivery.
@@ -159,7 +159,12 @@ async def chat_websocket(
     is_mine is computed per-recipient server-side so each client receives
     the correct value without any client-side state lookup.
     """
-    # ── Authenticate ─────────────────────────────────────────────────────────
+    # ── Authenticate via httpOnly cookie ─────────────────────────────────────
+    token = ws.cookies.get("access_token")
+    if not token:
+        await ws.accept()
+        await ws.close(code=4001)
+        return
     db = SessionLocal()
     try:
         user_id = decode_access_token(token)

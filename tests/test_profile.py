@@ -33,7 +33,7 @@ def test_get_my_profile_unauthenticated(client):
 def test_get_my_profile_invalid_token(client):
     res = client.get(
         "/api/profile/me",
-        headers={"Authorization": "Bearer garbage"},
+        headers={"Cookie": "access_token=garbage.token.here"},
     )
     assert res.status_code == 401
 

@@ -45,7 +45,7 @@ def test_swipe_unauthenticated(client):
 def test_swipe_invalid_token(client):
     res = client.post(
         "/api/swipes",
-        headers={"Authorization": "Bearer garbage"},
+        headers={"Cookie": "access_token=garbage.token.here"},
         json={"target_user_id": 1, "direction": "like"},
     )
     assert res.status_code == 401

@@ -472,7 +472,7 @@ def test_ws_connect_valid_credentials(client, db, test_user, _ws_db):
     m = _make_match(db, test_user, other)
     token = create_access_token(test_user.id)
 
-    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+    with client.websocket_connect(f"/api/matches/{m.id}/ws", headers={"Cookie": f"access_token={token}"}) as ws:
         pass  # connection accepted and closed cleanly
 
 
@@ -496,7 +496,7 @@ def test_ws_not_in_match_closes_with_4003(client, db, test_user, _ws_db):
 
     from starlette.websockets import WebSocketDisconnect
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+        with client.websocket_connect(f"/api/matches/{m.id}/ws", headers={"Cookie": f"access_token={token}"}) as ws:
             ws.receive_json()
 
     assert exc_info.value.code == 4003
@@ -508,7 +508,7 @@ def test_ws_receives_new_message_via_broadcast(client, db, test_user, auth_heade
     m = _make_match(db, test_user, other)
     token = create_access_token(test_user.id)
 
-    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+    with client.websocket_connect(f"/api/matches/{m.id}/ws", headers={"Cookie": f"access_token={token}"}) as ws:
         client.post(
             f"/api/matches/{m.id}/messages",
             headers=auth_headers,
@@ -528,7 +528,7 @@ def test_ws_receives_deleted_message_event(client, db, test_user, auth_headers, 
     msg = _send(db, match_id=m.id, sender_id=test_user.id, content="delete me")
     token = create_access_token(test_user.id)
 
-    with client.websocket_connect(f"/api/matches/{m.id}/ws?token={token}") as ws:
+    with client.websocket_connect(f"/api/matches/{m.id}/ws", headers={"Cookie": f"access_token={token}"}) as ws:
         client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=auth_headers)
         data = ws.receive_json()
 
