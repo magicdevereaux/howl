@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { API_URL, animalEmoji, avatarUrl } from '../utils';
+import { API_URL, animalEmoji, avatarUrl, fetchApi } from '../utils';
 
 const REPORT_REASONS = [
   { value: 'spam_scam',             label: 'Spam or scam' },
@@ -42,7 +42,7 @@ export default function ChatView({
     if (profileData) return; // already fetched
     setProfileLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/profile/${other.id}`);
+      const res = await fetchApi(`${API_URL}/api/profile/${other.id}`);
       if (res.ok) setProfileData(await res.json());
     } catch { /* show what we already have from other */ }
     finally { setProfileLoading(false); }

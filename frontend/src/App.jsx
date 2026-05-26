@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { API_URL, WS_URL } from './utils';
+import { API_URL, WS_URL, fetchApi } from './utils';
 import ChatView from './components/ChatView';
 import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
@@ -191,7 +191,7 @@ export default function HowlApp() {
     if (!_urlVerifyToken) return;
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/auth/verify-email`, {
+        const res = await fetchApi(`${API_URL}/api/auth/verify-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: _urlVerifyToken }),
@@ -205,7 +205,7 @@ export default function HowlApp() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/profile/me`, {
+      const res = await fetchApi(`${API_URL}/api/profile/me`, {
         credentials: 'include'
       });
       if (res.ok) {
@@ -231,7 +231,7 @@ export default function HowlApp() {
 
   const fetchAvatarStatus = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/avatar/status`, { credentials: 'include' });
+      const res = await fetchApi(`${API_URL}/api/avatar/status`, {});
       if (res.ok) {
         const data = await res.json();
         setAvatarStatus(prev => {
@@ -259,7 +259,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const res = await fetchApi(`${API_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -289,7 +289,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/register`, {
+      const res = await fetchApi(`${API_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -318,10 +318,10 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/profile/me`, {
+      const res = await fetchApi(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({ name: n || null, age: a ? parseInt(a, 10) : null, location: l || null, bio: b || null }),
       });
       const data = await res.json();
@@ -356,10 +356,10 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/profile/me`, {
+      const res = await fetchApi(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({
           name: name || null,
           age: age ? parseInt(age, 10) : null,
@@ -395,7 +395,7 @@ export default function HowlApp() {
 
   const handleLogout = () => {
     // Server clears both cookies; fire-and-forget
-    fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    fetchApi(`${API_URL}/api/auth/logout`, { method: 'POST' }).catch(() => {});
     setUser(null);
     setAvatarStatus(null);
     setEmail('');
@@ -426,9 +426,9 @@ export default function HowlApp() {
     setDeleteLoading(true);
     setDeleteError('');
     try {
-      const res = await fetch(`${API_URL}/api/profile/me`, {
+      const res = await fetchApi(`${API_URL}/api/profile/me`, {
         method: 'DELETE',
-        credentials: 'include',
+
       });
       if (res.status === 204) {
         setUser(null);
@@ -461,7 +461,7 @@ export default function HowlApp() {
     setLoading(true);
     setError('');
     try {
-      await fetch(`${API_URL}/api/auth/forgot-password`, {
+      await fetchApi(`${API_URL}/api/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
@@ -483,7 +483,7 @@ export default function HowlApp() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/reset-password`, {
+      const res = await fetchApi(`${API_URL}/api/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: resetToken, new_password: newPassword }),
@@ -507,8 +507,8 @@ export default function HowlApp() {
     setMessagesLoading(true);
     setMessagesError('');
     try {
-      const res = await fetch(`${API_URL}/api/matches/${matchId}/messages`, {
-        credentials: 'include',
+      const res = await fetchApi(`${API_URL}/api/matches/${matchId}/messages`, {
+
       });
       if (res.ok) {
         const data = await res.json();
@@ -527,7 +527,7 @@ export default function HowlApp() {
   const handleDeleteMessage = async (messageId) => {
     if (!currentMatch) return;
     try {
-      const res = await fetch(
+      const res = await fetchApi(
         `${API_URL}/api/matches/${currentMatch.id}/messages/${messageId}`,
         { method: 'DELETE', credentials: 'include' },
       );
@@ -543,9 +543,9 @@ export default function HowlApp() {
     setLoadingMore(true);
     try {
       const oldestId = Math.min(...messages.map((m) => m.id));
-      const res = await fetch(
+      const res = await fetchApi(
         `${API_URL}/api/matches/${currentMatch.id}/messages?before_id=${oldestId}`,
-        { credentials: 'include' },
+        {},
       );
       if (res.ok) {
         const data = await res.json();
@@ -563,10 +563,10 @@ export default function HowlApp() {
     setSendError('');
     setMessageInput('');
     try {
-      const res = await fetch(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
+      const res = await fetchApi(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({ content }),
       });
       if (res.ok) {
@@ -609,8 +609,8 @@ export default function HowlApp() {
   const fetchBlocks = async () => {
     setBlocksLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/blocks`, {
-        credentials: 'include',
+      const res = await fetchApi(`${API_URL}/api/blocks`, {
+
       });
       if (res.ok) setBlocks(await res.json());
     } catch { /* ignore */ }
@@ -618,7 +618,7 @@ export default function HowlApp() {
   };
 
   const handleUnmatch = async (matchId) => {
-    await fetch(`${API_URL}/api/matches/${matchId}`, {
+    await fetchApi(`${API_URL}/api/matches/${matchId}`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -631,10 +631,10 @@ export default function HowlApp() {
   const handleBlockAndReport = async (userId, reason, notes) => {
     await handleBlock(userId); // navigate away and reload matches
     try {
-      await fetch(`${API_URL}/api/reports`, {
+      await fetchApi(`${API_URL}/api/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({
           reported_user_id: userId,
           reason,
@@ -645,10 +645,10 @@ export default function HowlApp() {
   };
 
   const handleBlock = async (userId) => {
-    await fetch(`${API_URL}/api/blocks`, {
+    await fetchApi(`${API_URL}/api/blocks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
       body: JSON.stringify({ blocked_id: userId }),
     });
     // Remove from discover stack if present
@@ -664,7 +664,7 @@ export default function HowlApp() {
   };
 
   const handleUnblock = async (userId) => {
-    await fetch(`${API_URL}/api/blocks/${userId}`, {
+    await fetchApi(`${API_URL}/api/blocks/${userId}`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -675,9 +675,9 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/avatar/regenerate`, {
+      const res = await fetchApi(`${API_URL}/api/avatar/regenerate`, {
         method: 'POST',
-        credentials: 'include',
+
       });
       const data = await res.json();
       if (res.ok) {
@@ -721,10 +721,10 @@ export default function HowlApp() {
         ...(notes ? { notes } : {}),
         ...(reportModal.messageId != null ? { message_id: reportModal.messageId } : {}),
       };
-      const res = await fetch(`${API_URL}/api/reports`, {
+      const res = await fetchApi(`${API_URL}/api/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify(body),
       });
       if (res.ok) {
@@ -747,10 +747,10 @@ export default function HowlApp() {
     setAgePrefMin(amin);
     setAgePrefMax(amax);
     try {
-      await fetch(`${API_URL}/api/profile/me`, {
+      await fetchApi(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({
           looking_for: lf || null,
           gender: g || null,
@@ -766,10 +766,10 @@ export default function HowlApp() {
   const handleToggleNotifications = async (enabled) => {
     setEmailNotifications(enabled);
     try {
-      await fetch(`${API_URL}/api/profile/me`, {
+      await fetchApi(`${API_URL}/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({ email_notifications: enabled }),
       });
     } catch { /* silently revert on network error */ }
@@ -779,8 +779,8 @@ export default function HowlApp() {
     setDiscoverLoading(true);
     setDiscoverError('');
     try {
-      const res = await fetch(`${API_URL}/api/users/discover`, {
-        credentials: 'include',
+      const res = await fetchApi(`${API_URL}/api/users/discover`, {
+
       });
       if (res.ok) {
         setDiscoverUsers(await res.json());
@@ -801,8 +801,8 @@ export default function HowlApp() {
     setMatchesLoading(true);
     setMatchesError('');
     try {
-      const res = await fetch(`${API_URL}/api/users/matches`, {
-        credentials: 'include',
+      const res = await fetchApi(`${API_URL}/api/users/matches`, {
+
       });
       if (res.ok) {
         setMatches(await res.json());
@@ -826,10 +826,10 @@ export default function HowlApp() {
     setUndoMessage('');
     setSwipeError('');
     try {
-      const res = await fetch(`${API_URL}/api/swipes`, {
+      const res = await fetchApi(`${API_URL}/api/swipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+
         body: JSON.stringify({ target_user_id: targetUserId, direction }),
       });
       const data = await res.json();
@@ -864,9 +864,9 @@ export default function HowlApp() {
     setSwipeLoading(true);
     setUndoMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/swipes/last`, {
+      const res = await fetchApi(`${API_URL}/api/swipes/last`, {
         method: 'DELETE',
-        credentials: 'include',
+
       });
       if (res.ok) {
         const data = await res.json();

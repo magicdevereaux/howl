@@ -18,6 +18,17 @@ const ANIMAL_EMOJI = {
 
 export const animalEmoji = (animal) => ANIMAL_EMOJI[animal?.toLowerCase()] || '🐾';
 
+/**
+ * Drop-in replacement for fetch() that always sends credentials (cookies).
+ *
+ * For cross-origin requests (Vercel → Railway) the browser only includes
+ * cookies and accepts Set-Cookie headers when credentials: 'include' is set.
+ * Centralising it here means individual call sites never have to remember it.
+ * Any credentials value in `options` is overridden to 'include'.
+ */
+export const fetchApi = (url, options = {}) =>
+  fetch(url, { ...options, credentials: 'include' });
+
 // Resolve avatar URL: stored paths are server-relative (/avatars/…), full URLs are used as-is.
 export const avatarUrl = (url) =>
   !url ? null : url.startsWith('http') ? url : `${API_URL}${url}`;
