@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -9,7 +8,7 @@ from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, UserOut
-from app.services.image_generation import AVATAR_DIR
+from app.services.image_generation import delete_avatar
 from app.tasks.avatar import generate_avatar
 
 logger = logging.getLogger(__name__)
@@ -122,14 +121,8 @@ def delete_account(
     user_id = current_user.id
     avatar_url = current_user.avatar_url
 
-    # Remove avatar image file first (can't recover the path after the row is gone)
-    if avatar_url:
-        try:
-            filename = Path(avatar_url).name
-            (AVATAR_DIR / filename).unlink(missing_ok=True)
-        except Exception as exc:
-            # Never block deletion over a missing or unreadable file
-            logger.warning("delete_account: could not remove avatar for user %d: %s", user_id, exc)
+    # Remove avatar image file before deleting the row (URL is lost after deletion)
+    delete_avatar(avatar_url)
 
     db.delete(current_user)
     db.commit()

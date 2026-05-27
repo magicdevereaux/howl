@@ -195,7 +195,7 @@ def test_delete_removes_avatar_file(client, db, auth_headers, test_user, tmp_pat
     test_user.avatar_url = "/avatars/abc123.png"
     db.commit()
 
-    monkeypatch.setattr("app.api.profile.AVATAR_DIR", tmp_path)
+    monkeypatch.setattr("app.services.image_generation.AVATAR_DIR", tmp_path)
 
     client.delete("/api/profile/me", headers=auth_headers)
 
@@ -216,7 +216,7 @@ def test_delete_succeeds_when_avatar_file_missing_from_disk(client, db, auth_hea
     test_user.avatar_url = "/avatars/gone.png"
     db.commit()
 
-    monkeypatch.setattr("app.api.profile.AVATAR_DIR", tmp_path)
+    monkeypatch.setattr("app.services.image_generation.AVATAR_DIR", tmp_path)
     # File doesn't exist on disk — should not raise
 
     res = client.delete("/api/profile/me", headers=auth_headers)

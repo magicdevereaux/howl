@@ -35,7 +35,7 @@ def _make_user(db, *, email: str, is_premium: bool = False, bio: str = "A wolf w
 
 
 def _h(user: User) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
 def _regen(client, user):

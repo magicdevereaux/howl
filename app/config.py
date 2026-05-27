@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # OpenAI (DALL-E image generation) — optional; omitting disables image gen
     openai_api_key: str | None = None
 
+    # Cloudflare R2 — optional; omitting falls back to local filesystem storage
+    r2_endpoint_url: str | None = None      # https://<accountid>.r2.cloudflarestorage.com
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket_name: str | None = None
+    r2_public_url: str | None = None        # public base URL (e.g. https://pub-xxx.r2.dev)
+
     # App - Safe defaults for production
     environment: str = "production"
     debug: bool = False
