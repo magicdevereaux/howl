@@ -50,6 +50,7 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 - Redis (Celery broker + login rate limiting)
 - Anthropic Claude Haiku (spirit animal generation)
 - OpenAI DALL-E 3 (avatar image generation, optional)
+- Cloudflare R2 (persistent avatar storage, optional — falls back to local filesystem)
 - Sentry (error monitoring, optional)
 
 **Frontend:**
@@ -350,6 +351,11 @@ ALLOWED_ORIGINS          # comma-separated Vercel origins
 **Optional:**
 ```
 OPENAI_API_KEY           # enables DALL-E avatar images
+R2_ENDPOINT_URL          # https://<accountid>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET_NAME
+R2_PUBLIC_URL            # public base URL (e.g. https://pub-xxx.r2.dev or custom domain)
 FRONTEND_URL             # base URL for email links
 SENTRY_DSN
 ENVIRONMENT              # reported to Sentry (default: production)
@@ -360,7 +366,7 @@ SKIP_SEED=true           # skip demo seeding on deploy
 
 Access and refresh tokens are stored as httpOnly cookies with `samesite=none; secure=true`. The Vercel frontend must be listed in `ALLOWED_ORIGINS` and the CORS middleware is configured with `allow_credentials=True`. Every fetch call in the frontend goes through the `fetchApi()` wrapper which sets `credentials: 'include'`.
 
-> **Note on avatar persistence:** Avatar images are saved to `static/avatars/` which is ephemeral on Railway (cleared on redeploy). For production persistence, configure S3 or Cloudflare R2 and update `app/services/image_generation.py`.
+> **Avatar persistence:** When the R2 environment variables are set, avatars are uploaded directly to Cloudflare R2 and the public URL is stored in the database — images persist across Railway redeploys. Without R2 config, avatars fall back to `static/avatars/` on the local filesystem, which Railway clears on each deploy. The storage decision is made at generation time with no code changes required; the frontend `avatarUrl()` helper handles both full HTTPS URLs (R2) and server-relative paths (local) transparently.
 
 ## Freemium Model
 
@@ -395,7 +401,7 @@ Premium is set directly in the database — payment processing is not yet implem
 - [x] Sentry error monitoring
 - [x] Privacy policy and terms of service
 - [ ] Payment processing (Stripe) to unlock premium
-- [ ] Persistent avatar image storage (S3/R2)
+- [x] Persistent avatar image storage (Cloudflare R2 with local fallback)
 - [ ] Geographic filtering (requires geocoding)
 - [ ] Push notifications
 - [ ] Mobile responsive improvements
