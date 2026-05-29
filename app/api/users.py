@@ -16,28 +16,9 @@ from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import AvatarStatus, User
-from app.schemas.browse import BrowseUserOut
 from app.schemas.swipe import DiscoverUserOut, LastMessageOut, MatchOut, MatchedProfileOut
 
 router = APIRouter(prefix="/api/users", tags=["users"])
-
-
-@router.get("/browse", response_model=list[BrowseUserOut])
-def browse_users(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[User]:
-    """Return all users with a ready avatar, excluding the current user."""
-    users = (
-        db.query(User)
-        .filter(
-            User.id != current_user.id,
-            User.avatar_status == AvatarStatus.ready,
-        )
-        .order_by(User.created_at.desc())
-        .all()
-    )
-    return users
 
 
 @router.get("/discover", response_model=list[DiscoverUserOut])

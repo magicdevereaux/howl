@@ -146,13 +146,6 @@ class ProfileUpdate(BaseModel):
         return v
 
 
-class TokenOut(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    user: UserOut
-
-
 class AuthOut(BaseModel):
     """Response shape after login/register when tokens are delivered via httpOnly cookies."""
     user: UserOut
