@@ -43,13 +43,14 @@ def _make_match(db, user_a: User, user_b: User) -> Match:
     return match
 
 
-def _send(db, *, match_id: int, sender_id: int, content: str, read: bool = False) -> Message:
+def _send(db, *, match_id: int, sender_id: int, content: str, read: bool = False, created_at=None) -> Message:
     from datetime import datetime, timezone
     msg = Message(
         match_id=match_id,
         sender_id=sender_id,
         content=content,
         read_at=datetime.now(timezone.utc) if read else None,
+        created_at=created_at,
     )
     db.add(msg)
     db.commit()
@@ -198,10 +199,10 @@ def test_deletion_visible_to_other_user(client, db, test_user):
     m = _make_match(db, test_user, other)
     msg = _send(db, match_id=m.id, sender_id=test_user.id, content="see ya")
 
-    sender_headers = {"Authorization": f"Bearer {create_access_token(test_user.id)}"}
+    sender_headers = {"Cookie": f"access_token={create_access_token(test_user.id)}"}
     client.delete(f"/api/matches/{m.id}/messages/{msg.id}", headers=sender_headers)
 
-    other_headers = {"Authorization": f"Bearer {create_access_token(other.id)}"}
+    other_headers = {"Cookie": f"access_token={create_access_token(other.id)}"}
     msgs = client.get(f"/api/matches/{m.id}/messages", headers=other_headers).json()["messages"]
     deleted = next(m for m in msgs if m["id"] == msg.id)
     assert deleted["content"] is None
@@ -437,10 +438,12 @@ def test_matches_list_includes_unread_count_field(client, db, test_user, auth_he
 
 
 def test_matches_list_includes_last_message(client, db, test_user, auth_headers):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
     other = _make_user(db, email="ml_last@howl.app")
     m = _make_match(db, test_user, other)
-    _send(db, match_id=m.id, sender_id=test_user.id, content="First")
-    _send(db, match_id=m.id, sender_id=other.id, content="Last")
+    _send(db, match_id=m.id, sender_id=test_user.id, content="First", created_at=now - timedelta(seconds=5))
+    _send(db, match_id=m.id, sender_id=other.id, content="Last", created_at=now)
 
     res = client.get("/api/users/matches", headers=auth_headers)
     last = res.json()[0]["last_message"]

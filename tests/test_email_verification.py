@@ -61,7 +61,7 @@ def test_unverified_user_can_still_login(client, db):
     client.post("/api/auth/register", json={"email": "login@howl.app", "password": "securepass"})
     res = client.post("/api/auth/login", json={"email": "login@howl.app", "password": "securepass"})
     assert res.status_code == 200
-    assert "access_token" in res.json()
+    assert "user" in res.json()
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ def _make_user(db, *, email: str, **kwargs) -> User:
 
 
 def _h(user: User) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ def _make_swipe(db, *, from_id: int, to_id: int, direction=SwipeDirection.like) 
 
 
 def _headers(user: User) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
 # ---------------------------------------------------------------------------

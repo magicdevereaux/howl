@@ -156,7 +156,7 @@ def test_can_login_with_new_password(client, db, test_user):
     client.post("/api/auth/reset-password", json={"token": tok.token, "new_password": "brandnewpass"})
     res = client.post("/api/auth/login", json={"email": test_user.email, "password": "brandnewpass"})
     assert res.status_code == 200
-    assert "access_token" in res.json()
+    assert "user" in res.json()
 
 
 def test_old_password_no_longer_works_after_reset(client, db, test_user):

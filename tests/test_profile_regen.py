@@ -38,7 +38,7 @@ def _make_user(db, *, email: str, bio: str = "A lone wolf who howls at the moon.
 
 
 def _h(user: User) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
 def _patch_bio(client, user, new_bio="My completely new bio that is different from the old one."):

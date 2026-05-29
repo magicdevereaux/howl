@@ -44,7 +44,7 @@ def _login(client, email="ratelimit@howl.app", password="goodpassword"):
 def test_login_succeeds_under_limit(client, registered_user):
     res = _login(client)
     assert res.status_code == 200
-    assert "access_token" in res.json()
+    assert "user" in res.json()
 
 
 # ---------------------------------------------------------------------------

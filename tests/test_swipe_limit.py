@@ -29,7 +29,7 @@ def _make_user(db, *, email: str, is_premium: bool = False, **kwargs) -> User:
 
 
 def _headers(user: User) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
 def _swipe(client, headers, target_id, direction="pass"):

@@ -272,7 +272,7 @@ def test_matches_visible_to_both_users(client, db, test_user):
     from app.security import create_access_token
 
     other = _make_user(db, email="panther@howl.app", animal="panther", name="Luna")
-    other_headers = {"Authorization": f"Bearer {create_access_token(other.id)}"}
+    other_headers = {"Cookie": f"access_token={create_access_token(other.id)}"}
 
     _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
     _make_swipe(db, user_id=other.id, target_user_id=test_user.id, direction=SwipeDirection.like)
@@ -284,7 +284,7 @@ def test_matches_visible_to_both_users(client, db, test_user):
     db.add(match)
     db.commit()
 
-    test_user_headers = {"Authorization": f"Bearer {create_access_token(test_user.id)}"}
+    test_user_headers = {"Cookie": f"access_token={create_access_token(test_user.id)}"}
     res1 = client.get("/api/users/matches", headers=test_user_headers)
     res2 = client.get("/api/users/matches", headers=other_headers)
 
