@@ -345,6 +345,7 @@ def seed() -> None:
                 avatar_status=AvatarStatus.ready,
                 avatar_status_updated_at=created_at,
                 is_bot=True,
+                is_email_verified=True,
                 archetype=data["archetype"],
                 created_at=created_at,
                 updated_at=created_at,
