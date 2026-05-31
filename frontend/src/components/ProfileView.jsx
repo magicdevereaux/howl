@@ -133,7 +133,6 @@ export default function ProfileView({
 
           {avatarStatus?.avatar_status === 'ready' && (
             <>
-              {generationTime && <p style={{ color: '#a0aec0', fontSize: '12px', marginBottom: '12px' }}>Generated in {generationTime}</p>}
               {avatarStatus?.personality_traits?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginBottom: '16px' }}>
                   {avatarStatus.personality_traits.map((trait, i) => (
