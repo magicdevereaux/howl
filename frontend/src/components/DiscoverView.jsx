@@ -111,14 +111,12 @@ export default function DiscoverView({
               >
                 Apply
               </button>
-              {filtersActive && (
-                <button
-                  onClick={handleClear}
-                  style={{ padding: '4px 0', background: 'none', color: 'rgba(255,255,255,0.5)', border: 'none', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  Clear all
-                </button>
-              )}
+              <button
+                onClick={handleClear}
+                style={{ padding: '4px 0', background: 'none', color: 'rgba(255,255,255,0.5)', border: 'none', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline', visibility: filtersActive ? 'visible' : 'hidden' }}
+              >
+                Clear all
+              </button>
             </div>
           </div>
           {filtersActive && (
