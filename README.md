@@ -34,7 +34,8 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 - **Refresh Tokens** — database-backed 30-day refresh tokens; revoked on logout and account deletion
 - **httpOnly Cookie Auth** — access and refresh tokens stored as httpOnly cookies (`samesite=none; secure` in production); no tokens in localStorage or JS memory; Vite proxy used in dev so the browser sees a single origin
 - **Login Rate Limiting** — Redis-backed; 10 attempts per 15 min per IP, 5 per email; 429 with Retry-After header; fails open if Redis is unavailable
-- **Demo Auto-Match** — 100 diverse pre-seeded demo users (varied gender, sexuality, age 18–65, preferences) automatically like back real users 90% of the time after a configurable delay
+- **Bot Users with Archetypes** — 1,000 diverse pre-seeded bot users across six personalities (responsive, slow_burn, flirty, intellectual, ghost, desperate); Celery Beat task every 15 min generates archetype-appropriate replies via Claude with per-archetype timing windows, ghost silencing after N messages, and desperate follow-ups after 2 hours of silence
+- **Demo Auto-Match** — bot users automatically like back real users 90% of the time after a configurable delay
 - **Email Notifications** — Celery task notifies matches of new messages when inactive for 5+ minutes; per-user opt-out toggle in profile
 - **Preference Filtering** — gender, sexuality, looking_for, age range dropdowns in the discover view; saved to profile, applied server-side; opt-in (null = show everyone)
 - **Privacy Policy & Terms of Service** — accessible from login/register pages
@@ -45,7 +46,7 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 **Backend:**
 - FastAPI (Python)
 - PostgreSQL (database)
-- Alembic (18 migrations)
+- Alembic (19 migrations)
 - Celery (async task queue)
 - Redis (Celery broker + login rate limiting)
 - Anthropic Claude Haiku (spirit animal generation)
@@ -108,7 +109,7 @@ SENTRY_DSN=https://...@sentry.io/...
 docker compose up -d
 alembic upgrade head
 
-# Optional: seed 100 diverse demo users
+# Optional: seed 1,000 diverse bot users
 python -m scripts.seed_demo_users
 ```
 
@@ -145,7 +146,6 @@ Open http://localhost:3000. The Vite dev server proxies all `/api/*` requests to
 | GET | `/api/profile/{id}` | Get any user's public profile |
 | GET | `/api/avatar/status` | Check avatar generation status |
 | POST | `/api/avatar/regenerate` | Manual regeneration (1/month free, unlimited premium) |
-| GET | `/api/users/browse` | All users with ready avatars |
 | GET | `/api/users/discover` | Unswiped users filtered by preferences |
 | GET | `/api/users/matches` | Matches with unread count + last message |
 | POST | `/api/swipes` | Like or pass (20/day free, unlimited premium) |
@@ -181,7 +181,8 @@ Avatar images are served at `/avatars/<filename>`.
              ├──→ Claude Haiku     (spirit animal + traits + DALL-E prompt)
              ├──→ DALL-E 3         (avatar image → static/avatars/)
              ├──→ auto_match task  (90% demo like-back after delay)
-             └──→ notify task      (email alert on new message when inactive)
+             ├──→ notify task         (email alert on new message when inactive)
+             └──→ bot_response task   (archetype-driven replies every 15 min via Celery Beat)
 
 React Frontend (Vite)
   ├── Vite proxy: /api/* → FastAPI:8001 (dev only; no CORS needed)
@@ -206,7 +207,7 @@ howl/
 │   │   ├── chat.py         # messages (paginated), WebSocket + typing, soft-delete, unread-count
 │   │   ├── blocks.py       # block, unblock, list
 │   │   ├── reports.py      # abuse reports
-│   │   └── users.py        # browse, discover (preference-filtered), matches
+│   │   └── users.py        # discover (preference-filtered), matches
 │   ├── models/
 │   │   ├── user.py         # User — profile, preferences, limits, verification, regen flag
 │   │   ├── swipe.py        # Swipe (like/pass)
@@ -219,7 +220,6 @@ howl/
 │   ├── schemas/
 │   │   ├── user.py         # UserOut, ProfileUpdate, AuthOut (cookie auth — no tokens in body)
 │   │   ├── avatar.py       # AvatarStatusOut
-│   │   ├── browse.py       # BrowseUserOut
 │   │   ├── swipe.py        # SwipeIn/Out, MatchOut, DiscoverUserOut, UndoSwipeOut
 │   │   ├── chat.py         # MessageIn/Out, MessagePageOut, UnreadCountOut
 │   │   └── block.py        # BlockIn, BlockedUserOut
@@ -228,9 +228,10 @@ howl/
 │   │   ├── email.py             # Verification, password-reset, and message notification emails
 │   │   └── rate_limit.py        # Redis-backed login rate limiter (fail-open on Redis errors)
 │   ├── tasks/
-│   │   ├── avatar.py       # generate_avatar — Claude then DALL-E
-│   │   ├── auto_match.py   # 90% like-back from demo users after delay
-│   │   └── notify.py       # email alert when recipient inactive 5+ min
+│   │   ├── avatar.py         # generate_avatar — Claude then DALL-E
+│   │   ├── auto_match.py     # 90% like-back from bot users after delay
+│   │   ├── bot_response.py   # archetype-driven bot replies; runs every 15 min via Celery Beat
+│   │   └── notify.py         # email alert when recipient inactive 5+ min
 │   ├── celery_app.py
 │   ├── config.py           # pydantic-settings; all env vars
 │   ├── db.py
@@ -240,9 +241,8 @@ howl/
 ├── alembic/
 │   └── versions/           # 18 migrations, all reversible
 ├── scripts/
-│   ├── seed_demo_users.py          # 100 diverse demo users (idempotent)
-│   ├── backfill_demo_matches.py    # Queue auto-match tasks for existing likes
-│   └── startup.sh                  # Railway: migrate → seed → uvicorn
+│   ├── seed_demo_users.py   # 1,000 diverse bot users across 6 archetypes (idempotent)
+│   └── startup.sh           # Railway: migrate → seed → uvicorn
 ├── docs/
 │   └── decisions/ADR.md    # Architecture decision records
 ├── tests/                  # 355 tests, all passing
@@ -252,12 +252,11 @@ howl/
 │   ├── test_profile_regen.py  # Auto-regen on save, profile_needs_regen flag
 │   ├── test_avatar.py
 │   ├── test_task.py
-│   ├── test_users.py
 │   ├── test_swipes.py
 │   ├── test_swipe_limit.py    # 20/day limit, reset, premium bypass
 │   ├── test_chat.py           # WebSocket broadcast, pagination, soft-delete
 │   ├── test_auto_match.py
-│   ├── test_backfill.py
+│   ├── test_bot_response.py   # Archetype timing, ghost silencing, desperate follow-ups
 │   ├── test_image_generation.py
 │   ├── test_account_deletion.py
 │   ├── test_password_reset.py
@@ -313,12 +312,11 @@ pytest tests/test_auth.py::test_login_success -v
 | `test_profile_regen.py` | Auto-regen on bio save, `profile_needs_regen` flag, quota sharing |
 | `test_avatar.py` | Status, regenerate endpoint — all states, stale handling |
 | `test_task.py` | `generate_avatar` Celery task — Claude parsing, retries, DALL-E |
-| `test_users.py` | Browse endpoint |
 | `test_swipes.py` | POST swipe, undo, discover, matches list, unmatch cascade |
 | `test_swipe_limit.py` | 20/day limit, 24h reset, premium bypass |
 | `test_chat.py` | Messages CRUD, pagination, soft-delete, WebSocket auth + broadcast |
 | `test_auto_match.py` | `auto_match_demo_user` task and dispatch |
-| `test_backfill.py` | Backfill script eligibility and dry-run |
+| `test_bot_response.py` | Archetype timing, ghost silencing, desperate follow-ups, Claude batch parsing |
 | `test_image_generation.py` | DALL-E service — success, all failure modes |
 | `test_account_deletion.py` | DELETE /api/profile/me, cascade, avatar file cleanup |
 | `test_password_reset.py` | Token generation, expiry, one-time-use |
@@ -397,7 +395,7 @@ Premium is set directly in the database — payment processing is not yet implem
 - [x] Refresh tokens (database-backed, revocable)
 - [x] Login rate limiting (Redis)
 - [x] Email notifications with opt-out
-- [x] 100 diverse demo users with auto-match
+- [x] 1,000 diverse bot users with archetypes and auto-match
 - [x] Sentry error monitoring
 - [x] Privacy policy and terms of service
 - [ ] Payment processing (Stripe) to unlock premium
