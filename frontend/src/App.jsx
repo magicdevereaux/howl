@@ -39,7 +39,6 @@ export default function HowlApp() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [generationStartTime, setGenerationStartTime] = useState(null);
-  const [generationTime, setGenerationTime] = useState(null);
   const [discoverUsers, setDiscoverUsers] = useState([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
@@ -236,13 +235,7 @@ export default function HowlApp() {
         const data = await res.json();
         setAvatarStatus(prev => {
           if (data.avatar_status === 'ready' && prev?.avatar_status !== 'ready') {
-            setGenerationStartTime(t => {
-              if (t !== null) {
-                const elapsed = ((Date.now() - t) / 1000).toFixed(1);
-                setGenerationTime(`${elapsed}s`);
-              }
-              return null;
-            });
+            setGenerationStartTime(null);
           }
           return data;
         });
@@ -334,7 +327,7 @@ export default function HowlApp() {
         // If the backend queued a regen, start the generation spinner
         if (data.avatar_status === 'pending') {
           setGenerationStartTime(Date.now());
-          setGenerationTime(null);
+
           setAvatarStatus({ avatar_status: 'generating', animal: null });
           setTimeout(fetchAvatarStatus, 2000);
         }
@@ -1046,13 +1039,12 @@ export default function HowlApp() {
       <ProfileView
         user={user}
         avatarStatus={avatarStatus}
-        generationTime={generationTime}
         isStale={isStale}
         isGenerating={isGenerating}
-        name={name} setName={setName}
-        age={age} setAge={setAge}
-        location={location} setLocation={setLocation}
-        bio={bio} setBio={setBio}
+        name={name}
+        age={age}
+        location={location}
+        bio={bio}
         error={error}
         loading={loading}
         copied={copied}

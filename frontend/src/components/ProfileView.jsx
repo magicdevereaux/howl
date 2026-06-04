@@ -3,7 +3,7 @@ import Nav from './Nav';
 import { animalEmoji, avatarUrl } from '../utils';
 
 export default function ProfileView({
-  user, avatarStatus, generationTime, isStale, isGenerating,
+  user, avatarStatus, isStale, isGenerating,
   name, age, location, bio,
   error, loading, copied,
   handleSaveProfile, handleRegenerate, handleCopyAnimal,
