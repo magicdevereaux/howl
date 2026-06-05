@@ -1,0 +1,49 @@
+/* ─────────────────────────────────────────────────────────
+   Howl — Twilight Dark Palette
+   All UI colours are defined here. Import once in main.jsx.
+   ───────────────────────────────────────────────────────── */
+:root {
+  /* Primary backgrounds */
+  --bg-main:    #0D0B1A;   /* page / app shell */
+  --bg-nav:     #1A1035;   /* navigation, elevated surfaces */
+  --bg-brand:   #2D1B69;   /* hero / header moments */
+
+  /* Secondary surfaces */
+  --bg-card:    #130D2E;   /* cards, modals, containers */
+  --bg-hover:   #231550;   /* hover states, selected items */
+  --bg-input:   #0F0B22;   /* input field backgrounds */
+
+  /* Accent */
+  --accent:       #6B3FA0; /* primary buttons / CTAs */
+  --accent-hover: #9B59D4; /* button hover / active */
+
+  /* Gold — ONLY for matches, notifications, premium moments */
+  --gold:       #C9A84C;
+  --gold-hover: #E8C84E;
+
+  /* Text */
+  --text-primary:   #FFFFFF; /* body text */
+  --text-secondary: #B8A9D4; /* metadata, timestamps, captions */
+  --text-disabled:  #7B6BA8; /* disabled / tertiary */
+  --text-surface:   #E8E0F5; /* text on lighter dark surfaces */
+
+  /* Borders */
+  --border:        rgba(255, 255, 255, 0.10);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  /* Compound gradients */
+  --gradient-main:  linear-gradient(135deg, #2D1B69 0%, #0D0B1A 100%);
+  --gradient-brand: linear-gradient(135deg, #6B3FA0 0%, #2D1B69 100%);
+  --gradient-gold:  linear-gradient(135deg, #C9A84C 0%, #E8C84E 100%);
+}
+
+/* Global resets for dark-mode inputs */
+input, textarea, select {
+  color: var(--text-primary);
+  background: var(--bg-input);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-disabled);
+}

@@ -9,9 +9,9 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
         onClick={() => { setView(targetView); fetchFn && fetchFn(); }}
         style={{
           padding: '10px 20px',
-          background: active ? 'white' : 'rgba(255,255,255,0.15)',
-          color: active ? '#667eea' : 'white',
-          border: active ? 'none' : '1px solid rgba(255,255,255,0.3)',
+          background: active ? 'var(--bg-card)' : 'rgba(255,255,255,0.08)',
+          color: active ? 'var(--accent-hover)' : 'var(--text-primary)',
+          border: active ? 'none' : '1px solid var(--border)',
           borderRadius: '8px',
           cursor: 'pointer',
           fontSize: '14px',
@@ -27,7 +27,7 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
-      <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'white' }}>Howl 🐺</h1>
+      <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text-primary)' }}>Howl 🐺</h1>
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
         {navButton('Discover', 'discover', fetchDiscoverUsers)}
 
@@ -37,9 +37,9 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
             onClick={() => { setView('matches'); fetchMatches(); }}
             style={{
               padding: '10px 20px',
-              background: matchesActive ? 'white' : 'rgba(255,255,255,0.15)',
-              color: matchesActive ? '#667eea' : 'white',
-              border: matchesActive ? 'none' : '1px solid rgba(255,255,255,0.3)',
+              background: matchesActive ? 'var(--bg-card)' : 'rgba(255,255,255,0.08)',
+              color: matchesActive ? 'var(--accent-hover)' : 'var(--text-primary)',
+              border: matchesActive ? 'none' : '1px solid var(--border)',
               borderRadius: '8px',
               cursor: 'pointer',
               fontSize: '14px',
@@ -53,8 +53,8 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
               position: 'absolute',
               top: '-6px',
               right: '-6px',
-              background: '#e53e3e',
-              color: 'white',
+              background: 'var(--gold)',
+              color: '#0D0B1A',
               borderRadius: '10px',
               fontSize: '11px',
               fontWeight: '700',
@@ -72,7 +72,7 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
         {navButton('My Profile', 'profile', null)}
         <button
           onClick={handleLogout}
-          style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+          style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
         >
           Logout
         </button>

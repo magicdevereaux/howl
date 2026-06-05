@@ -3,16 +3,16 @@ import React from 'react';
 export default function LegalPage({ view, setView }) {
   const isPrivacy = view === 'privacy';
 
-  const h = { fontSize: '17px', fontWeight: '700', color: '#553c9a', margin: '0 0 10px' };
-  const p = { color: '#4a5568', fontSize: '15px', lineHeight: '1.7', margin: '0 0 10px' };
-  const ul = { color: '#4a5568', fontSize: '15px', lineHeight: '1.7', paddingLeft: '22px', margin: '0 0 10px' };
+  const h = { fontSize: '17px', fontWeight: '700', color: 'var(--accent-hover)', margin: '0 0 10px' };
+  const p = { color: 'var(--text-surface)', fontSize: '15px', lineHeight: '1.7', margin: '0 0 10px' };
+  const ul = { color: 'var(--text-surface)', fontSize: '15px', lineHeight: '1.7', paddingLeft: '22px', margin: '0 0 10px' };
   const section = { marginBottom: '32px' };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f7fafc' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-main)' }}>
 
       {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '24px 20px 28px' }}>
+      <div style={{ background: 'var(--gradient-main)', padding: '24px 20px 28px' }}>
         <div style={{ maxWidth: '720px', margin: '0 auto' }}>
           <button
             onClick={() => setView('login')}
@@ -20,10 +20,10 @@ export default function LegalPage({ view, setView }) {
           >
             ← Back to Sign In
           </button>
-          <h1 style={{ color: 'white', fontSize: '28px', fontWeight: '800', margin: 0 }}>
+          <h1 style={{ color: 'var(--text-primary)', fontSize: '28px', fontWeight: '800', margin: 0 }}>
             {isPrivacy ? 'Privacy Policy' : 'Terms of Service'}
           </h1>
-          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '13px', marginTop: '6px', marginBottom: 0 }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '6px', marginBottom: 0 }}>
             Howl · Effective May 4, 2026
           </p>
         </div>
@@ -35,7 +35,7 @@ export default function LegalPage({ view, setView }) {
         {isPrivacy ? (
           <>
             <div style={section}>
-              <p style={{ ...p, color: '#718096' }}>
+              <p style={{ ...p, color: 'var(--text-secondary)' }}>
                 This Privacy Policy explains what personal information Howl ("we", "us") collects
                 when you use our dating app, how we use it, and the rights you have over it.
                 By creating an account you agree to this policy.
@@ -130,7 +130,7 @@ export default function LegalPage({ view, setView }) {
         ) : (
           <>
             <div style={section}>
-              <p style={{ ...p, color: '#718096' }}>
+              <p style={{ ...p, color: 'var(--text-secondary)' }}>
                 These Terms of Service govern your use of the Howl dating app. By creating an account
                 you agree to be bound by these terms. Please read them carefully.
               </p>
@@ -173,7 +173,7 @@ export default function LegalPage({ view, setView }) {
 
             <div style={section}>
               <h2 style={h}>6. Privacy</h2>
-              <p style={p}>Your use of Howl is also governed by our <button onClick={() => setView('privacy')} style={{ color: '#667eea', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '15px', padding: 0 }}>Privacy Policy</button>, which is incorporated into these Terms by reference.</p>
+              <p style={p}>Your use of Howl is also governed by our <button onClick={() => setView('privacy')} style={{ color: 'var(--accent-hover)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '15px', padding: 0 }}>Privacy Policy</button>, which is incorporated into these Terms by reference.</p>
             </div>
 
             <div style={section}>
