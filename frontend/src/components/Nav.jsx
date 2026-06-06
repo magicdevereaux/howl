@@ -27,7 +27,7 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
-      <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text-primary)' }}>Howl 🐺</h1>
+      <h1 style={{ fontSize: '36px', fontWeight: '700', color: 'var(--text-primary)', fontFamily: 'var(--font-ceremonial)', letterSpacing: '0.05em' }}>Howl 🐺</h1>
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
         {navButton('Discover', 'discover', fetchDiscoverUsers)}
 

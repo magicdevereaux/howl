@@ -1,7 +1,10 @@
 /* ─────────────────────────────────────────────────────────
-   Howl — Twilight Dark Palette
-   All UI colours are defined here. Import once in main.jsx.
+   Howl — Twilight Dark Palette + Typography
+   Import once in main.jsx.
    ───────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+
 :root {
   /* Primary backgrounds */
   --bg-main:    #0D0B1A;   /* page / app shell */
@@ -17,7 +20,7 @@
   --accent:       #6B3FA0; /* primary buttons / CTAs */
   --accent-hover: #9B59D4; /* button hover / active */
 
-  /* Gold — ONLY for matches, notifications, premium moments */
+  /* Gold — ONLY for matches, notifications, premium moments, spirit animal names */
   --gold:       #C9A84C;
   --gold-hover: #E8C84E;
 
@@ -35,9 +38,23 @@
   --gradient-main:  linear-gradient(135deg, #2D1B69 0%, #0D0B1A 100%);
   --gradient-brand: linear-gradient(135deg, #6B3FA0 0%, #2D1B69 100%);
   --gradient-gold:  linear-gradient(135deg, #C9A84C 0%, #E8C84E 100%);
+
+  /* Typography */
+  --font-display:    'Cormorant Garamond', Georgia, serif; /* headings, usernames, profile headers */
+  --font-ceremonial: 'Cinzel', Georgia, serif;             /* logo, match screens, spirit animal reveal — use sparingly */
+  --font-body:       'Lora', Georgia, serif;               /* bios, messages, descriptions, labels */
 }
 
-/* Global resets for dark-mode inputs */
+/* ── Global font defaults ─────────────────────────────── */
+body, button, input, textarea, select {
+  font-family: var(--font-body);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+}
+
+/* ── Dark-mode input resets ───────────────────────────── */
 input, textarea, select {
   color: var(--text-primary);
   background: var(--bg-input);
@@ -51,7 +68,7 @@ textarea::placeholder {
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-    -webkit-box-shadow: 0 0 0px 1000px #0F0B22 inset !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-    transition: background-color 5000s ease-in-out 0s;
+  -webkit-box-shadow: 0 0 0px 1000px #0F0B22 inset !important;
+  -webkit-text-fill-color: #FFFFFF !important;
+  transition: background-color 5000s ease-in-out 0s;
 }

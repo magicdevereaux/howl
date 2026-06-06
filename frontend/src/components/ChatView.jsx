@@ -164,8 +164,8 @@ export default function ChatView({
           ) : null}
           <div style={{ fontSize: '36px', lineHeight: 1, display: other.avatar_url ? 'none' : 'block' }}>{animalEmoji(other.animal)}</div>
           <div style={{ textAlign: 'left' }}>
-            <p style={{ color: 'var(--text-primary)', fontWeight: '700', fontSize: '17px', margin: 0 }}>{other.name || 'Anonymous'}</p>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '12px', margin: 0 }}>
+            <p style={{ color: 'var(--text-primary)', fontWeight: '500', fontSize: '18px', margin: 0, fontFamily: 'var(--font-display)' }}>{other.name || 'Anonymous'}</p>
+            <p style={{ fontSize: '13px', margin: 0, fontFamily: 'var(--font-display)', fontStyle: 'italic', color: 'var(--gold)', fontWeight: '400' }}>
               {other.animal ? other.animal.charAt(0).toUpperCase() + other.animal.slice(1) : ''}
             </p>
           </div>
@@ -473,7 +473,7 @@ export default function ChatView({
                     {profileData?.name || other.name || 'Anonymous'}
                     {profileData?.age ? <span style={{ fontWeight: '400', fontSize: '18px', opacity: 0.85 }}>, {profileData.age}</span> : null}
                   </h2>
-                  <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', margin: 0 }}>
+                  <p style={{ fontSize: '15px', margin: 0, fontFamily: 'var(--font-display)', fontStyle: 'italic', color: 'var(--gold)', fontWeight: '400' }}>
                     {(() => { const a = profileData?.animal || other.animal; return a ? a.charAt(0).toUpperCase() + a.slice(1) : ''; })()}
                   </p>
                   {profileData?.location && (
@@ -498,7 +498,7 @@ export default function ChatView({
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {profileData.personality_traits.map((t, i) => (
-                      <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '500' }}>
+                      <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '12px', fontSize: '13px', fontFamily: 'var(--font-display)', fontStyle: 'italic', fontWeight: '400' }}>
                         {t}
                       </span>
                     ))}

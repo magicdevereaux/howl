@@ -8,8 +8,8 @@ export default function LoginView({
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
       <div style={{ background: 'var(--bg-card)', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
-        <h1 style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px', textAlign: 'center' }}>Welcome to Howl 🐺</h1>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', textAlign: 'center' }}>Sign in to find your spirit animal</p>
+        <h1 style={{ fontSize: '34px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px', textAlign: 'center', fontFamily: 'var(--font-ceremonial)', letterSpacing: '0.04em' }}>Welcome to Howl 🐺</h1>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', textAlign: 'center', fontStyle: 'italic' }}>Sign in to find your spirit animal</p>
         {error && <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '12px', marginBottom: '20px', color: '#c53030' }}>{error}</div>}
         <form onSubmit={handleLogin}>
           <div style={{ marginBottom: '20px' }}>

@@ -67,10 +67,10 @@ export default function MatchesView({
                     ) : null}
                     <span style={{ display: m.other_user.avatar_url ? 'none' : 'block' }}>{animalEmoji(m.other_user.animal)}</span>
                   </div>
-                  <h3 style={{ color: '#0D0B1A', fontSize: '17px', fontWeight: '700', margin: 0 }}>
+                  <h3 style={{ color: '#0D0B1A', fontSize: '19px', fontWeight: '500', margin: 0, fontFamily: 'var(--font-display)' }}>
                     {m.other_user.name || 'Anonymous'}
                   </h3>
-                  <p style={{ color: 'rgba(13,11,26,0.7)', fontSize: '13px', margin: '4px 0 0' }}>
+                  <p style={{ fontSize: '14px', margin: '4px 0 0', fontFamily: 'var(--font-display)', fontStyle: 'italic', color: 'rgba(13,11,26,0.75)', fontWeight: '400' }}>
                     {m.other_user.animal ? m.other_user.animal.charAt(0).toUpperCase() + m.other_user.animal.slice(1) : ''}
                   </p>
                 </div>

@@ -184,10 +184,10 @@ export default function DiscoverView({
                 <div style={{ fontSize: '88px', lineHeight: 1, marginBottom: '16px', display: currentCard.avatar_url ? 'none' : 'block' }}>
                   {animalEmoji(currentCard.animal)}
                 </div>
-                <h2 style={{ color: 'white', fontSize: '26px', fontWeight: '700', margin: '0 0 4px' }}>
+                <h2 style={{ color: 'white', fontSize: '28px', fontWeight: '500', margin: '0 0 4px', fontFamily: 'var(--font-display)' }}>
                   {currentCard.name || 'Anonymous'}
                 </h2>
-                <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '16px', margin: 0 }}>
+                <p style={{ fontSize: '17px', margin: 0, fontFamily: 'var(--font-display)', fontStyle: 'italic', color: 'var(--gold)', fontWeight: '400' }}>
                   {currentCard.animal ? currentCard.animal.charAt(0).toUpperCase() + currentCard.animal.slice(1) : ''}
                 </p>
                 {currentCard.location && (
@@ -206,7 +206,7 @@ export default function DiscoverView({
                 {currentCard.personality_traits?.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
                     {currentCard.personality_traits.map((trait, i) => (
-                      <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '12px', fontSize: '13px', fontWeight: '500' }}>
+                      <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '12px', fontSize: '14px', fontFamily: 'var(--font-display)', fontStyle: 'italic', fontWeight: '400' }}>
                         {trait}
                       </span>
                     ))}
@@ -310,7 +310,7 @@ export default function DiscoverView({
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: 'var(--bg-card)', borderRadius: '24px', padding: '48px 40px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.6)' }}>
             <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎉</div>
-            <h2 style={{ fontSize: '28px', fontWeight: '800', color: 'var(--gold)', marginBottom: '8px' }}>It's a Match!</h2>
+            <h2 style={{ fontSize: '32px', fontWeight: '700', color: 'var(--gold)', marginBottom: '8px', fontFamily: 'var(--font-ceremonial)', letterSpacing: '0.05em' }}>It's a Match!</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '15px', marginBottom: '24px' }}>
               You and {matchPopup.other_user?.name || 'someone'} liked each other!
             </p>

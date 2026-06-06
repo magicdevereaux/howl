@@ -117,10 +117,17 @@ export default function ProfileView({
             )}
           </div>
 
-          <h2 style={{ fontSize: '24px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {getStatusText()}
+          <h2 style={{ fontSize: '26px', fontWeight: '400', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontFamily: 'var(--font-display)', flexWrap: 'wrap' }}>
+            {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal ? (
+              <>
+                Your spirit animal:{' '}
+                <em style={{ fontStyle: 'italic', color: 'var(--gold)', fontWeight: '500' }}>
+                  {avatarStatus.animal.charAt(0).toUpperCase() + avatarStatus.animal.slice(1)}
+                </em>
+              </>
+            ) : getStatusText()}
             {avatarStatus?.avatar_status === 'ready' && avatarStatus?.animal && (
-              <button onClick={handleCopyAnimal} style={{ padding: '4px 10px', background: copied ? '#48bb78' : 'var(--bg-hover)', color: copied ? 'white' : 'var(--text-secondary)', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}>
+              <button onClick={handleCopyAnimal} style={{ padding: '4px 10px', background: copied ? '#48bb78' : 'var(--bg-hover)', color: copied ? 'white' : 'var(--text-secondary)', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer', fontFamily: 'var(--font-body)' }}>
                 {copied ? 'Copied!' : '📋 Copy'}
               </button>
             )}
@@ -131,7 +138,7 @@ export default function ProfileView({
               {avatarStatus?.personality_traits?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginBottom: '16px' }}>
                   {avatarStatus.personality_traits.map((trait, i) => (
-                    <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '16px', fontSize: '12px', fontWeight: '500' }}>
+                    <span key={i} style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', padding: '4px 12px', borderRadius: '16px', fontSize: '13px', fontFamily: 'var(--font-display)', fontStyle: 'italic', fontWeight: '400' }}>
                       {trait}
                     </span>
                   ))}
