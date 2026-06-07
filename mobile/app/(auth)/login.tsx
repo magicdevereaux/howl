@@ -41,7 +41,7 @@ export default function LoginScreen() {
       setError(err);
       setLoading(false);
     } else {
-      router.replace('/(app)/discover');
+      router.replace('/(app)/profile');
     }
   };
 

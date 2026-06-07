@@ -4,15 +4,21 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { api, setUnauthenticatedHandler } from '../api/client';
 import { clearTokens, getAccessToken, saveTokens } from './storage';
 
-interface User {
+export interface User {
   id: number;
   email: string;
   name: string | null;
+  age: number | null;
+  location: string | null;
+  bio: string | null;
   animal: string | null;
   avatar_url: string | null;
   avatar_status: string;
-  bio: string | null;
+  personality_traits: string[] | null;
+  avatar_description: string | null;
   is_email_verified: boolean;
+  is_premium: boolean;
+  profile_needs_regen: boolean;
 }
 
 interface AuthState {
@@ -23,6 +29,8 @@ interface AuthState {
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<string | null>;
   logout: () => Promise<void>;
+  updateUser: (user: User) => void;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -30,7 +38,6 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, loading: true });
 
-  // On mount: check if we have a stored token and fetch the current user.
   useEffect(() => {
     (async () => {
       const token = await getAccessToken();
@@ -39,15 +46,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       const res = await api<User>('/api/auth/me');
-      if (res.ok) {
-        setState({ user: res.data, loading: false });
-      } else {
-        setState({ user: null, loading: false });
-      }
+      setState({ user: res.ok ? res.data : null, loading: false });
     })();
   }, []);
 
-  // Wire the unauthenticated handler so the API client can force-logout.
   useEffect(() => {
     setUnauthenticatedHandler(() => {
       setState({ user: null, loading: false });
@@ -72,8 +74,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace('/(auth)/login');
   }, []);
 
+  const updateUser = useCallback((user: User) => {
+    setState((prev) => ({ ...prev, user }));
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const res = await api<User>('/api/auth/me');
+    if (res.ok) setState((prev) => ({ ...prev, user: res.data }));
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ ...state, login, logout }}>
+    <AuthContext.Provider value={{ ...state, login, logout, updateUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

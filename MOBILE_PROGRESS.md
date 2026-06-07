@@ -33,17 +33,6 @@ React Native / Expo build of the Howl dating app. Tracks session-by-session prog
 - `app/(auth)/login.tsx` — Login screen with email/password inputs, error display, wired to `AuthContext.login`.
 - `app/(app)/_layout.tsx` — Protected layout skeleton; redirects to login if no session.
 
-### To run
-```bash
-cd mobile
-npm install
-npx expo start
-```
-
-> **Android emulator:** The default `API_URL` points to `localhost:8001`. Android emulators can't reach the host machine at `localhost` — set `EXPO_PUBLIC_API_URL=http://10.0.2.2:8001` in a `.env.local` file inside `mobile/` before starting.
-
-> **Physical device:** Set `EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8001`.
-
 ### Architecture decisions
 - **Separate mobile auth endpoints** rather than patching cookie endpoints — keeps web flow unchanged and makes token handling explicit for mobile.
 - **SecureStore** over AsyncStorage — encrypted at rest, the right choice for auth tokens.
@@ -51,9 +40,54 @@ npx expo start
 
 ---
 
-## Session 2 — Planned
+## Session 2 — Register + Profile + Avatar ✅
 
-- Profile / spirit animal reveal screen
-- Discover stack (swipe cards)
-- Bottom tab navigator
-- Avatar image display
+**Goal:** Register screen, profile view/edit, spirit animal avatar display from R2.
+
+### Completed
+
+#### Shared infrastructure
+- `src/theme.ts` — Single source of truth for all palette constants; imported by every screen instead of duplicating hex values.
+- `src/utils/avatar.ts` — `resolveAvatarUrl()` handles both full R2 `https://` URLs and server-relative paths; `animalEmoji()` maps animal names to emoji; `capitalise()` helper.
+- `src/auth/AuthContext.tsx` — Extended with `updateUser(user)` (direct state update after profile save) and `refreshUser()` (re-fetches `/api/auth/me`). `User` interface exported for use across screens.
+
+#### Screens
+- `app/(auth)/register.tsx` — Full register screen: email + password + confirm, client-side validation (length ≥ 8, passwords match), calls `POST /api/mobile/auth/register`, saves tokens, redirects to profile.
+- `app/(app)/profile.tsx` — Profile screen with:
+  - **Avatar hero section:** circular `Image` from R2 URL with emoji fallback on error; polls `GET /api/avatar/status` every 3 s while status is `pending`/`generating`; stops polling when `ready` or `failed`.
+  - **Spirit animal reveal:** "Your spirit animal" label + animal name in gold italic (matching web design); personality trait pills; avatar description text.
+  - **Profile card:** read-only view (name, age, location, bio) with Edit button.
+  - **Edit mode:** draft state pattern, PATCH `/api/profile/me`, calls `updateUser()` on success, triggers avatar status refetch in case bio change queued a regen.
+  - **Sign out** button.
+
+#### Navigation updates
+- `index.tsx` and `login.tsx` redirect target changed from `/(app)/discover` (not yet built) to `/(app)/profile`.
+
+### Architecture decisions
+- **No bottom tabs yet** — only one app screen exists; tabs will be introduced in Session 3 when discover is added.
+- **Avatar polling in the screen** — `useEffect` + `setInterval` pattern, cleaned up on unmount. The profile screen is the natural owner of this state for now; can be lifted to a context in a later session if needed.
+- **Draft state for edits** — mirrors the web approach: changes are local until Save, Cancel resets without an API call.
+- **`resolveAvatarUrl` in a shared util** — both the profile screen and future discover/chat screens need this logic; centralised from day one.
+
+---
+
+## Session 3 — Planned
+
+- Bottom tab navigator (Profile + Discover tabs)
+- Discover screen with swipe stack (Like / Pass)
+- Swipe gesture handling (react-native-gesture-handler / Reanimated)
+- Match popup on mutual like
+- Custom fonts (Cinzel, Cormorant Garamond via expo-font) to match web typography
+
+---
+
+## To run
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+> **Android emulator:** Set `EXPO_PUBLIC_API_URL=http://10.0.2.2:8001` in `mobile/.env.local`.
+> **Physical device:** Set `EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8001`.
