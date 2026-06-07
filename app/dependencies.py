@@ -11,7 +11,12 @@ def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
 ) -> User:
+    # Cookie-based auth (web) takes priority; Bearer token is the mobile fallback.
     token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

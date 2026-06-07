@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Howl",
+    "slug": "howl-mobile",
+    "version": "1.0.0",
+    "scheme": "howl",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"],
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
