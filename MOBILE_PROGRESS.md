@@ -22,21 +22,15 @@ React Native / Expo build of the Howl dating app. Tracks session-by-session prog
 #### Mobile project (`mobile/`)
 - Expo SDK 53 + Expo Router 4 scaffolded with TypeScript.
 - `src/auth/storage.ts` — SecureStore wrappers for `access_token` / `refresh_token`.
-- `src/api/client.ts` — Authenticated fetch wrapper:
-  - Attaches `Authorization: Bearer` on every request.
-  - On 401: attempts one silent token refresh, retries, then force-logs out.
-  - Exposes `setUnauthenticatedHandler` so AuthContext can redirect on expiry.
-- `src/auth/AuthContext.tsx` — React context with `login`, `logout`, `user`, `loading`. On mount, checks SecureStore for an existing token and fetches `/api/auth/me` to restore session.
+- `src/api/client.ts` — Authenticated fetch wrapper with silent token refresh on 401.
+- `src/auth/AuthContext.tsx` — React context with `login`, `logout`, `user`, `loading`.
 - `app/_layout.tsx` — Root layout wrapping all screens in `AuthProvider`.
-- `app/index.tsx` — Splash redirect: authenticated → `/(app)/discover`, guest → `/(auth)/login`.
-- `app/(auth)/_layout.tsx` — Auth stack layout.
-- `app/(auth)/login.tsx` — Login screen with email/password inputs, error display, wired to `AuthContext.login`.
-- `app/(app)/_layout.tsx` — Protected layout skeleton; redirects to login if no session.
+- `app/index.tsx` — Splash redirect.
+- `app/(auth)/login.tsx` — Login screen wired to backend.
+- `app/(app)/_layout.tsx` — Protected layout skeleton.
 
 ### Architecture decisions
-- **Separate mobile auth endpoints** rather than patching cookie endpoints — keeps web flow unchanged and makes token handling explicit for mobile.
-- **SecureStore** over AsyncStorage — encrypted at rest, the right choice for auth tokens.
-- **Bearer token on every request** — the `api()` client handles this transparently; individual screens never touch tokens directly.
+- Separate mobile auth endpoints, SecureStore over AsyncStorage, Bearer token on every request.
 
 ---
 
@@ -45,39 +39,64 @@ React Native / Expo build of the Howl dating app. Tracks session-by-session prog
 **Goal:** Register screen, profile view/edit, spirit animal avatar display from R2.
 
 ### Completed
-
-#### Shared infrastructure
-- `src/theme.ts` — Single source of truth for all palette constants; imported by every screen instead of duplicating hex values.
-- `src/utils/avatar.ts` — `resolveAvatarUrl()` handles both full R2 `https://` URLs and server-relative paths; `animalEmoji()` maps animal names to emoji; `capitalise()` helper.
-- `src/auth/AuthContext.tsx` — Extended with `updateUser(user)` (direct state update after profile save) and `refreshUser()` (re-fetches `/api/auth/me`). `User` interface exported for use across screens.
-
-#### Screens
-- `app/(auth)/register.tsx` — Full register screen: email + password + confirm, client-side validation (length ≥ 8, passwords match), calls `POST /api/mobile/auth/register`, saves tokens, redirects to profile.
-- `app/(app)/profile.tsx` — Profile screen with:
-  - **Avatar hero section:** circular `Image` from R2 URL with emoji fallback on error; polls `GET /api/avatar/status` every 3 s while status is `pending`/`generating`; stops polling when `ready` or `failed`.
-  - **Spirit animal reveal:** "Your spirit animal" label + animal name in gold italic (matching web design); personality trait pills; avatar description text.
-  - **Profile card:** read-only view (name, age, location, bio) with Edit button.
-  - **Edit mode:** draft state pattern, PATCH `/api/profile/me`, calls `updateUser()` on success, triggers avatar status refetch in case bio change queued a regen.
-  - **Sign out** button.
-
-#### Navigation updates
-- `index.tsx` and `login.tsx` redirect target changed from `/(app)/discover` (not yet built) to `/(app)/profile`.
+- `src/theme.ts` — Single palette source.
+- `src/utils/avatar.ts` — R2/relative URL resolver, emoji map, capitalise helper.
+- `src/auth/AuthContext.tsx` — Extended with `updateUser`, `refreshUser`, exported `User` interface.
+- `app/(auth)/register.tsx` — Full register flow.
+- `app/(app)/profile.tsx` — Profile screen: avatar hero (R2 + emoji fallback, polling), spirit animal reveal, personality traits, read/edit mode, sign out.
 
 ### Architecture decisions
-- **No bottom tabs yet** — only one app screen exists; tabs will be introduced in Session 3 when discover is added.
-- **Avatar polling in the screen** — `useEffect` + `setInterval` pattern, cleaned up on unmount. The profile screen is the natural owner of this state for now; can be lifted to a context in a later session if needed.
-- **Draft state for edits** — mirrors the web approach: changes are local until Save, Cancel resets without an API call.
-- **`resolveAvatarUrl` in a shared util** — both the profile screen and future discover/chat screens need this logic; centralised from day one.
+- No tabs yet (only one app screen). Draft state for edits. `resolveAvatarUrl` centralised in shared util.
 
 ---
 
-## Session 3 — Planned
+## Session 3 — Tabs + Discover + Swipe Gestures ✅
 
-- Bottom tab navigator (Profile + Discover tabs)
-- Discover screen with swipe stack (Like / Pass)
-- Swipe gesture handling (react-native-gesture-handler / Reanimated)
-- Match popup on mutual like
-- Custom fonts (Cinzel, Cormorant Garamond via expo-font) to match web typography
+**Goal:** Bottom tab navigation, discover swipe screen with gesture handling.
+
+### Completed
+
+#### Config updates
+- `babel.config.js` — added `react-native-reanimated/plugin` (required for Reanimated to work).
+- `package.json` — added `react-native-gesture-handler ~2.20.0`, `react-native-reanimated ~3.16.0`, `@expo/vector-icons ^14.0.0`.
+- `app/_layout.tsx` — wrapped entire app in `GestureHandlerRootView` (required for gesture-handler).
+
+#### Navigation
+- `app/(app)/_layout.tsx` — Stack → **Tabs** (Discover / Matches / Profile). Tab bar styled to match dark twilight palette (`bgNav` background, `accentHover` active tint, gold unread badge). Uses `@expo/vector-icons` Ionicons; active tab shows solid icon, inactive shows outline.
+- `index.tsx` and `login.tsx` — redirect target restored to `/(app)/discover`.
+
+#### Screens
+- `app/(app)/discover.tsx` — Full swipe screen:
+  - Fetches `GET /api/users/discover` on mount; shows loading, empty-state (with Refresh), and card states.
+  - **Card stack:** active card rendered in front, next card shown at 96% scale / +12px offset behind it for depth.
+  - **Swipe gestures:** `GestureDetector` + `Gesture.Pan()` from gesture-handler. `translateX` / `translateY` via Reanimated `useSharedValue`.
+  - **Threshold:** commit at ±100 px; spring the card to ±600 px off-screen, then call `onSwipe` via `runOnJS`.
+  - **Snap-back:** releases below threshold spring back to origin with a different spring config.
+  - **Visual feedback:** LIKE label (gold, right side) and PASS label (red, left side) interpolate opacity 0→1 as the card crosses the threshold. Card rotates ±18° linearly with drag distance.
+  - **Tap buttons:** ✕ (pass) and ❤️ (like) as accessible alternatives to gesture.
+  - **Match popup:** `Modal` with gold accent — "It's a Match!", both spirit animal emojis, "Keep Swiping" button. Shown when `POST /api/swipes` returns a match.
+  - **Swipe limit:** 429 from API shown as an error banner above the buttons.
+- `app/(app)/matches.tsx` — Matches list:
+  - Fetches `GET /api/users/matches`, FlatList of match rows.
+  - Each row: avatar (R2 or emoji), name, animal name in gold italic, last message preview or matched date.
+  - Unread badge (gold) on avatar; left gold border on rows with unread messages.
+  - Chat tap → coming in Session 4.
+
+### Architecture decisions
+- **`topUserIdShared` (Reanimated shared value):** The pan gesture `.onEnd` runs on the UI thread; it can't read React state directly. Storing the current top user's ID in a `useSharedValue` lets the worklet read it safely and pass it to `runOnJS(onSwipe)`.
+- **Ref pattern avoided:** a shared value is cleaner than a ref for data read from a Reanimated worklet.
+- **Optimistic advance:** stack shifts immediately on swipe, then API call happens. If the API fails, the error is surfaced but the card doesn't reappear (keeps UX snappy; consistent with web behaviour).
+- **No Undo yet:** undo swipe (`DELETE /api/swipes/last`) is a Session 4 feature.
+
+---
+
+## Session 4 — Planned
+
+- Chat screen (WebSocket messaging, message bubbles, send input)
+- Tap match row in Matches → open chat
+- Undo last swipe button on discover
+- Typing indicators in chat
+- Push notification setup (Expo Notifications)
 
 ---
 
