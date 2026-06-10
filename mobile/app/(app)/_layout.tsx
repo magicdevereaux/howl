@@ -57,6 +57,14 @@ export default function AppLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="person" focused={focused} />,
         }}
       />
+      {/* Chat is a pushed screen, not a tab — hide from bar and tab indicator */}
+      <Tabs.Screen
+        name="chat/[matchId]"
+        options={{
+          href: null,
+          tabBarStyle: { display: 'none' },
+        }}
+      />
     </Tabs>
   );
 }

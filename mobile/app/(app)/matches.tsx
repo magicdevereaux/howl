@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -103,8 +104,23 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
   const resolvedUrl = resolveAvatarUrl(m.other_user.avatar_url);
   const hasUnread = m.unread_count > 0;
 
+  const openChat = () => {
+    router.push({
+      pathname: '/(app)/chat/[matchId]',
+      params: {
+        matchId: m.id,
+        name: m.other_user.name ?? '',
+        animal: m.other_user.animal ?? '',
+        otherUserId: m.other_user.id,
+      },
+    });
+  };
+
   return (
-    <View style={[rowStyles.row, hasUnread && rowStyles.rowUnread]}>
+    <Pressable
+      style={({ pressed }) => [rowStyles.row, hasUnread && rowStyles.rowUnread, pressed && rowStyles.rowPressed]}
+      onPress={openChat}
+    >
       {/* Avatar */}
       <View style={rowStyles.avatarWrap}>
         {resolvedUrl && !imgError ? (
@@ -147,9 +163,8 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
         )}
       </View>
 
-      {/* Chat coming in Session 4 */}
       <Text style={rowStyles.chevron}>›</Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -179,6 +194,7 @@ const rowStyles = StyleSheet.create({
     gap: 12,
   },
   rowUnread: { borderLeftWidth: 3, borderLeftColor: C.gold },
+  rowPressed: { opacity: 0.75 },
   avatarWrap: { position: 'relative' },
   avatar:     { width: 54, height: 54, borderRadius: 27 },
   avatarFallback: {

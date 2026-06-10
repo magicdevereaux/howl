@@ -159,8 +159,8 @@ async def chat_websocket(
     is_mine is computed per-recipient server-side so each client receives
     the correct value without any client-side state lookup.
     """
-    # ── Authenticate via httpOnly cookie ─────────────────────────────────────
-    token = ws.cookies.get("access_token")
+    # ── Authenticate via httpOnly cookie (web) or ?token= query param (mobile) ─
+    token = ws.cookies.get("access_token") or ws.query_params.get("token")
     if not token:
         await ws.accept()
         await ws.close(code=4001)
