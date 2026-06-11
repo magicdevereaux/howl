@@ -92,6 +92,24 @@ def test_register_missing_fields(client):
     assert res.status_code == 422
 
 
+def test_register_normalizes_email_to_lowercase(client):
+    res = client.post(
+        "/api/auth/register",
+        json={"email": "MixedCase@Howl.App", "password": "securepassword"},
+    )
+    assert res.status_code == 201
+    assert res.json()["user"]["email"] == "mixedcase@howl.app"
+
+
+def test_register_duplicate_email_case_insensitive(client, test_user):
+    res = client.post(
+        "/api/auth/register",
+        json={"email": test_user.email.upper(), "password": "securepassword"},
+    )
+    assert res.status_code == 409
+    assert "already registered" in res.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # POST /api/auth/login
 # ---------------------------------------------------------------------------
@@ -124,6 +142,25 @@ def test_login_wrong_password(client, test_user):
 def test_login_unknown_email(client):
     res = client.post("/api/auth/login", json={"email": "ghost@howl.app", "password": "securepassword"})
     assert res.status_code == 401
+
+
+def test_login_case_insensitive_email(client, test_user):
+    res = client.post(
+        "/api/auth/login",
+        json={"email": test_user.email.upper(), "password": "hunter2secure"},
+    )
+    assert res.status_code == 200
+    assert res.json()["user"]["email"] == test_user.email
+
+
+def test_login_mixed_case_email(client, test_user):
+    mixed = "".join(c.upper() if i % 2 == 0 else c for i, c in enumerate(test_user.email))
+    res = client.post(
+        "/api/auth/login",
+        json={"email": mixed, "password": "hunter2secure"},
+    )
+    assert res.status_code == 200
+    assert res.json()["user"]["email"] == test_user.email
 
 
 # ---------------------------------------------------------------------------
