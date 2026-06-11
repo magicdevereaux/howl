@@ -1,10 +1,11 @@
-import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Image,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   View,
@@ -12,6 +13,7 @@ import {
 
 import { api } from '../../src/api/client';
 import { useAuth } from '../../src/auth/AuthContext';
+import { useUnread } from '../../src/contexts/UnreadContext';
 import { colors as C } from '../../src/theme';
 import { animalEmoji, capitalise, resolveAvatarUrl } from '../../src/utils/avatar';
 
@@ -37,21 +39,40 @@ interface Match {
 }
 
 export default function MatchesScreen() {
-  const { user } = useAuth();
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { user }           = useAuth();
+  const { setTotalUnread } = useUnread();
 
-  const fetchMatches = useCallback(async () => {
-    setLoading(true);
+  const [matches,  setMatches]  = useState<Match[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  const fetchMatches = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     const res = await api<Match[]>('/api/users/matches');
-    setLoading(false);
-    if (res.ok) setMatches(res.data);
-    else setError(res.error);
-  }, []);
+    if (!silent) setLoading(false);
+    if (res.ok) {
+      setMatches(res.data);
+      // Keep the tab badge in sync
+      setTotalUnread(res.data.reduce((sum, m) => sum + m.unread_count, 0));
+    } else {
+      setError(res.error);
+    }
+  }, [setTotalUnread]);
 
-  useEffect(() => { fetchMatches(); }, [fetchMatches]);
+  // Refetch whenever this tab comes into focus (e.g. returning from chat)
+  useFocusEffect(
+    useCallback(() => {
+      fetchMatches(matches.length > 0); // silent if we already have data
+    }, [fetchMatches]),
+  );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchMatches(true);
+    setRefreshing(false);
+  };
 
   if (loading) {
     return (
@@ -65,7 +86,7 @@ export default function MatchesScreen() {
     return (
       <View style={styles.center}>
         <Text style={styles.errorText}>⚠️ {error}</Text>
-        <Pressable style={styles.retryBtn} onPress={fetchMatches}>
+        <Pressable style={styles.retryBtn} onPress={() => fetchMatches()}>
           <Text style={styles.retryBtnText}>Retry</Text>
         </Pressable>
       </View>
@@ -80,16 +101,24 @@ export default function MatchesScreen() {
       </View>
 
       {matches.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyEmoji}>❤️</Text>
-          <Text style={styles.emptyTitle}>No matches yet</Text>
-          <Text style={styles.emptySub}>Go discover some spirit animals!</Text>
-        </View>
+        <FlatList
+          data={[]}
+          renderItem={null}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accentHover} />}
+          ListEmptyComponent={(
+            <View style={styles.empty}>
+              <Text style={styles.emptyEmoji}>❤️</Text>
+              <Text style={styles.emptyTitle}>No matches yet</Text>
+              <Text style={styles.emptySub}>Go discover some spirit animals!</Text>
+            </View>
+          )}
+        />
       ) : (
         <FlatList
           data={matches}
           keyExtractor={(m) => String(m.id)}
           contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accentHover} />}
           renderItem={({ item: m }) => (
             <MatchRow match={m} myId={user?.id ?? 0} />
           )}
@@ -102,15 +131,15 @@ export default function MatchesScreen() {
 function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
   const [imgError, setImgError] = useState(false);
   const resolvedUrl = resolveAvatarUrl(m.other_user.avatar_url);
-  const hasUnread = m.unread_count > 0;
+  const hasUnread   = m.unread_count > 0;
 
   const openChat = () => {
     router.push({
       pathname: '/(app)/chat/[matchId]',
       params: {
-        matchId: m.id,
-        name: m.other_user.name ?? '',
-        animal: m.other_user.animal ?? '',
+        matchId:     m.id,
+        name:        m.other_user.name    ?? '',
+        animal:      m.other_user.animal  ?? '',
         otherUserId: m.other_user.id,
       },
     });
@@ -124,11 +153,7 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
       {/* Avatar */}
       <View style={rowStyles.avatarWrap}>
         {resolvedUrl && !imgError ? (
-          <Image
-            source={{ uri: resolvedUrl }}
-            style={rowStyles.avatar}
-            onError={() => setImgError(true)}
-          />
+          <Image source={{ uri: resolvedUrl }} style={rowStyles.avatar} onError={() => setImgError(true)} />
         ) : (
           <View style={rowStyles.avatarFallback}>
             <Text style={rowStyles.avatarEmoji}>{animalEmoji(m.other_user.animal)}</Text>
@@ -136,9 +161,7 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
         )}
         {hasUnread && (
           <View style={rowStyles.badge}>
-            <Text style={rowStyles.badgeText}>
-              {m.unread_count > 9 ? '9+' : String(m.unread_count)}
-            </Text>
+            <Text style={rowStyles.badgeText}>{m.unread_count > 9 ? '9+' : String(m.unread_count)}</Text>
           </View>
         )}
       </View>
@@ -147,9 +170,7 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
       <View style={rowStyles.body}>
         <View style={rowStyles.nameRow}>
           <Text style={rowStyles.name}>{m.other_user.name || 'Anonymous'}</Text>
-          {m.other_user.animal && (
-            <Text style={rowStyles.animal}>{capitalise(m.other_user.animal)}</Text>
-          )}
+          {m.other_user.animal && <Text style={rowStyles.animal}>{capitalise(m.other_user.animal)}</Text>}
         </View>
         {m.last_message ? (
           <Text style={rowStyles.preview} numberOfLines={1}>
@@ -157,9 +178,7 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
             {m.last_message.content ?? 'Message deleted'}
           </Text>
         ) : (
-          <Text style={rowStyles.newMatch}>
-            Matched {new Date(m.matched_at).toLocaleDateString()}
-          </Text>
+          <Text style={rowStyles.newMatch}>Matched {new Date(m.matched_at).toLocaleDateString()}</Text>
         )}
       </View>
 
@@ -175,6 +194,7 @@ const styles = StyleSheet.create({
   headerSub:  { fontSize: 13, color: C.textSec, marginTop: 4 },
   list:       { paddingHorizontal: 16, paddingBottom: 24 },
   center:     { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  empty:      { alignItems: 'center', paddingTop: 80 },
   emptyEmoji: { fontSize: 48, marginBottom: 12 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: C.text, marginBottom: 6 },
   emptySub:   { fontSize: 14, color: C.textSec, textAlign: 'center' },
@@ -185,30 +205,24 @@ const styles = StyleSheet.create({
 
 const rowStyles = StyleSheet.create({
   row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.bgCard,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    gap: 12,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.bgCard, borderRadius: 14,
+    padding: 14, marginBottom: 10, gap: 12,
   },
-  rowUnread: { borderLeftWidth: 3, borderLeftColor: C.gold },
+  rowUnread:  { borderLeftWidth: 3, borderLeftColor: C.gold },
   rowPressed: { opacity: 0.75 },
   avatarWrap: { position: 'relative' },
   avatar:     { width: 54, height: 54, borderRadius: 27 },
   avatarFallback: {
     width: 54, height: 54, borderRadius: 27,
-    backgroundColor: C.bgHover,
-    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: C.bgHover, alignItems: 'center', justifyContent: 'center',
   },
   avatarEmoji:  { fontSize: 28, lineHeight: 34 },
   badge: {
     position: 'absolute', top: -4, right: -4,
     backgroundColor: C.gold, borderRadius: 10,
     minWidth: 18, height: 18,
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 4,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
   },
   badgeText: { color: '#0D0B1A', fontSize: 10, fontWeight: '700' },
   body:     { flex: 1, minWidth: 0 },

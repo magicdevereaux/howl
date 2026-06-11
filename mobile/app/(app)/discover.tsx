@@ -59,6 +59,8 @@ export default function DiscoverScreen() {
   const [swipeError, setSwipeError] = useState<string | null>(null);
   const [matchPopup, setMatchPopup] = useState<MatchInfo | null>(null);
   const [swiping, setSwiping] = useState(false);
+  const [lastSwiped, setLastSwiped] = useState<DiscoverUser | null>(null);
+  const [undoing, setUndoing] = useState(false);
 
   // Shared animation values
   const translateX = useSharedValue(0);
@@ -90,9 +92,14 @@ export default function DiscoverScreen() {
     if (!userId) return;
     setSwiping(true);
     setSwipeError(null);
+    setLastSwiped(null); // clear previous undo opportunity on each new swipe
 
-    // Advance the stack immediately so the next card is visible
-    setUsers((prev) => prev.slice(1));
+    // Capture the top user before advancing for undo
+    let swipedUser: DiscoverUser | null = null;
+    setUsers((prev) => {
+      swipedUser = prev[0] ?? null;
+      return prev.slice(1);
+    });
     translateX.value = 0;
     translateY.value = 0;
 
@@ -113,7 +120,18 @@ export default function DiscoverScreen() {
     }
 
     if (res.data?.match) setMatchPopup(res.data.match);
+    else if (swipedUser) setLastSwiped(swipedUser); // only offer undo when no match
   }, []);
+
+  const handleUndo = useCallback(async () => {
+    if (!lastSwiped || undoing) return;
+    setUndoing(true);
+    const res = await api('/api/swipes/last', { method: 'DELETE' });
+    setUndoing(false);
+    if (!res.ok) return;
+    setUsers((prev) => [lastSwiped, ...prev]);
+    setLastSwiped(null);
+  }, [lastSwiped, undoing]);
 
   // ── Gesture ───────────────────────────────────────────────────────────────
 
@@ -248,6 +266,18 @@ export default function DiscoverScreen() {
             >
               <Text style={styles.btnEmoji}>❤️</Text>
             </Pressable>
+          </View>
+
+          {/* Undo last swipe */}
+          <View style={styles.undoRow}>
+            {lastSwiped && !swiping ? (
+              <Pressable onPress={handleUndo} disabled={undoing} style={styles.undoBtn}>
+                <Text style={styles.undoText}>{undoing ? '…' : '↩ Undo'}</Text>
+              </Pressable>
+            ) : (
+              // Reserve space so the button buttons don't shift
+              <View style={styles.undoPlaceholder} />
+            )}
           </View>
         </View>
       )}
@@ -477,4 +507,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
   },
   matchBtnText: { color: '#0D0B1A', fontSize: 16, fontWeight: '700' },
+
+  // Undo
+  undoRow:         { position: 'absolute', bottom: -4, alignItems: 'center', width: '100%' },
+  undoBtn:         { paddingVertical: 8, paddingHorizontal: 20 },
+  undoText:        { color: C.textSec, fontSize: 13, fontWeight: '500', textDecorationLine: 'underline' },
+  undoPlaceholder: { height: 32 },
 });

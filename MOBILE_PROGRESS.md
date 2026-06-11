@@ -5,84 +5,64 @@ React Native / Expo build of the Howl dating app. Tracks session-by-session prog
 ---
 
 ## Session 1 — Foundation ✅
-
-**Goal:** Scaffold the project, wire auth, get a login screen connecting to the backend.
-
-### Completed
-- Bearer-token mobile auth endpoints, SecureStore storage, authenticated API client with silent refresh, AuthContext, login screen.
-
-### Architecture decisions
-- Separate mobile auth endpoints, SecureStore over AsyncStorage, Bearer token on every request.
-
----
+Bearer-token mobile auth endpoints, SecureStore storage, authenticated API client with silent refresh, AuthContext, login screen.
 
 ## Session 2 — Register + Profile + Avatar ✅
-
-**Goal:** Register screen, profile view/edit, spirit animal avatar display from R2.
-
-### Completed
-- `src/theme.ts` — palette constants. `src/utils/avatar.ts` — URL resolver + emoji map.
-- `src/auth/AuthContext.tsx` — extended with `updateUser`, `refreshUser`.
-- Register screen, profile screen (avatar hero with R2/emoji, spirit animal reveal, edit mode).
-
----
+`src/theme.ts`, `src/utils/avatar.ts`, extended AuthContext, register screen, profile screen (avatar hero, spirit animal reveal, edit mode).
 
 ## Session 3 — Tabs + Discover + Swipe Gestures ✅
-
-**Goal:** Bottom tab navigation, discover swipe screen with gesture handling.
-
-### Completed
-- Reanimated + gesture-handler wired; GestureHandlerRootView in root layout.
-- Tabs navigator (Discover / Matches / Profile) with twilight tab bar.
-- Discover screen: swipe gestures, card stack depth, LIKE/PASS labels, match popup, swipe limit handling.
-- Matches screen: FlatList with avatars, gold unread badges, last message previews.
-
----
+Reanimated + gesture-handler, Tabs navigator, discover screen (swipe gestures, card stack, LIKE/PASS labels, match popup), matches list.
 
 ## Session 4 — Chat with WebSocket ✅
-
-**Goal:** Chat screen with real-time WebSocket messaging.
-
-### Completed
-
-#### Backend change
-- `app/api/chat.py` — WebSocket handler now accepts `?token=<JWT>` query param alongside the httpOnly cookie. Mobile clients connect with their Bearer token this way; web clients continue to use the cookie unchanged. All 47 chat tests pass.
-
-#### Mobile
-- `src/hooks/useMatchWebSocket.ts` — reusable WebSocket hook:
-  - Connects to `ws(s)://host/api/matches/{id}/ws?token=<token>`.
-  - Reconnects after 2.5 s on unexpected close.
-  - Closes on app background (saves battery); reconnects on foreground via `AppState`.
-  - `onEventRef` pattern — event callback is always current without restarting the socket.
-  - Exposes `sendTyping()` for typing indicator events.
-- `app/(app)/chat/[matchId].tsx` — full chat screen:
-  - **Message history:** `GET /api/matches/{id}/messages` on mount (oldest-first); displayed with `inverted` FlatList (newest at bottom).
-  - **Pagination:** `onEndReached` on the inverted list triggers `before_id` cursor load for older messages; dedup via `seenIds` Set prevents REST + WS duplicates.
-  - **Real-time:** WS `new_message` appends to list; `message_deleted` updates in-place.
-  - **Typing indicator:** WS `typing` event shows `"{name} is typing…"` for 3 s; auto-hides.
-  - **Sending:** `POST /api/matches/{id}/messages`; also adds directly in case WS is momentarily disconnected; input restored on error.
-  - **Keyboard:** `KeyboardAvoidingView` with `padding` (iOS) / `height` (Android); multiline input with 120 px max height.
-  - **Bubbles:** accent-purple for sent, subtle dark for received; read receipts ✓ / ✓✓; soft-deleted placeholder.
-  - **Header:** back button → Matches, name, animal name in gold italic.
-- `app/(app)/_layout.tsx` — added `chat/[matchId]` as a hidden Tabs.Screen (`href: null`, `tabBarStyle: { display: 'none' }`) so tab bar disappears in chat.
-- `app/(app)/matches.tsx` — match rows now `Pressable`, navigate to `/(app)/chat/[matchId]` passing name, animal, otherUserId as params.
-
-### Architecture decisions
-- **`?token=` on WebSocket** — the standard approach for mobile WS auth where cookies aren't available. The query param is short-lived (30 min access token); acceptable for a WebSocket connection that is established and then kept alive.
-- **`onEventRef` pattern** — avoids restarting the WebSocket on every render by keeping the callback in a ref. The hook's `connect` function only depends on `matchId`, so the socket is stable for the lifetime of the chat screen.
-- **Dedup via `seenIds` Set** — messages can arrive via both REST (initial load) and WS (new_message event). Deduplication prevents double-rendering without requiring complex state merging.
-- **Optimistic send with fallback** — message is cleared from input immediately; if the POST fails the input is restored and an error is shown. WS echo + direct append means the message appears even if the WS hasn't delivered it yet.
-- **Tab bar hidden in chat** — `tabBarStyle: { display: 'none' }` on the Tabs.Screen hides the tab bar in the chat screen. If push-navigation feel is needed (slide from right), restructure to Stack → (tabs) in Session 5.
+WS `?token=` auth on backend, `useMatchWebSocket` hook (reconnect, AppState), full chat screen (inverted FlatList, pagination, real-time, typing indicator, read receipts, keyboard avoiding).
 
 ---
 
-## Session 5 — Planned
+## Session 5 — Undo Swipe + Live Unread Badge + Pull-to-Refresh + Block/Report ✅
 
-- Undo last swipe on the discover screen
-- Unread badge count on the Matches tab (live, updated by WS events)
-- Stack → (tabs) navigation restructure for proper push animation into chat
-- Pull-to-refresh on the matches list
-- Block / Report from within chat (long-press or header menu)
+**Goal:** Polish pass and feature completions from the Session 4 plan.
+
+### Completed
+
+#### New infrastructure
+- `src/contexts/UnreadContext.tsx` — minimal context (`totalUnread`, `setTotalUnread`) shared between matches screen and tab layout. Wrapped at root layout level (`app/_layout.tsx`) alongside `AuthProvider`.
+
+#### Discover — undo last swipe
+- `app/(app)/discover.tsx` — stores `lastSwiped` (the top user before each swipe). After a successful swipe that didn't produce a match, an **↩ Undo** text link appears below the action buttons.
+- Tapping undo calls `DELETE /api/swipes/last`; on success prepends the user back to the top of the stack.
+- `lastSwiped` is cleared on: next swipe, successful undo, or match popup.
+- A placeholder `View` reserves space when undo is hidden so the buttons don't shift.
+
+#### Matches — live unread badge + pull-to-refresh
+- `app/(app)/matches.tsx` — rewrote to use `useFocusEffect` (Expo Router) so matches refetch every time the tab comes into focus (including after returning from chat). This keeps the tab badge current without a persistent background WS.
+- `RefreshControl` on `FlatList` for manual pull-to-refresh.
+- After each fetch: `setTotalUnread(sum of unread_count)` pushes the count into `UnreadContext`.
+
+#### Tab badge
+- `app/(app)/_layout.tsx` — reads `totalUnread` from `UnreadContext`; passes it as `tabBarBadge` on the Matches tab. Badge styled gold on dark (`C.gold` / `#0D0B1A` text).
+
+#### Chat — block & report
+- `app/(app)/chat/[matchId].tsx`:
+  - Reads `otherUserId` from route params (already passed by matches screen since Session 4).
+  - **`⋯` button** in the header right slot opens a bottom-sheet `Modal` with Report / Block / Cancel options.
+  - **Report flow:** secondary `Modal` with radio-button reason picker (6 reasons matching web). Submits `POST /api/reports`. On success: success toast, modal dismissed.
+  - **Block flow:** calls `POST /api/blocks` directly from the menu; on success navigates back to matches (which will refetch and remove the blocked user's match).
+  - **Action feedback toast** appears at the bottom for 3 s after successful report.
+
+### Architecture decisions
+- **`useFocusEffect` for badge freshness** — avoids a persistent background WebSocket for the unread count. Every tab focus triggers a silent refetch (~200 ms); the badge is always accurate when the user is looking at matches. True push-driven updates require Expo Notifications (Session 6).
+- **`UnreadContext` at root level** — shared between `(app)/_layout.tsx` (reads) and `matches.tsx` (writes). Placing it in the root layout avoids re-mounting it on navigation between app screens.
+- **Undo as client-side optimistic revert** — the card is removed from state immediately on swipe (Session 3 design). Undo puts it back on `DELETE /api/swipes/last` success; no re-fetch needed since we saved the full user object in `lastSwiped`.
+
+---
+
+## Session 6 — Planned
+
+- Expo Notifications: push token registration, background new-message alerts
+- Safe area insets: replace hardcoded `paddingTop: 56` with `useSafeAreaInsets` across all headers
+- Stack → (tabs) navigation restructure for native push-slide animation into chat
+- Custom fonts via expo-font (Cinzel, Cormorant Garamond) to match web typography
+- Offline / network error states across all screens
 
 ---
 

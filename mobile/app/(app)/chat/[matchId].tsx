@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -38,10 +39,11 @@ function formatTime(iso: string): string {
 
 export default function ChatScreen() {
   const { user } = useAuth();
-  const { matchId, name, animal } = useLocalSearchParams<{
+  const { matchId, name, animal, otherUserId } = useLocalSearchParams<{
     matchId: string;
     name: string;
     animal: string;
+    otherUserId: string;
   }>();
 
   const mid = Number(matchId);
@@ -62,6 +64,48 @@ export default function ChatScreen() {
   const sendTypingRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef         = useRef<TextInput>(null);
   const seenIdsRef       = useRef(new Set<number>()); // dedup between REST + WS
+
+  // ── Block / report menu ───────────────────────────────────────────────────
+  const [menuOpen,       setMenuOpen]       = useState(false);
+  const [reportOpen,     setReportOpen]     = useState(false);
+  const [reportReason,   setReportReason]   = useState('');
+  const [reportLoading,  setReportLoading]  = useState(false);
+  const [blockLoading,   setBlockLoading]   = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  const REPORT_REASONS = [
+    { value: 'spam_scam',             label: 'Spam or scam' },
+    { value: 'inappropriate_content', label: 'Inappropriate content' },
+    { value: 'harassment',            label: 'Harassment or abuse' },
+    { value: 'fake_profile',          label: 'Fake or impersonating profile' },
+    { value: 'underage_user',         label: 'Underage user' },
+    { value: 'other',                 label: 'Other' },
+  ];
+
+  const handleReport = async () => {
+    if (!reportReason) return;
+    setReportLoading(true);
+    await api('/api/reports', {
+      method: 'POST',
+      body: JSON.stringify({ reported_user_id: Number(otherUserId), reason: reportReason }),
+    });
+    setReportLoading(false);
+    setReportOpen(false);
+    setReportReason('');
+    setActionFeedback('Report submitted. Thank you.');
+    setTimeout(() => setActionFeedback(null), 3000);
+  };
+
+  const handleBlock = async () => {
+    setBlockLoading(true);
+    const res = await api('/api/blocks', {
+      method: 'POST',
+      body: JSON.stringify({ blocked_id: Number(otherUserId) }),
+    });
+    setBlockLoading(false);
+    setMenuOpen(false);
+    if (res.ok) router.back();
+  };
 
   // ── Data loading ──────────────────────────────────────────────────────────
 
@@ -180,7 +224,9 @@ export default function ChatScreen() {
             <Text style={styles.headerAnimal}>{animalEmoji(animal)} {capitalise(animal)}</Text>
           ) : null}
         </View>
-        <View style={styles.headerRight} />
+        <Pressable style={styles.headerRight} onPress={() => setMenuOpen(true)}>
+          <Text style={styles.menuDots}>⋯</Text>
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView
@@ -253,6 +299,86 @@ export default function ChatScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+      {/* Action feedback toast */}
+      {actionFeedback && (
+        <View style={styles.toast} pointerEvents="none">
+          <Text style={styles.toastText}>{actionFeedback}</Text>
+        </View>
+      )}
+
+      {/* ⋯ menu modal */}
+      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+        <Pressable style={styles.menuOverlay} onPress={() => setMenuOpen(false)}>
+          <View style={styles.menuSheet}>
+            <Text style={styles.menuTitle}>{name || 'Options'}</Text>
+
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => { setMenuOpen(false); setReportOpen(true); }}
+            >
+              <Text style={styles.menuItemText}>🚩  Report</Text>
+            </Pressable>
+
+            <View style={styles.menuDivider} />
+
+            <Pressable
+              style={[styles.menuItem, blockLoading && styles.menuItemDisabled]}
+              onPress={handleBlock}
+              disabled={blockLoading}
+            >
+              <Text style={[styles.menuItemText, styles.menuItemDanger]}>
+                {blockLoading ? 'Blocking…' : '🚫  Block'}
+              </Text>
+            </Pressable>
+
+            <View style={styles.menuDivider} />
+
+            <Pressable style={styles.menuItem} onPress={() => setMenuOpen(false)}>
+              <Text style={[styles.menuItemText, { textAlign: 'center', color: C.textSec }]}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Report reason modal */}
+      <Modal visible={reportOpen} transparent animationType="slide" onRequestClose={() => setReportOpen(false)}>
+        <View style={styles.reportOverlay}>
+          <View style={styles.reportSheet}>
+            <Text style={styles.reportTitle}>Report {name || 'this user'}</Text>
+            <Text style={styles.reportSub}>Reports are reviewed by our team.</Text>
+
+            {REPORT_REASONS.map((r) => (
+              <Pressable
+                key={r.value}
+                style={[styles.reasonRow, reportReason === r.value && styles.reasonRowSelected]}
+                onPress={() => setReportReason(r.value)}
+              >
+                <View style={[styles.reasonRadio, reportReason === r.value && styles.reasonRadioSelected]} />
+                <Text style={styles.reasonLabel}>{r.label}</Text>
+              </Pressable>
+            ))}
+
+            <View style={styles.reportActions}>
+              <Pressable
+                style={styles.reportCancelBtn}
+                onPress={() => { setReportOpen(false); setReportReason(''); }}
+              >
+                <Text style={styles.reportCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.reportSubmitBtn, (!reportReason || reportLoading) && styles.reportSubmitDisabled]}
+                onPress={handleReport}
+                disabled={!reportReason || reportLoading}
+              >
+                <Text style={styles.reportSubmitText}>
+                  {reportLoading ? 'Submitting…' : 'Submit'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -356,6 +482,60 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: C.bgHover },
   sendIcon: { color: C.text, fontSize: 18, marginLeft: 2 },
+
+  // Header menu button
+  menuDots: { color: C.textSec, fontSize: 22, fontWeight: '600', textAlign: 'right' },
+
+  // Feedback toast
+  toast: {
+    position: 'absolute', bottom: 90, left: 24, right: 24,
+    backgroundColor: 'rgba(107,63,160,0.9)', borderRadius: 10,
+    padding: 12, alignItems: 'center',
+  },
+  toastText: { color: C.text, fontSize: 13, fontWeight: '500' },
+
+  // ⋯ menu
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  menuSheet: {
+    backgroundColor: C.bgCard, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingTop: 20, paddingBottom: 36, paddingHorizontal: 0,
+  },
+  menuTitle:  { color: C.textSec, fontSize: 13, textAlign: 'center', paddingBottom: 16, paddingHorizontal: 20 },
+  menuItem:   { paddingVertical: 16, paddingHorizontal: 24 },
+  menuItemDisabled: { opacity: 0.5 },
+  menuItemText:   { color: C.text, fontSize: 16 },
+  menuItemDanger: { color: C.errorLight },
+  menuDivider: { height: 1, backgroundColor: C.border, marginHorizontal: 16 },
+
+  // Report sheet
+  reportOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  reportSheet: {
+    backgroundColor: C.bgCard, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    padding: 24, paddingBottom: 40,
+  },
+  reportTitle: { color: C.text, fontSize: 18, fontWeight: '700', marginBottom: 6 },
+  reportSub:   { color: C.textSec, fontSize: 13, marginBottom: 20 },
+  reasonRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, paddingHorizontal: 4,
+    borderBottomWidth: 1, borderBottomColor: C.borderSubtle,
+  },
+  reasonRowSelected: { borderBottomColor: C.accent },
+  reasonRadio: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 2, borderColor: C.textDisabled,
+  },
+  reasonRadioSelected: { borderColor: C.accentHover, backgroundColor: C.accentHover },
+  reasonLabel: { color: C.textSurface, fontSize: 15 },
+  reportActions: { flexDirection: 'row', gap: 12, marginTop: 24 },
+  reportCancelBtn: {
+    flex: 1, padding: 13, backgroundColor: C.bgHover,
+    borderRadius: 10, borderWidth: 1, borderColor: C.border, alignItems: 'center',
+  },
+  reportCancelText: { color: C.textSec, fontWeight: '600', fontSize: 14 },
+  reportSubmitBtn:  { flex: 1, padding: 13, backgroundColor: C.error, borderRadius: 10, alignItems: 'center' },
+  reportSubmitDisabled: { backgroundColor: C.bgHover },
+  reportSubmitText: { color: C.text, fontWeight: '700', fontSize: 14 },
 });
 
 const bubbleStyles = StyleSheet.create({

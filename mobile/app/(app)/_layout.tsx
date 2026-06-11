@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Tabs } from 'expo-router';
 
 import { useAuth } from '../../src/auth/AuthContext';
+import { useUnread } from '../../src/contexts/UnreadContext';
 import { colors as C } from '../../src/theme';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
@@ -18,9 +19,10 @@ function TabIcon({ name, focused }: { name: IoniconsName; focused: boolean }) {
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
+  const { totalUnread }   = useUnread();
 
   if (loading) return null;
-  if (!user) return <Redirect href="/(auth)/login" />;
+  if (!user)   return <Redirect href="/(auth)/login" />;
 
   return (
     <Tabs
@@ -48,6 +50,8 @@ export default function AppLayout() {
         options={{
           title: 'Matches',
           tabBarIcon: ({ focused }) => <TabIcon name="heart" focused={focused} />,
+          tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
+          tabBarBadgeStyle: { backgroundColor: C.gold, color: '#0D0B1A', fontSize: 10, minWidth: 16, height: 16 },
         }}
       />
       <Tabs.Screen
@@ -57,7 +61,7 @@ export default function AppLayout() {
           tabBarIcon: ({ focused }) => <TabIcon name="person" focused={focused} />,
         }}
       />
-      {/* Chat is a pushed screen, not a tab — hide from bar and tab indicator */}
+      {/* Chat is a pushed screen — hide from tab bar, suppress tab bar when active */}
       <Tabs.Screen
         name="chat/[matchId]"
         options={{
