@@ -5,7 +5,10 @@
     "version": "1.0.0",
     "scheme": "howl",
     "orientation": "portrait",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0D0B1A",
     "ios": {
@@ -32,7 +35,8 @@
         {
           "color": "#9B59D4"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true

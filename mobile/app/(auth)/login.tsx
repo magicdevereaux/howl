@@ -104,11 +104,6 @@ export default function LoginScreen() {
           }
         </Pressable>
 
-        {/* Footer links */}
-        <Pressable onPress={() => router.push('/(auth)/forgot-password')} style={styles.link}>
-          <Text style={styles.linkText}>Forgot password?</Text>
-        </Pressable>
-
         <View style={styles.registerRow}>
           <Text style={styles.registerHint}>Don't have an account? </Text>
           <Pressable onPress={() => router.push('/(auth)/register')}>
