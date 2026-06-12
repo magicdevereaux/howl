@@ -153,6 +153,27 @@ def test_swipe_mutual_like_creates_match(client, db, auth_headers, test_user):
     assert max(test_user.id, other.id) == match.user2_id
 
 
+def test_swipe_mutual_like_queues_match_notification(client, db, monkeypatch, auth_headers, test_user):
+    other = _make_user(db, email="hawk@howl.app", animal="hawk", name="Sky")
+    _make_swipe(db, user_id=other.id, target_user_id=test_user.id, direction=SwipeDirection.like)
+
+    calls = []
+    monkeypatch.setattr(
+        "app.api.swipes.notify_new_match.delay",
+        lambda match_id, user_id: calls.append((match_id, user_id)),
+    )
+
+    res = client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": other.id, "direction": "like"},
+    )
+    assert res.status_code == 200
+
+    match = db.query(Match).first()
+    assert calls == [(match.id, other.id)]
+
+
 def test_swipe_pass_after_mutual_like_no_match(client, db, auth_headers, test_user):
     """Other liked us, but we pass — no match."""
     other = _make_user(db, email="deer@howl.app", animal="deer")

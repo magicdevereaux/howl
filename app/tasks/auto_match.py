@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
+from app.tasks.notify import notify_new_match
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,22 @@ def auto_match_demo_user(self, user_id: int, demo_user_id: int) -> None:
         db.add(swipe)
         db.flush()
 
+        match = None
         if direction == SwipeDirection.like:
             u1 = min(user_id, demo_user_id)
             u2 = max(user_id, demo_user_id)
             match = Match(user1_id=u1, user2_id=u2)
             db.add(match)
+            db.flush()
 
         db.commit()
         logger.info(
             "auto_match: committed — demo=%d real=%d direction=%s matched=%s",
             demo_user_id, user_id, direction.value, direction == SwipeDirection.like,
         )
+
+        if match is not None:
+            notify_new_match.delay(match.id, user_id)
 
     except IntegrityError:
         db.rollback()

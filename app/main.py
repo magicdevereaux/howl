@@ -15,6 +15,7 @@ from app.api.avatar import router as avatar_router
 from app.api.blocks import router as blocks_router
 from app.api.chat import router as chat_router
 from app.api.profile import router as profile_router
+from app.api.push_tokens import router as push_tokens_router
 from app.api.reports import router as reports_router
 from app.api.swipes import router as swipes_router
 from app.api.users import router as users_router
@@ -65,6 +66,7 @@ app.include_router(swipes_router)
 app.include_router(chat_router)
 app.include_router(blocks_router)
 app.include_router(reports_router)
+app.include_router(push_tokens_router)
 
 
 _avatar_dir = Path("static/avatars")

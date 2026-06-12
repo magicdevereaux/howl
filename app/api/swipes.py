@@ -12,6 +12,7 @@ from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
 from app.schemas.swipe import DiscoverUserOut, MatchOut, MatchedProfileOut, SwipeIn, SwipeOut, UndoSwipeOut
 from app.tasks.auto_match import auto_match_demo_user
+from app.tasks.notify import notify_new_match
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,10 @@ def record_swipe(
             )
 
     db.commit()
+
+    # Notify the other user that they have a new match.
+    if matched:
+        notify_new_match.delay(match.id, body.target_user_id)
 
     # Queue a delayed auto-like if the target is a demo user and we just liked them.
     # The task itself re-validates everything, so it's safe to fire and forget.

@@ -7,9 +7,10 @@ import pytest
 
 from app.models.match import Match
 from app.models.message import Message
+from app.models.push_token import PushToken
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
-from app.tasks.notify import notify_new_message
+from app.tasks.notify import notify_new_match, notify_new_message
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +187,93 @@ def test_notification_omits_message_content(patched_db, monkeypatch):
 
     # Only these three keys — no "content" or "message" key
     assert set(captured.keys()) == {"to", "name", "animal"}
+
+
+# ---------------------------------------------------------------------------
+# Push notifications
+# ---------------------------------------------------------------------------
+
+def test_new_message_sends_push_to_registered_tokens(patched_db, monkeypatch):
+    db = patched_db
+    sender = _make_user(db, email="sender8@howl.app", name="Pip", animal="fox")
+    recipient = _make_user(db, email="recipient8@howl.app")
+    db.add(PushToken(user_id=recipient.id, token="ExponentPushToken[r8]"))
+    db.commit()
+    m = _make_match(db, sender, recipient)
+
+    monkeypatch.setattr("app.tasks.notify.send_message_notification", lambda **kw: None)
+    pushes = []
+    monkeypatch.setattr(
+        "app.tasks.notify.send_push_notifications",
+        lambda tokens, title, body, data=None: pushes.append((tokens, title, body, data)),
+    )
+
+    notify_new_message(m.id, recipient.id, sender.id)
+
+    assert len(pushes) == 1
+    tokens, title, body, data = pushes[0]
+    assert tokens == ["ExponentPushToken[r8]"]
+    assert data == {"type": "message", "match_id": m.id}
+
+
+def test_new_message_push_sent_even_when_email_notifications_disabled(patched_db, monkeypatch):
+    db = patched_db
+    sender = _make_user(db, email="sender9@howl.app", name="Nia", animal="hawk")
+    recipient = _make_user(db, email="recipient9@howl.app", email_notifications=False)
+    db.add(PushToken(user_id=recipient.id, token="ExponentPushToken[r9]"))
+    db.commit()
+    m = _make_match(db, sender, recipient)
+
+    emails = []
+    monkeypatch.setattr("app.tasks.notify.send_message_notification", lambda **kw: emails.append(kw))
+    pushes = []
+    monkeypatch.setattr(
+        "app.tasks.notify.send_push_notifications",
+        lambda tokens, title, body, data=None: pushes.append(tokens),
+    )
+
+    notify_new_message(m.id, recipient.id, sender.id)
+
+    assert emails == []
+    assert pushes == [["ExponentPushToken[r9]"]]
+
+
+def test_notify_new_match_sends_push_with_match_data(patched_db, monkeypatch):
+    db = patched_db
+    user = _make_user(db, email="matched_user@howl.app")
+    other = _make_user(db, email="matched_other@howl.app", animal="owl")
+    db.add(PushToken(user_id=user.id, token="ExponentPushToken[match]"))
+    db.commit()
+    m = _make_match(db, user, other)
+
+    pushes = []
+    monkeypatch.setattr(
+        "app.tasks.notify.send_push_notifications",
+        lambda tokens, title, body, data=None: pushes.append((tokens, title, body, data)),
+    )
+
+    notify_new_match(m.id, user.id)
+
+    assert len(pushes) == 1
+    tokens, title, body, data = pushes[0]
+    assert tokens == ["ExponentPushToken[match]"]
+    assert "owl" in body
+    assert data == {"type": "match", "match_id": m.id}
+
+
+def test_notify_new_match_skips_when_match_missing(patched_db, monkeypatch):
+    db = patched_db
+    user = _make_user(db, email="lonely@howl.app")
+
+    pushes = []
+    monkeypatch.setattr(
+        "app.tasks.notify.send_push_notifications",
+        lambda *a, **kw: pushes.append(True),
+    )
+
+    notify_new_match(999999, user.id)
+
+    assert pushes == []
 
 
 # ---------------------------------------------------------------------------

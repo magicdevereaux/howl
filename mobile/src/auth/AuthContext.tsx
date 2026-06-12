@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 import { api, setUnauthenticatedHandler } from '../api/client';
+import { syncPushToken, unregisterPushToken } from '../notifications/push';
 import { clearTokens, getAccessToken, saveTokens } from './storage';
 
 export interface User {
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const res = await api<User>('/api/auth/me');
       setState({ user: res.ok ? res.data : null, loading: false });
+      if (res.ok) syncPushToken();
     })();
   }, []);
 
@@ -65,10 +67,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!res.ok) return res.error;
     await saveTokens(res.data.access_token, res.data.refresh_token);
     setState({ user: res.data.user, loading: false });
+    syncPushToken();
     return null;
   }, []);
 
   const logout = useCallback(async () => {
+    await unregisterPushToken();
     await clearTokens();
     setState({ user: null, loading: false });
     router.replace('/(auth)/login');

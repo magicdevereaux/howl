@@ -6,13 +6,33 @@
     "scheme": "howl",
     "orientation": "portrait",
     "platforms": ["ios", "android"],
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0D0B1A",
+    "ios": {
+      "bundleIdentifier": "app.howl.mobile",
+      "buildNumber": "1",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "app.howl.mobile",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0D0B1A"
+      }
+    },
     "web": {
       "bundler": "metro",
       "output": "static"
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#9B59D4"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

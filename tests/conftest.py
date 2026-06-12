@@ -116,3 +116,13 @@ def auth_headers(test_user: User) -> dict[str, str]:
     """Supply auth via Cookie header (httpOnly cookie-based auth)."""
     token = create_access_token(test_user.id)
     return {"Cookie": f"access_token={token}"}
+
+
+# ---------------------------------------------------------------------------
+# Celery task stubs
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _mock_notify_new_match(monkeypatch):
+    """Suppress notify_new_match.delay so match-creating tests don't require Redis."""
+    monkeypatch.setattr("app.tasks.notify.notify_new_match.delay", lambda *a, **kw: None)
