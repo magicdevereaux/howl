@@ -100,6 +100,72 @@ WS `?token=` auth on backend, `useMatchWebSocket` hook (reconnect, AppState), fu
 
 ---
 
+## Session 7 — App Icon, Splash Screen, EAS Build Setup, README ✅
+
+**Goal:** Final pre-submission polish — branded icon/splash assets, EAS build profiles, and a combined web + mobile README. Get the app into a state where it could be submitted to the App Store and Play Store (pending the user's own Expo/Apple/Google accounts).
+
+### Completed
+
+#### App icon, adaptive icon, splash, notification icon
+- `mobile/scripts/generate_assets.py` — new Python/Pillow script that programmatically generates all four image assets from the twilight palette (`src/theme.ts`):
+  - **Mark:** a geometric, front-facing wolf-head silhouette (two ear triangles + notch + pointed snout) set against a gold moon (with soft glow) and two gold eyes.
+  - `assets/icon.png` — 1024×1024, full-bleed vertical gradient (`bgBrand` → `bg`), RGB (no alpha) for iOS.
+  - `assets/adaptive-icon.png` — 1024×1024 transparent, mark scaled to ~62% to sit inside Android's adaptive-icon safe zone.
+  - `assets/splash-icon.png` — 1024×1024 transparent, mark scaled to ~56% for the splash screen.
+  - `assets/notification-icon.png` — 256×256 transparent, flat silhouette only (no eyes/glow, per Android's notification-icon rules — the OS renders status-bar icons from the alpha channel only).
+  - Run via `python mobile/scripts/generate_assets.py` to regenerate if the palette or mark design changes.
+- Added `expo-splash-screen` (`npx expo install expo-splash-screen`).
+- `app.json` updated:
+  - `icon: "./assets/icon.png"`
+  - `android.adaptiveIcon.foregroundImage: "./assets/adaptive-icon.png"`, `backgroundColor: "#0D0B1A"`
+  - `expo-notifications` plugin now points `icon` at `./assets/notification-icon.png`
+  - New `expo-splash-screen` plugin entry: `image: "./assets/splash-icon.png"`, `imageWidth: 200`, `resizeMode: "contain"`, `backgroundColor: "#0D0B1A"`
+  - Removed the stray top-level `backgroundColor` key (not a valid Expo config field; superseded by the splash-screen plugin's `backgroundColor`)
+
+#### EAS Build setup
+- New `mobile/eas.json` with three profiles:
+  - **`development`** — dev client, internal distribution, Android `:app:assembleDebug`
+  - **`preview`** — internal distribution, Android `.apk` (for quick install/testing without a store)
+  - **`production`** — `autoIncrement: true`, Android app bundle (`.aab`) for Play Store submission
+  - `submit.production: {}` placeholder so `eas submit --platform ...` works once a production build exists
+- `mobile/.gitignore` extended with EAS/credential artifacts: `dist/`, `web-build/`, `*.jks`, `*.p8`, `*.p12`, `*.key`, `*.mobileprovision`, `*.tsbuildinfo`, plus `.expo/` (carried over from Session 6's SDK upgrade).
+
+#### Verification
+- `npx tsc --noEmit` — clean, no errors.
+- `npx expo-doctor` — 17/17 checks passed.
+- `npx expo export --platform android` — succeeded (1429 modules bundled, 43 assets, 4.13 MB Android `.hbc` bundle). Export output was a one-off sanity check and was deleted afterward (now covered by `.gitignore`'s `dist/` entry anyway).
+- `eas build` itself **could not be run** in this environment — `npx eas-cli whoami` reports "Not logged in", and `eas build` fails with "An Expo user account is required to proceed." This requires the project owner's own Expo account and is documented as a manual follow-up step (see below).
+
+#### README
+- Root `README.md` updated to cover both apps:
+  - Intro now mentions the mobile app and links to the new Mobile App section.
+  - `## Tech Stack` gained a **Mobile** subsection (Expo SDK 53, RN 0.79, React 19, Expo Router, TypeScript, SecureStore, expo-notifications, Reanimated/Gesture Handler).
+  - New **`## Mobile App`** section: mobile feature list, architecture/file-tree overview, "Running Locally (Expo Go)" instructions (including `.env.local` / `EXPO_PUBLIC_API_URL` guidance for LAN device, Android emulator, iOS simulator), "Building with EAS" walkthrough (`eas login` → `eas init` → `eas build` per profile → `eas submit`), and an App Store Submission Checklist.
+  - Project structure tree now lists `mobile/` alongside `app/`, `frontend/`, etc.
+  - Corrected stale test count (355 → **372**, current `pytest --collect-only` total) in both the project-structure tree and the "Running Tests" section.
+  - Roadmap: marked mobile app + push notifications as done, replaced the old "Push notifications" / "Mobile responsive improvements" items with "Mobile app (Expo, iOS + Android) with push notifications" (done) and "App Store / Play Store submission (EAS account setup + builds remain)" (pending).
+
+### Architecture decisions
+- **Generated (not hand-drawn) icon assets** — a Python/Pillow script keeps the mark reproducible and tied directly to the theme palette constants, so a future palette change can regenerate all four assets with one command instead of re-exporting from a design tool.
+- **Notification icon has no eyes/glow** — Android composites notification icons using only the alpha channel and a single tint color; including the gold eye/glow detail would either disappear or render as solid white blobs, so the notification variant is a simplified flat silhouette.
+- **No fabricated production API URL** — `eas.json` does not hardcode a backend URL. The README instead documents setting `EXPO_PUBLIC_API_URL` via EAS environment variables or `.env.production` once a deployed backend URL exists, avoiding a stale/incorrect URL baked into store builds.
+
+### Remaining for app store submission
+- **`eas login` + `eas init`** — requires the project owner's Expo account. `eas init` will link the project and populate `extra.eas.projectId` in `app.json` (needed for push notification scoping, per Session 6's `syncPushToken()`).
+- **Run the actual EAS builds** — once logged in:
+  ```bash
+  eas build --platform android --profile preview
+  eas build --platform ios --profile preview
+  # ... then production profiles for store submission
+  ```
+- **iOS push capability / APNs key** — configured automatically by EAS during the first iOS build, once an Apple Developer account is linked.
+- **Apple/Google developer accounts** — required for `eas submit`.
+- **Privacy policy URL + store listing metadata** (descriptions, screenshots) — required by both stores given push notifications and user-generated content.
+- **Production `EXPO_PUBLIC_API_URL`** — set once the backend has a stable deployed URL (e.g. Railway).
+- Carried over from Session 6 (still open): safe-area-inset cleanup, Stack→(tabs) navigation restructure, custom fonts, offline/network error states.
+
+---
+
 ## To run
 
 ```bash
@@ -110,3 +176,16 @@ npx expo start
 
 > **Android emulator:** Set `EXPO_PUBLIC_API_URL=http://10.0.2.2:8001` in `mobile/.env.local`.
 > **Physical device:** Set `EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8001`.
+
+## To build for app stores (EAS)
+
+```bash
+cd mobile
+npm install -g eas-cli
+eas login
+eas init        # first time only — links Expo account/project
+eas build --platform android --profile preview
+eas build --platform ios --profile preview
+```
+
+See the README's [Building with EAS](../README.md#mobile-app) section for the full profile breakdown and submission checklist.

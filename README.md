@@ -1,6 +1,6 @@
 # Howl 🐺
 
-AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DALL-E generates your avatar, and you swipe on other members to find your match.
+AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DALL-E generates your avatar, and you swipe on other members to find your match. Available as a React web app and a React Native (Expo) mobile app for iOS and Android — see [Mobile App](#mobile-app) below.
 
 ## Screenshots
 
@@ -58,6 +58,15 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 - React 18
 - Vite (build tool + dev proxy)
 - Inline CSS (no Tailwind)
+
+**Mobile (`mobile/`):**
+- Expo SDK 53 (React Native 0.79, React 19)
+- Expo Router (file-based navigation, typed routes)
+- TypeScript
+- `expo-secure-store` (token storage), `expo-notifications` (push)
+- Reanimated + Gesture Handler (swipe interactions)
+
+See [Mobile App](#mobile-app) for details.
 
 ## How It Works
 
@@ -245,7 +254,7 @@ howl/
 │   └── startup.sh           # Railway: migrate → seed → uvicorn
 ├── docs/
 │   └── decisions/ADR.md    # Architecture decision records
-├── tests/                  # 355 tests, all passing
+├── tests/                  # 372 tests, all passing
 │   ├── conftest.py         # SQLite StaticPool + FK enforcement + cookie-based auth_headers
 │   ├── test_auth.py        # Cookie auth flow: register, login, refresh, logout
 │   ├── test_profile.py
@@ -285,6 +294,7 @@ howl/
 │   ├── vite.config.js      # Dev proxy /api/* → :8001 (enables cookies without CORS)
 │   └── package.json
 ├── static/avatars/         # Generated avatar images (auto-created)
+├── mobile/                 # React Native (Expo) app — see Mobile App section
 ├── .env.example
 ├── railpack.json
 ├── docker-compose.yml
@@ -328,7 +338,127 @@ pytest tests/test_auth.py::test_login_success -v
 | `test_regen_limit.py` | 1/month limit, 30-day reset, bio-change quota sharing |
 | `test_preferences.py` | Field validation, discover age + gender filtering |
 
-**Total: 355 tests, all passing.**
+**Total: 372 tests, all passing.**
+
+## Mobile App
+
+A React Native (Expo) client for iOS and Android lives in [`mobile/`](mobile/). It implements the full core experience — auth, profile, discover/swipe, matches, real-time chat, and push notifications — against the same FastAPI backend as the web app.
+
+### Mobile Features
+
+- **Secure Auth** — bearer-token login/register, tokens stored in `expo-secure-store`, automatic silent refresh on 401
+- **Profile** — avatar hero, spirit animal reveal, edit mode with draft state
+- **Discover** — swipe gestures (Reanimated + Gesture Handler), card stack, LIKE/PASS labels, match popup, undo last swipe
+- **Matches** — live unread badge (refetches on tab focus), pull-to-refresh
+- **Real-Time Chat** — WebSocket messaging, typing indicators, read receipts, paginated message list, keyboard avoiding
+- **Block & Report** — from the chat header menu
+- **Push Notifications** — Expo push notifications for new matches and new messages; tapping a notification deep-links to the relevant chat or matches screen
+- **Dark "twilight" theme** matching the web app's palette
+
+### Mobile Architecture
+
+```
+mobile/
+├── app/
+│   ├── _layout.tsx              # Root layout: providers, notification-tap routing
+│   ├── index.tsx                # Auth redirect (login vs. app)
+│   ├── (auth)/
+│   │   ├── login.tsx
+│   │   └── register.tsx
+│   └── (app)/
+│       ├── _layout.tsx          # Bottom tabs, unread badge
+│       ├── discover.tsx         # Swipe stack
+│       ├── matches.tsx          # Match list, pull-to-refresh
+│       ├── profile.tsx
+│       └── chat/[matchId].tsx   # WebSocket chat, block/report
+├── src/
+│   ├── api/client.ts             # Authenticated fetch wrapper, silent token refresh
+│   ├── auth/
+│   │   ├── AuthContext.tsx        # Auth state, login/logout, push token sync
+│   │   └── storage.ts             # SecureStore token persistence
+│   ├── contexts/UnreadContext.tsx
+│   ├── hooks/useMatchWebSocket.ts # WS reconnect + AppState handling
+│   ├── notifications/push.ts      # Expo push token registration
+│   ├── theme.ts                   # Shared color palette (mirrors web)
+│   └── utils/avatar.ts
+├── assets/                        # App icon, adaptive icon, splash, notification icon
+├── app.json                       # Expo config: bundle IDs, icons, splash, plugins
+├── eas.json                       # EAS Build profiles (development/preview/production)
+└── scripts/generate_assets.py     # Regenerates icon/splash/notification PNGs
+```
+
+Auth uses bearer tokens (not the web's httpOnly cookies, since mobile has no shared-origin cookie jar): the mobile login/register endpoints return `access_token`/`refresh_token`, stored in SecureStore. The `api()` client wrapper attaches `Authorization: Bearer <token>` and silently refreshes on 401.
+
+Push notifications: the app registers its Expo push token on login/launch and removes it on logout. The backend sends pushes (Expo Push API) when a new match or new message is created.
+
+### Running Locally (Expo Go)
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+Scan the QR code with the Expo Go app (iOS/Android), or press `a`/`i` for an emulator/simulator.
+
+The app needs to reach the FastAPI backend (`python -m uvicorn app.main:app --port 8001 --reload` from the repo root). Set the API URL in `mobile/.env.local`:
+
+```bash
+# Physical device (same Wi-Fi as your dev machine)
+EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8001
+
+# Android emulator
+EXPO_PUBLIC_API_URL=http://10.0.2.2:8001
+
+# iOS simulator (default if unset)
+EXPO_PUBLIC_API_URL=http://localhost:8001
+```
+
+> Push notifications require a physical device (not a simulator/emulator) and a linked EAS project — see below.
+
+### Building with EAS
+
+[`eas.json`](mobile/eas.json) defines three build profiles:
+
+| Profile | Purpose | Output |
+|---------|---------|--------|
+| `development` | Dev client for local development with native modules | Debug build, internal distribution |
+| `preview` | Internal testing builds | iOS build, Android `.apk` |
+| `production` | App Store / Play Store submission | iOS build, Android `.aab` (app bundle) |
+
+```bash
+cd mobile
+npm install -g eas-cli   # or use npx eas-cli
+eas login
+
+# First time only — links this project to your Expo account and
+# writes extra.eas.projectId into app.json (needed for push notifications)
+eas init
+
+# Preview builds (internal testing)
+eas build --platform android --profile preview
+eas build --platform ios --profile preview
+
+# Production builds
+eas build --platform android --profile production
+eas build --platform ios --profile production
+
+# Submit to the stores once a production build finishes
+eas submit --platform android
+eas submit --platform ios
+```
+
+Set `EXPO_PUBLIC_API_URL` for non-development builds to your deployed backend (e.g. the Railway URL) via an [EAS environment variable](https://docs.expo.dev/eas/environment-variables/) or `mobile/.env.production`. Without it, builds default to `http://localhost:8001`, which won't resolve on a real device.
+
+### App Store Submission Checklist
+
+- [x] App icon, adaptive icon (Android), splash screen, and notification icon configured in `app.json`
+- [x] Bundle identifiers set (`app.howl.mobile` for both iOS and Android)
+- [x] `eas.json` build profiles (development/preview/production)
+- [ ] `eas login` / `eas init` to link an Expo account and project (required before any `eas build`, and for push notification scoping)
+- [ ] iOS push notification capability + APNs key (configured automatically by EAS during build once the Apple Developer account is linked)
+- [ ] Privacy policy URL and store metadata (descriptions, screenshots) — required given push notifications + user-generated content
+- [ ] Production `EXPO_PUBLIC_API_URL` pointed at the deployed backend
 
 ## Deployment (Railway)
 
@@ -401,8 +531,8 @@ Premium is set directly in the database — payment processing is not yet implem
 - [ ] Payment processing (Stripe) to unlock premium
 - [x] Persistent avatar image storage (Cloudflare R2 with local fallback)
 - [ ] Geographic filtering (requires geocoding)
-- [ ] Push notifications
-- [ ] Mobile responsive improvements
+- [x] Mobile app (Expo, iOS + Android) with push notifications
+- [ ] App Store / Play Store submission (EAS account setup + builds remain)
 
 ## License
 
