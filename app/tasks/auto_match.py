@@ -38,9 +38,9 @@ def auto_match_demo_user(self, user_id: int, demo_user_id: int) -> None:
             )
             return
 
-        if not demo_user.email.startswith("demo"):
+        if not demo_user.is_bot:
             logger.warning(
-                "auto_match: demo_user_id=%d (%r) is not a demo account — skipping",
+                "auto_match: demo_user_id=%d (%r) is not a bot account — skipping",
                 demo_user_id, demo_user.email,
             )
             return

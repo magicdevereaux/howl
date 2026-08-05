@@ -7,6 +7,7 @@ from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.avatar import AvatarStatusOut
+from app.services.image_generation import delete_avatar
 from app.tasks.avatar import generate_avatar
 
 router = APIRouter(prefix="/api/avatar", tags=["avatar"])
@@ -74,6 +75,11 @@ def regenerate_avatar(
 
     if not current_user.is_premium:
         _enforce_regen_limit(current_user, db)
+
+    # Delete the previous image before dropping the reference to it. Without
+    # this every regeneration leaks the old object into R2 permanently.
+    # Best-effort: delete_avatar never raises and no-ops on None.
+    delete_avatar(current_user.avatar_url)
 
     # Clear stale avatar data, reset status, and record the manual regeneration
     current_user.animal = None

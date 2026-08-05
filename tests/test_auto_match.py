@@ -50,7 +50,7 @@ def patched_session(db, monkeypatch):
 def test_task_creates_like_and_match(patched_session, test_user, monkeypatch):
     """90%-path: when random() < 0.9 the demo user likes back and a Match is created."""
     db = patched_session
-    demo = _make_user(db, email="demo1@howl.app", animal="fox")
+    demo = _make_user(db, email="demo1@howl.app", is_bot=True, animal="fox")
     _make_swipe(db, user_id=test_user.id, target_user_id=demo.id, direction=SwipeDirection.like)
     # Capture IDs before task runs — task calls db.close() which detaches ORM objects.
     real_id, demo_id = test_user.id, demo.id
@@ -72,7 +72,7 @@ def test_task_creates_like_and_match(patched_session, test_user, monkeypatch):
 def test_task_creates_pass_no_match(patched_session, test_user, monkeypatch):
     """10%-path: when random() >= 0.9 the demo user passes and no Match is created."""
     db = patched_session
-    demo = _make_user(db, email="demo2@howl.app", animal="bear")
+    demo = _make_user(db, email="demo2@howl.app", is_bot=True, animal="bear")
     _make_swipe(db, user_id=test_user.id, target_user_id=demo.id, direction=SwipeDirection.like)
     real_id, demo_id = test_user.id, demo.id
 
@@ -101,7 +101,7 @@ def test_task_skips_non_demo_user(patched_session, test_user):
 
 def test_task_skips_missing_real_user(patched_session):
     db = patched_session
-    demo = _make_user(db, email="demo3@howl.app")
+    demo = _make_user(db, email="demo3@howl.app", is_bot=True)
 
     auto_match_demo_user(99999, demo.id)
 
@@ -117,7 +117,7 @@ def test_task_skips_missing_demo_user(patched_session, test_user):
 def test_task_skips_if_real_user_no_longer_likes(patched_session, test_user):
     """If the original like swipe is absent (e.g. pass swipe only), task is a no-op."""
     db = patched_session
-    demo = _make_user(db, email="demo4@howl.app", animal="deer")
+    demo = _make_user(db, email="demo4@howl.app", is_bot=True, animal="deer")
     # No like swipe from test_user → demo
 
     auto_match_demo_user(test_user.id, demo.id)
@@ -128,7 +128,7 @@ def test_task_skips_if_real_user_no_longer_likes(patched_session, test_user):
 def test_task_idempotent_if_demo_already_swiped(patched_session, test_user, monkeypatch):
     """Task is a no-op if the demo user already has a swipe on the real user."""
     db = patched_session
-    demo = _make_user(db, email="demo5@howl.app", animal="wolf")
+    demo = _make_user(db, email="demo5@howl.app", is_bot=True, animal="wolf")
     _make_swipe(db, user_id=test_user.id, target_user_id=demo.id, direction=SwipeDirection.like)
     _make_swipe(db, user_id=demo.id, target_user_id=test_user.id, direction=SwipeDirection.like)
 
@@ -145,7 +145,7 @@ def test_task_idempotent_if_demo_already_swiped(patched_session, test_user, monk
 def test_task_handles_real_user_pass_on_demo(patched_session, test_user):
     """A pass swipe from the real user satisfies no 'like' check — no auto-reply."""
     db = patched_session
-    demo = _make_user(db, email="demo6@howl.app")
+    demo = _make_user(db, email="demo6@howl.app", is_bot=True)
     _make_swipe(db, user_id=test_user.id, target_user_id=demo.id, direction=SwipeDirection.pass_)
 
     auto_match_demo_user(test_user.id, demo.id)
@@ -169,7 +169,7 @@ def mock_apply_async(monkeypatch):
 
 
 def test_swipe_like_on_demo_queues_task(client, db, auth_headers, test_user, mock_apply_async):
-    demo = _make_user(db, email="demo7@howl.app", animal="fox")
+    demo = _make_user(db, email="demo7@howl.app", is_bot=True, animal="fox")
 
     res = client.post(
         "/api/swipes",
@@ -184,7 +184,7 @@ def test_swipe_like_on_demo_queues_task(client, db, auth_headers, test_user, moc
 
 
 def test_swipe_pass_on_demo_does_not_queue_task(client, db, auth_headers, mock_apply_async):
-    demo = _make_user(db, email="demo8@howl.app", animal="bear")
+    demo = _make_user(db, email="demo8@howl.app", is_bot=True, animal="bear")
 
     res = client.post(
         "/api/swipes",
@@ -205,3 +205,35 @@ def test_swipe_like_on_non_demo_does_not_queue_task(client, db, auth_headers, mo
     )
     assert res.status_code == 200
     assert len(mock_apply_async) == 0
+
+
+def test_real_user_with_demo_prefixed_email_is_not_auto_matched(
+    client, db, auth_headers, mock_apply_async
+):
+    """Demo detection keys off is_bot, not the email prefix.
+
+    A real person registering demo.something@... previously got bot
+    auto-match behaviour purely because of how their address started.
+    """
+    impostor = _make_user(db, email="demo.nathan@gmail.com", animal="owl", is_bot=False)
+
+    res = client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": impostor.id, "direction": "like"},
+    )
+    assert res.status_code == 200
+    assert len(mock_apply_async) == 0
+
+
+def test_task_skips_target_that_is_not_a_bot(patched_session, test_user):
+    """The task re-validates independently of the dispatch check."""
+    db = patched_session
+    impostor = _make_user(db, email="demo.impostor@gmail.com", is_bot=False)
+    _make_swipe(db, user_id=test_user.id, target_user_id=impostor.id,
+                direction=SwipeDirection.like)
+
+    auto_match_demo_user.apply(args=[test_user.id, impostor.id])
+
+    assert db.query(Swipe).filter(Swipe.user_id == impostor.id).count() == 0
+    assert db.query(Match).count() == 0

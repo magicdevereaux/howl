@@ -82,7 +82,9 @@ def update_my_profile(
         current_user.bio = payload.bio
         can_regen = _try_consume_regen_slot(current_user, db)
         if can_regen:
-            # Slot available — reset the avatar and queue generation
+            # Slot available — reset the avatar and queue generation.
+            # Delete the old image first so it doesn't orphan in R2.
+            delete_avatar(current_user.avatar_url)
             current_user.animal = None
             current_user.personality_traits = None
             current_user.avatar_description = None

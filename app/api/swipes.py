@@ -138,7 +138,7 @@ def record_swipe(
 
     # Queue a delayed auto-like if the target is a demo user and we just liked them.
     # The task itself re-validates everything, so it's safe to fire and forget.
-    if body.direction == SwipeDirection.like and target.email.startswith("demo"):
+    if body.direction == SwipeDirection.like and target.is_bot:
         auto_match_demo_user.apply_async(
             args=[current_user.id, body.target_user_id],
             countdown=_DEMO_REPLY_DELAY_S,
