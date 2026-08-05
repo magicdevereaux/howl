@@ -5,12 +5,17 @@ layer, and the tooling. Every item has a file reference. Nothing here has been f
 worklist.
 
 Items marked **✅ verified** were confirmed by direct code read rather than inference.
+Items marked **✅ FIXED** have been resolved — the commit is noted inline.
+
+**Status:** 5 of 37 resolved (all four cheap P0s, plus CI). The suite went from 15 failing on a clean
+checkout to 386 passing. Remaining P0: **#3** (no email provider — reset tokens go to stdout) and
+**#5**/**#6**. #3 is blocked on choosing a provider.
 
 ---
 
 ## P0 — Fix before any real user touches this
 
-### 1. `GET /api/profile/{user_id}` is unauthenticated and returns every user's email ✅ verified
+### 1. ~~`GET /api/profile/{user_id}` is unauthenticated and returns every user's email~~ ✅ FIXED (187c73e)
 
 `app/api/profile.py:132-137` has no `get_current_user` dependency and returns the full `UserOut`, which
 includes `email`, `is_premium`, `daily_swipes`, and `swipes_reset_at` (`app/schemas/user.py:35-61`).
@@ -19,7 +24,7 @@ Anyone can walk `?user_id=1,2,3…` and harvest the entire user table's email ad
 The codebase already has the right pattern — `DiscoverUserOut` and `MatchedProfileOut` are deliberately
 narrow. Fix: add the auth dependency **and** return a narrow schema.
 
-### 2. `/api/mobile/auth/login` has no rate limiting ✅ verified
+### 2. ~~`/api/mobile/auth/login` has no rate limiting~~ ✅ FIXED (187c73e)
 
 `app/api/mobile_auth.py:102-111` is a straight credential check. The IP + email brute-force protection
 at `app/api/auth.py:136-158` doesn't exist on this path, so the mobile endpoint is an unthrottled
@@ -32,7 +37,7 @@ tests**.
 Railway log stream, which is a complete account-takeover primitive for anyone with log access. Users
 also simply never receive the emails, so the reset flow is non-functional in production.
 
-### 4. All 1000 seeded bots share one committed password
+### 4. ~~All 1000 seeded bots share one committed password~~ ✅ FIXED (187c73e)
 
 `scripts/seed_demo_users.py:208` bcrypts the literal string `"howl-demo-placeholder"`, and the seed
 runs on every production deploy with `is_email_verified=True`. Anyone who reads this repo can log in as
@@ -85,7 +90,7 @@ JSON and the whole batch is dropped. `:132` also does `resp.content[0].text` bli
 filtering for `block.type == "text"` the way `app/tasks/avatar.py:73-76` correctly does. No
 `stop_reason` check exists anywhere in the codebase.
 
-### 12. Live `ReferenceError` in the web client ✅ verified
+### 12. ~~Live `ReferenceError` in the web client~~ ✅ FIXED (1df4e92)
 
 `frontend/src/App.jsx:678` calls `setGenerationTime(null)` inside `handleRegenerate`. The state was
 deleted in commit `1fbd58d`; only `setGenerationStartTime` exists (`App.jsx:41`). Clicking "Regenerate"
@@ -212,7 +217,7 @@ limit at all (`chat.py:202-203`).
 
 ## P3 — Engineering hygiene
 
-### 27. No CI, and none of the configured quality tools ever run
+### 27. ~~No CI, and none of the configured quality tools ever run~~ ✅ FIXED (8ed5e59, 59d42f1)
 
 There is no `.github/`, no pre-commit, no Makefile. **372 tests exist and nothing runs them
 automatically.** ruff (`pyproject.toml:36-41`) and mypy `strict=true` (`:43-46`) are both configured and
