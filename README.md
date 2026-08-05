@@ -2,6 +2,20 @@
 
 AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DALL-E generates your avatar, and you swipe on other members to find your match. Available as a React web app and a React Native (Expo) mobile app for iOS and Android — see [Mobile App](#mobile-app) below.
 
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| [CLAUDE.md](CLAUDE.md) | Working agreement for this repo — commands, conventions, and the gotchas that bite |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the avatar pipeline, auth, chat, and background work actually fit together |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Setup, the four processes, env vars, and how to diagnose real failures |
+| [docs/GAPS.md](docs/GAPS.md) | Prioritized audit — known defects, risks, and improvements, with file references |
+| [docs/decisions/ADR.md](docs/decisions/ADR.md) | Architecture decision records |
+| [mobile/CLAUDE.md](mobile/CLAUDE.md) | Mobile-specific routes, conventions, and gaps |
+
+> ⚠️ Sections of this README are out of date — see [GAPS.md #36](docs/GAPS.md) for the specific
+> discrepancies. `RUNBOOK.md` has the correct setup values.
+
 ## Screenshots
 
 ### Login Page
