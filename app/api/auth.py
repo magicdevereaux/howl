@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -70,6 +71,8 @@ class ForgotPasswordIn(BaseModel):
 class ResetPasswordIn(BaseModel):
     token: str
     new_password: str = Field(min_length=8)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -283,6 +286,23 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> d
 
     user.password_hash = hash_password(payload.new_password)
     record.used = True
+
+    # Revoke every outstanding session. Someone resetting their password because
+    # they were compromised must not leave the attacker holding a refresh token
+    # that stays valid for another refresh_token_expire_days.
+    revoked = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id == user.id, RefreshToken.revoked == False)  # noqa: E712
+        .update({RefreshToken.revoked: True}, synchronize_session=False)
+    )
+
+    # Invalidate any other unused reset tokens issued for this account.
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used == False,  # noqa: E712
+    ).update({PasswordResetToken.used: True}, synchronize_session=False)
+
     db.commit()
+    logger.info("reset_password: user %d reset password, revoked %d sessions", user.id, revoked)
 
     return {"message": "Password reset successful. You can now log in with your new password."}
