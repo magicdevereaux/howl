@@ -120,15 +120,35 @@ def test_update_bio_unauthenticated(client):
 # GET /api/profile/{user_id}
 # ---------------------------------------------------------------------------
 
-def test_get_profile_by_id(client, test_user):
-    res = client.get(f"/api/profile/{test_user.id}")
+def test_get_profile_by_id(client, test_user, auth_headers):
+    res = client.get(f"/api/profile/{test_user.id}", headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["id"] == test_user.id
-    assert res.json()["email"] == test_user.email
 
 
-def test_get_profile_not_found(client):
-    res = client.get("/api/profile/99999")
+def test_get_profile_requires_auth(client, test_user):
+    """The endpoint is enumerable by id, so it must not be public."""
+    res = client.get(f"/api/profile/{test_user.id}")
+    assert res.status_code == 401
+
+
+def test_get_profile_does_not_leak_email_or_account_state(client, test_user, auth_headers):
+    res = client.get(f"/api/profile/{test_user.id}", headers=auth_headers)
+    assert res.status_code == 200
+    body = res.json()
+    for leaked in (
+        "email",
+        "is_premium",
+        "is_email_verified",
+        "email_notifications",
+        "daily_swipes",
+        "swipes_reset_at",
+    ):
+        assert leaked not in body, f"{leaked} must not be exposed on a public profile"
+
+
+def test_get_profile_not_found(client, auth_headers):
+    res = client.get("/api/profile/99999", headers=auth_headers)
     assert res.status_code == 404
     assert "not found" in res.json()["detail"].lower()
 

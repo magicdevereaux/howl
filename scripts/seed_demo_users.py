@@ -18,8 +18,9 @@ Archetype distribution (weighted):
 
 import os
 import random
+import secrets
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -205,7 +206,11 @@ _ARCHETYPE_SLOTS = (
     ["desperate"]    * 50
 )
 
-_DEMO_PASSWORD_HASH = bcrypt.hashpw(b"howl-demo-placeholder", bcrypt.gensalt()).decode()
+# Demo accounts are never meant to be logged into. Hash a fresh random secret on
+# every run so a committed literal can't be used to sign in as demo1@howl.app.
+# Set DEMO_USER_PASSWORD explicitly if you need to log in as a bot locally.
+_DEMO_PASSWORD = os.environ.get("DEMO_USER_PASSWORD") or secrets.token_urlsafe(32)
+_DEMO_PASSWORD_HASH = bcrypt.hashpw(_DEMO_PASSWORD.encode(), bcrypt.gensalt()).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +327,7 @@ def seed() -> None:
         if deleted:
             print(f"Removed {deleted} existing demo user(s).")
 
-        base_time = datetime.now(timezone.utc) - timedelta(days=30)
+        base_time = datetime.now(UTC) - timedelta(days=30)
 
         for i, data in enumerate(DEMO_USERS):
             created_at = base_time + timedelta(hours=i * 0.72)  # spread over ~30 days

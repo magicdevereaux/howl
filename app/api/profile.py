@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.user import AvatarStatus, User
-from app.schemas.user import ProfileUpdate, UserOut
+from app.schemas.user import ProfileUpdate, PublicProfileOut, UserOut
 from app.services.image_generation import delete_avatar
 from app.tasks.avatar import generate_avatar
 
@@ -29,10 +29,10 @@ def _try_consume_regen_slot(user: User, db: Session) -> bool:
     if user.is_premium:
         return True
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     reset_at = user.regenerations_reset_at
     if reset_at is not None and reset_at.tzinfo is None:
-        reset_at = reset_at.replace(tzinfo=timezone.utc)
+        reset_at = reset_at.replace(tzinfo=UTC)
 
     window_expired = reset_at is None or (now - reset_at).total_seconds() >= _REGEN_WINDOW_SECONDS
     if window_expired:
@@ -88,7 +88,7 @@ def update_my_profile(
             current_user.avatar_description = None
             current_user.avatar_url = None
             current_user.avatar_status = AvatarStatus.pending
-            current_user.avatar_status_updated_at = datetime.now(timezone.utc)
+            current_user.avatar_status_updated_at = datetime.now(UTC)
             current_user.profile_needs_regen = False
         else:
             # No slots left — flag that the avatar no longer matches the profile
@@ -129,8 +129,17 @@ def delete_account(
     logger.info("delete_account: user %d permanently deleted", user_id)
 
 
-@router.get("/{user_id}", response_model=UserOut)
-def get_profile(user_id: int, db: Session = Depends(get_db)) -> User:
+@router.get("/{user_id}", response_model=PublicProfileOut)
+def get_profile(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Another user's public profile.
+
+    Requires authentication and returns a narrow schema — this endpoint is
+    enumerable by user id, so it must never expose email or account state.
+    """
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

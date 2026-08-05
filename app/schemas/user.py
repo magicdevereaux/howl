@@ -156,6 +156,26 @@ class ProfileUpdate(BaseModel):
         return v
 
 
+class PublicProfileOut(BaseModel):
+    """Another user's profile, as shown in the chat profile modal.
+
+    Deliberately narrow: never exposes email, account state (is_premium,
+    is_email_verified, email_notifications), or swipe quota internals.
+    """
+    model_config = {"from_attributes": True}
+
+    id: int
+    name: str | None = None
+    age: int | None = None
+    location: str | None = None
+    bio: str | None = None
+    animal: str | None = None
+    personality_traits: list[str] | None = None
+    avatar_description: str | None = None
+    avatar_url: str | None = None
+    avatar_status: AvatarStatus
+
+
 class AuthOut(BaseModel):
     """Response shape after login/register when tokens are delivered via httpOnly cookies."""
     user: UserOut

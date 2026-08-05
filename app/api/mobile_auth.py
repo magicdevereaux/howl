@@ -9,21 +9,20 @@ All other API endpoints work for mobile automatically because get_current_user
 now accepts Authorization: Bearer <token> as a fallback to the cookie.
 """
 
-from datetime import datetime, timedelta, timezone
+import secrets
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.auth import (
-    ForgotPasswordIn,
-    ResetPasswordIn,
-    VerifyEmailIn,
-    _TOKEN_EXPIRY_HOURS,
+    _VERIFICATION_TOKEN_EXPIRY_HOURS,
+    enforce_login_rate_limit,
 )
+from app.config import settings
 from app.db import get_db
-from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.user import UserLogin, UserOut, UserRegister
@@ -63,7 +62,9 @@ def _issue_tokens_body(user: User, db: Session) -> dict:
     """Create access + refresh token pair and return them in the response body."""
     access = create_access_token(user.id)
     raw_refresh = create_refresh_token()
-    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    expires_at = datetime.now(UTC) + timedelta(
+        days=settings.refresh_token_expire_days
+    )
     db.add(RefreshToken(user_id=user.id, token=raw_refresh, expires_at=expires_at))
     db.commit()
     return {
@@ -75,14 +76,13 @@ def _issue_tokens_body(user: User, db: Session) -> dict:
 
 @router.post("/register", response_model=MobileAuthOut, status_code=status.HTTP_201_CREATED)
 def mobile_register(payload: UserRegister, db: Session = Depends(get_db)) -> dict:
-    import secrets
     verification_token = secrets.token_urlsafe(32)
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         email_verification_token=verification_token,
         email_verification_token_expires_at=(
-            datetime.now(timezone.utc) + timedelta(hours=_TOKEN_EXPIRY_HOURS)
+            datetime.now(UTC) + timedelta(hours=_VERIFICATION_TOKEN_EXPIRY_HOURS)
         ),
     )
     db.add(user)
@@ -100,7 +100,9 @@ def mobile_register(payload: UserRegister, db: Session = Depends(get_db)) -> dic
 
 
 @router.post("/login", response_model=MobileAuthOut)
-def mobile_login(payload: UserLogin, db: Session = Depends(get_db)) -> dict:
+def mobile_login(payload: UserLogin, request: Request, db: Session = Depends(get_db)) -> dict:
+    enforce_login_rate_limit(request, payload.email)
+
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
@@ -122,8 +124,8 @@ def mobile_refresh(payload: MobileRefreshIn, db: Session = Depends(get_db)) -> d
 
     expires_at = record.expires_at
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         raise _INVALID
 
     new_access = create_access_token(record.user_id)

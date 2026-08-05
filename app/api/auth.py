@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -47,7 +47,7 @@ def _issue_tokens(user: User, db: Session, response: Response) -> dict:
     """Create a new access + refresh token pair, persist the refresh token, set cookies."""
     access = create_access_token(user.id)
     raw_refresh = create_refresh_token()
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    expires_at = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
     db.add(RefreshToken(user_id=user.id, token=raw_refresh, expires_at=expires_at))
     db.commit()
     _set_auth_cookies(response, access, raw_refresh)
@@ -85,7 +85,7 @@ def register(payload: UserRegister, response: Response, db: Session = Depends(ge
         password_hash=hash_password(payload.password),
         email_verification_token=verification_token,
         email_verification_token_expires_at=(
-            datetime.now(timezone.utc) + timedelta(hours=_VERIFICATION_TOKEN_EXPIRY_HOURS)
+            datetime.now(UTC) + timedelta(hours=_VERIFICATION_TOKEN_EXPIRY_HOURS)
         ),
     )
     db.add(user)
@@ -120,8 +120,8 @@ def verify_email(payload: VerifyEmailIn, db: Session = Depends(get_db)) -> dict:
         raise _INVALID
     # Normalise naive datetime (SQLite) vs aware datetime (PostgreSQL)
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         raise _INVALID
 
     user.is_email_verified = True
@@ -131,15 +131,21 @@ def verify_email(payload: VerifyEmailIn, db: Session = Depends(get_db)) -> dict:
     return {"message": "Email verified successfully."}
 
 
-@router.post("/login", response_model=AuthOut)
-def login(payload: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+def enforce_login_rate_limit(request: Request, email: str) -> None:
+    """Apply the IP + email brute-force limits to a login attempt.
+
+    Shared by the web (`/api/auth/login`) and mobile (`/api/mobile/auth/login`)
+    endpoints so the two can't drift apart. Raises 429 when either bucket is
+    exhausted. Note this fails open if Redis is unreachable — see
+    app/services/rate_limit.py.
+    """
     # Resolve the real client IP (respects X-Forwarded-For from Railway / reverse proxies)
     forwarded = request.headers.get("X-Forwarded-For")
     client_ip = forwarded.split(",")[0].strip() if forwarded else (
         request.client.host if request.client else "unknown"
     )
 
-    ip_key, email_key = login_rate_limit_keys(client_ip, payload.email)
+    ip_key, email_key = login_rate_limit_keys(client_ip, email)
 
     limited, retry_after = check_rate_limit(ip_key, _IP_LIMIT, _WINDOW_SECONDS)
     if limited:
@@ -156,6 +162,11 @@ def login(payload: UserLogin, request: Request, response: Response, db: Session 
             detail=f"Too many login attempts for this account. Try again in {retry_after} seconds.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+@router.post("/login", response_model=AuthOut)
+def login(payload: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    enforce_login_rate_limit(request, payload.email)
 
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -189,8 +200,8 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
 
     expires_at = record.expires_at
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         raise _INVALID
 
     new_access = create_access_token(record.user_id)
@@ -234,7 +245,7 @@ def forgot_password(payload: ForgotPasswordIn, db: Session = Depends(get_db)) ->
     ).update({"used": True}, synchronize_session=False)
 
     raw_token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=_TOKEN_EXPIRY_HOURS)
+    expires_at = datetime.now(UTC) + timedelta(hours=_TOKEN_EXPIRY_HOURS)
     db.add(PasswordResetToken(user_id=user.id, token=raw_token, expires_at=expires_at))
     db.commit()
 
@@ -262,8 +273,8 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> d
     # (which returns naive datetimes) and PostgreSQL (which returns aware ones).
     expires_at = record.expires_at
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         raise _INVALID
 
     user = db.get(User, record.user_id)
