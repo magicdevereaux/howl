@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import anthropic
 
@@ -31,7 +31,7 @@ def _mark_failed(db: object, user: User | None) -> None:
         return
     try:
         user.avatar_status = AvatarStatus.failed
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(UTC)
         db.commit()
     except Exception:
         db.rollback()
@@ -84,7 +84,7 @@ def generate_avatar(self, user_id: int) -> None:
         if raw_text.startswith("```"):
             lines = raw_text.split("\n")
             raw_text = "\n".join(lines[1:-1]).strip()
-            logger.info(f"Stripped markdown fences")
+            logger.info("Stripped markdown fences")
 
         # ── Parse & validate ─────────────────────────────────────────────────
         data: dict = json.loads(raw_text)
@@ -114,7 +114,7 @@ def generate_avatar(self, user_id: int) -> None:
         user.avatar_description = avatar_description
         user.avatar_url = avatar_url
         user.avatar_status = AvatarStatus.ready
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(UTC)
         db.commit()
         logger.info(
             "generate_avatar: user %d → complete (animal=%r, image=%s)",

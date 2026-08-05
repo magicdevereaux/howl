@@ -1,13 +1,12 @@
 """Tests for the monthly avatar regeneration limit."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.models.user import AvatarStatus, User
-from app.security import hash_password, create_access_token
 from app.api.avatar import _MONTHLY_REGEN_LIMIT
-
+from app.models.user import AvatarStatus, User
+from app.security import create_access_token, hash_password
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -134,7 +133,7 @@ def test_counter_resets_after_30_day_window(client, db):
     """A user who used their regeneration 31 days ago should get a fresh slot."""
     user = _make_user(db, email="reset@howl.app")
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=31)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=31)
     db.commit()
 
     res = _regen(client, user)
@@ -148,7 +147,7 @@ def test_counter_does_not_reset_within_window(client, db):
     """Within the 30-day window the accumulated count is preserved."""
     user = _make_user(db, email="notreset@howl.app")
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT - 1
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=10)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=10)
     db.commit()
 
     res = _regen(client, user)
@@ -161,7 +160,7 @@ def test_counter_does_not_reset_within_window(client, db):
 def test_blocked_within_active_window(client, db):
     user = _make_user(db, email="blocked@howl.app")
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=10)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=10)
     db.commit()
 
     res = _regen(client, user)

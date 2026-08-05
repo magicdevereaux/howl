@@ -6,11 +6,11 @@ the same client instance.  Cookies can also be injected via the Cookie
 request header for unit-testing individual endpoints in isolation.
 """
 
-import pytest
+
+from datetime import UTC
 
 from app.models.refresh_token import RefreshToken
 from app.security import create_access_token
-
 
 # ---------------------------------------------------------------------------
 # Helper — auth cookie header for one-off requests
@@ -225,12 +225,12 @@ def test_refresh_persists_token_in_db(client, db, test_user):
 
 
 def test_refresh_expired_token_returns_401(client, db, test_user):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     raw = "expiredtoken" + "x" * 20
     db.add(RefreshToken(
         user_id=test_user.id,
         token=raw,
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        expires_at=datetime.now(UTC) - timedelta(days=1),
     ))
     db.commit()
     res = client.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={raw}"})
@@ -238,12 +238,12 @@ def test_refresh_expired_token_returns_401(client, db, test_user):
 
 
 def test_refresh_revoked_token_returns_401(client, db, test_user):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     raw = "revokedtoken" + "x" * 20
     db.add(RefreshToken(
         user_id=test_user.id,
         token=raw,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expires_at=datetime.now(UTC) + timedelta(days=30),
         revoked=True,
     ))
     db.commit()

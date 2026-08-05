@@ -1,16 +1,12 @@
 """Tests for DELETE /api/profile/me (account deletion)."""
 
-from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
-from app.security import create_access_token, hash_password
-
+from app.security import hash_password
 
 # ---------------------------------------------------------------------------
 # Helpers

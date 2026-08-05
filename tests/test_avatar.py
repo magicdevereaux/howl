@@ -1,6 +1,6 @@
 """Tests for GET /api/avatar/status and POST /api/avatar/regenerate."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -97,7 +97,7 @@ def test_status_includes_avatar_status_updated_at_field(client, auth_headers):
 
 def test_status_returns_avatar_status_updated_at_when_set(client, db, auth_headers, test_user):
     """avatar_status_updated_at is returned when the field has a value."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     test_user.avatar_status_updated_at = now
     db.commit()
 

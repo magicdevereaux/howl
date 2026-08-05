@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, or_
 
@@ -49,7 +49,7 @@ def notify_new_message(match_id: int, recipient_id: int, sender_id: int) -> None
             )
             return
 
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=_ACTIVITY_WINDOW_MINUTES)
+        cutoff = datetime.now(UTC) - timedelta(minutes=_ACTIVITY_WINDOW_MINUTES)
 
         recently_active = (
             db.query(Message)

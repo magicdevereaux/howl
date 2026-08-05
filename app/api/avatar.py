@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -21,11 +21,11 @@ def _enforce_regen_limit(user: User, db: Session) -> None:
     Only called for non-premium users.  Does not count stale-detection regenerations
     triggered by profile bio updates — those go through the Celery task directly.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     reset_at = user.regenerations_reset_at
     if reset_at is not None and reset_at.tzinfo is None:
-        reset_at = reset_at.replace(tzinfo=timezone.utc)
+        reset_at = reset_at.replace(tzinfo=UTC)
 
     window_expired = reset_at is None or (now - reset_at).total_seconds() >= _REGEN_WINDOW_SECONDS
     if window_expired:
@@ -81,7 +81,7 @@ def regenerate_avatar(
     current_user.avatar_description = None
     current_user.avatar_url = None
     current_user.avatar_status = AvatarStatus.pending
-    current_user.avatar_status_updated_at = datetime.now(timezone.utc)
+    current_user.avatar_status_updated_at = datetime.now(UTC)
     current_user.profile_needs_regen = False  # avatar now reflects current profile
 
     if not current_user.is_premium:

@@ -1,14 +1,10 @@
 """Tests for the daily swipe limit feature."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-import pytest
-
-from app.models.user import AvatarStatus, User
-from app.models.swipe import Swipe, SwipeDirection
-from app.security import hash_password, create_access_token
 from app.api.swipes import _DAILY_SWIPE_LIMIT
-
+from app.models.user import AvatarStatus, User
+from app.security import create_access_token, hash_password
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,7 +128,7 @@ def test_counter_resets_after_24h_window(client, db, test_user):
     """A user who exhausted their limit yesterday should be able to swipe again."""
     # Simulate a fully exhausted counter from 25 hours ago
     test_user.daily_swipes = _DAILY_SWIPE_LIMIT
-    test_user.swipes_reset_at = datetime.now(timezone.utc) - timedelta(hours=25)
+    test_user.swipes_reset_at = datetime.now(UTC) - timedelta(hours=25)
     db.commit()
 
     target = _make_user(db, email="fresh@howl.app")
@@ -146,7 +142,7 @@ def test_counter_resets_after_24h_window(client, db, test_user):
 def test_counter_does_not_reset_within_window(client, db, test_user):
     """If the window hasn't expired yet, the counter stays accumulated."""
     test_user.daily_swipes = _DAILY_SWIPE_LIMIT - 1
-    test_user.swipes_reset_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    test_user.swipes_reset_at = datetime.now(UTC) - timedelta(hours=10)
     db.commit()
 
     target = _make_user(db, email="within@howl.app")
@@ -160,7 +156,7 @@ def test_counter_does_not_reset_within_window(client, db, test_user):
 def test_counter_blocked_mid_window(client, db, test_user):
     """Hitting the limit within an active window is refused correctly."""
     test_user.daily_swipes = _DAILY_SWIPE_LIMIT
-    test_user.swipes_reset_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    test_user.swipes_reset_at = datetime.now(UTC) - timedelta(hours=10)
     db.commit()
 
     target = _make_user(db, email="mid@howl.app")

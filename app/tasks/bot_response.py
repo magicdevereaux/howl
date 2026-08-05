@@ -10,7 +10,7 @@ when the bot's own message has gone unanswered for 2 hours.
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import anthropic
 from sqlalchemy import or_
@@ -53,7 +53,7 @@ _BATCH_SIZE = 10
 
 def _tz(dt: datetime) -> datetime:
     """Ensure the datetime is timezone-aware (handles SQLite naive datetimes)."""
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
 def _recent_history(db, match_id: int, bot_id: int, limit: int = 5) -> list[dict]:
@@ -162,7 +162,7 @@ def process_bot_responses() -> None:
     """
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pending: list[dict] = []
 
         bots = db.query(User).filter(User.is_bot == True).all()  # noqa: E712

@@ -1,11 +1,10 @@
 """Tests for email verification: token generation, expiry, and the verify-email endpoint."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.models.user import User
-
 
 # ---------------------------------------------------------------------------
 # Suppress console output from the email service during tests
@@ -41,8 +40,8 @@ def test_register_sets_token_expiry_in_future(client, db):
     assert expires_at is not None
     # Normalise for SQLite (naive) vs PostgreSQL (aware)
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    assert expires_at > datetime.now(timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
+    assert expires_at > datetime.now(UTC)
 
 
 def test_register_calls_email_service(client, db, monkeypatch):
@@ -105,7 +104,7 @@ def test_verify_email_expired_token_returns_400(client, db):
     user, token = _register_and_get_token(client, db, email="expd@howl.app")
     # Backdate the expiry by 25 hours
     user.email_verification_token_expires_at = (
-        datetime.now(timezone.utc) - timedelta(hours=25)
+        datetime.now(UTC) - timedelta(hours=25)
     )
     db.commit()
 

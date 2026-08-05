@@ -13,11 +13,9 @@ from unittest.mock import MagicMock, patch
 
 import anthropic
 import httpx
-import pytest
 
 from app.models.user import AvatarStatus, User
 from app.tasks.avatar import _mark_failed, generate_avatar
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -10,10 +10,10 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from app.api.auth import router as auth_router
-from app.api.mobile_auth import router as mobile_auth_router
 from app.api.avatar import router as avatar_router
 from app.api.blocks import router as blocks_router
 from app.api.chat import router as chat_router
+from app.api.mobile_auth import router as mobile_auth_router
 from app.api.profile import router as profile_router
 from app.api.push_tokens import router as push_tokens_router
 from app.api.reports import router as reports_router

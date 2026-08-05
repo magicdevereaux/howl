@@ -1,7 +1,6 @@
 """Tests for the notify_new_message Celery task and the email_notifications preference."""
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -11,7 +10,6 @@ from app.models.push_token import PushToken
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
 from app.tasks.notify import notify_new_match, notify_new_message
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,7 +79,7 @@ def test_skips_when_recipient_read_message_recently(patched_db, monkeypatch):
     recipient = _make_user(db, email="recipient2@howl.app")
     m = _make_match(db, sender, recipient)
 
-    recent_read = datetime.now(timezone.utc) - timedelta(minutes=2)
+    recent_read = datetime.now(UTC) - timedelta(minutes=2)
     _make_message(db, match_id=m.id, sender_id=sender.id, read_at=recent_read)
 
     sent = []
@@ -99,7 +97,7 @@ def test_skips_when_recipient_sent_message_recently(patched_db, monkeypatch):
     recipient = _make_user(db, email="recipient3@howl.app")
     m = _make_match(db, sender, recipient)
 
-    recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+    recent = datetime.now(UTC) - timedelta(minutes=1)
     _make_message(db, match_id=m.id, sender_id=recipient.id, created_at=recent)
 
     sent = []
@@ -134,7 +132,7 @@ def test_sends_when_recipient_inactive(patched_db, monkeypatch):
     m = _make_match(db, sender, recipient)
 
     # Old message, read a long time ago — not recent activity
-    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    old = datetime.now(UTC) - timedelta(minutes=10)
     _make_message(db, match_id=m.id, sender_id=sender.id, read_at=old)
 
     sent = []

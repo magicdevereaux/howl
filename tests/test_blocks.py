@@ -1,6 +1,5 @@
 """Tests for block/unblock, unmatch, and discover filtering."""
 
-import pytest
 
 from app.models.block import Block
 from app.models.match import Match
@@ -8,7 +7,6 @@ from app.models.message import Message
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
 from app.security import create_access_token, hash_password
-
 
 # ---------------------------------------------------------------------------
 # Helpers

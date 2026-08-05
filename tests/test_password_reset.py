@@ -1,21 +1,19 @@
 """Tests for POST /api/auth/forgot-password and POST /api/auth/reset-password."""
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.models.password_reset_token import PasswordResetToken
-from app.models.user import User
-from app.security import hash_password, verify_password
-
+from app.security import verify_password
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_token(db, user_id: int, *, used: bool = False, expired: bool = False) -> PasswordResetToken:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now - timedelta(hours=2) if expired else now + timedelta(hours=1)
     tok = PasswordResetToken(
         user_id=user_id,

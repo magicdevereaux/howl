@@ -26,7 +26,7 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
     # ── Dev: print link so it can be copied from logs ───────────────────────
     separator = "=" * 60
     print(f"\n{separator}")
-    print(f"  PASSWORD RESET (dev mode — no email sent)")
+    print("  PASSWORD RESET (dev mode — no email sent)")
     print(f"  To:   {to_email}")
     print(f"  Link: {reset_link}")
     print(f"{separator}\n")
@@ -45,7 +45,7 @@ def send_verification_email(to_email: str, token: str) -> None:
 
     separator = "=" * 60
     print(f"\n{separator}")
-    print(f"  EMAIL VERIFICATION (dev mode — no email sent)")
+    print("  EMAIL VERIFICATION (dev mode — no email sent)")
     print(f"  To:   {to_email}")
     print(f"  Link: {verify_link}")
     print(f"{separator}\n")
@@ -68,10 +68,10 @@ def send_message_notification(
 
     separator = "=" * 60
     print(f"\n{separator}")
-    print(f"  NEW MESSAGE NOTIFICATION (dev mode — no email sent)")
+    print("  NEW MESSAGE NOTIFICATION (dev mode — no email sent)")
     print(f"  To:     {to_email}")
     print(f"  From:   {display_name} (spirit animal: {display_animal})")
-    print(f"  Open Howl to read your message.")
+    print("  Open Howl to read your message.")
     print(f"{separator}\n")
     logger.info("message_notification: sent to %s from %s", to_email, display_name)
 

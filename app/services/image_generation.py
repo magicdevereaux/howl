@@ -32,7 +32,8 @@ except ImportError:
 
 try:
     import boto3
-    from botocore.exceptions import BotoCoreError, ClientError as BotoClientError
+    from botocore.exceptions import BotoCoreError
+    from botocore.exceptions import ClientError as BotoClientError
     _BOTO3_AVAILABLE = True
 except ImportError:
     boto3 = None  # type: ignore[assignment]

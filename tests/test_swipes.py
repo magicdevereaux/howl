@@ -1,12 +1,10 @@
 """Tests for POST /api/swipes, GET /api/users/discover, GET /api/users/matches."""
 
-import pytest
 
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -404,7 +402,6 @@ def test_undo_demo_auto_match_removes_both_swipes_and_match(client, db, auth_hea
 
 def test_undo_only_affects_current_user(client, db, auth_headers, test_user):
     """Undoing test_user's swipe doesn't touch another user's swipes."""
-    from app.security import create_access_token
 
     other = _make_user(db, email="bystander@howl.app", animal="deer")
     third = _make_user(db, email="third@howl.app", animal="elk")

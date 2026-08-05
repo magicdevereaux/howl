@@ -2,14 +2,13 @@
 Tests for the edit/save flow auto-regeneration logic and the profile_needs_regen flag.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from app.models.user import AvatarStatus, User
 from app.security import create_access_token, hash_password
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -106,7 +105,7 @@ def test_bio_change_sets_flag_when_no_slot(client, db):
     from app.api.avatar import _MONTHLY_REGEN_LIMIT
     user = _make_user(db, email="noslot@howl.app")
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(hours=10)
     db.commit()
 
     called = []
@@ -125,7 +124,7 @@ def test_avatar_not_reset_when_no_regen_slot(client, db):
     user = _make_user(db, email="keepavatar@howl.app", bio="Old bio.")
     user.animal = "wolf"
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(hours=10)
     db.commit()
 
     _patch_bio(client, user, "Brand new bio that is completely different from before.")
@@ -150,7 +149,7 @@ def test_premium_user_always_regens(client, db):
     from app.api.avatar import _MONTHLY_REGEN_LIMIT
     user = _make_user(db, email="prem_regen@howl.app", is_premium=True)
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT + 5
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(hours=5)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(hours=5)
     db.commit()
 
     called = []
@@ -191,7 +190,6 @@ def test_manual_regen_clears_profile_needs_regen(client, db):
 
 def test_flag_visible_in_user_out(client, db):
     """profile_needs_regen is exposed in UserOut so the frontend can render the badge."""
-    from app.api.avatar import _MONTHLY_REGEN_LIMIT
     user = _make_user(db, email="flagout@howl.app")
     user.profile_needs_regen = True
     db.commit()
@@ -209,7 +207,7 @@ def test_bio_change_resets_counter_after_window_expires(client, db):
     from app.api.avatar import _MONTHLY_REGEN_LIMIT
     user = _make_user(db, email="winreset@howl.app")
     user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
-    user.regenerations_reset_at = datetime.now(timezone.utc) - timedelta(days=31)
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=31)
     db.commit()
 
     called = []

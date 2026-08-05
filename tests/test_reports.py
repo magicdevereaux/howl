@@ -1,13 +1,11 @@
 """Tests for POST /api/reports."""
 
-import pytest
 
 from app.models.match import Match
 from app.models.message import Message
 from app.models.report import Report, ReportReason
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
-
 
 # ---------------------------------------------------------------------------
 # Helpers

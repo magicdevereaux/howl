@@ -5,7 +5,6 @@ import pytest
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

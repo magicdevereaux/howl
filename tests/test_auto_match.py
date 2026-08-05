@@ -8,7 +8,6 @@ from app.models.user import AvatarStatus, User
 from app.security import hash_password
 from app.tasks.auto_match import auto_match_demo_user
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

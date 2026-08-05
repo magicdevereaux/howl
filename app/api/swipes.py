@@ -1,6 +1,5 @@
 import logging
-import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,7 +9,14 @@ from app.dependencies import get_current_user
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
-from app.schemas.swipe import DiscoverUserOut, MatchOut, MatchedProfileOut, SwipeIn, SwipeOut, UndoSwipeOut
+from app.schemas.swipe import (
+    DiscoverUserOut,
+    MatchedProfileOut,
+    MatchOut,
+    SwipeIn,
+    SwipeOut,
+    UndoSwipeOut,
+)
 from app.tasks.auto_match import auto_match_demo_user
 from app.tasks.notify import notify_new_match
 
@@ -29,13 +35,13 @@ def _enforce_swipe_limit(user: User, db: Session) -> None:
     Only called for non-premium users.  Resets the counter if the 24-hour
     window has expired so the first swipe of a new day always succeeds.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Normalise the stored timestamp — SQLite returns naive datetimes even for
     # DateTime(timezone=True) columns, so we add UTC info when it is missing.
     reset_at = user.swipes_reset_at
     if reset_at is not None and reset_at.tzinfo is None:
-        reset_at = reset_at.replace(tzinfo=timezone.utc)
+        reset_at = reset_at.replace(tzinfo=UTC)
 
     window_expired = reset_at is None or (now - reset_at).total_seconds() >= _SWIPE_WINDOW_SECONDS
     if window_expired:

@@ -9,11 +9,11 @@ from app.models.match import Match
 def _mock_notify(monkeypatch):
     """Suppress notify_new_message.delay so tests don't require Redis."""
     monkeypatch.setattr("app.api.chat.notify_new_message.delay", lambda *_: None)
+from datetime import UTC
+
 from app.models.message import Message
-from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
 from app.security import create_access_token, hash_password
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,12 +44,12 @@ def _make_match(db, user_a: User, user_b: User) -> Match:
 
 
 def _send(db, *, match_id: int, sender_id: int, content: str, read: bool = False, created_at=None) -> Message:
-    from datetime import datetime, timezone
+    from datetime import datetime
     msg = Message(
         match_id=match_id,
         sender_id=sender_id,
         content=content,
-        read_at=datetime.now(timezone.utc) if read else None,
+        read_at=datetime.now(UTC) if read else None,
         created_at=created_at,
     )
     db.add(msg)
@@ -438,8 +438,8 @@ def test_matches_list_includes_unread_count_field(client, db, test_user, auth_he
 
 
 def test_matches_list_includes_last_message(client, db, test_user, auth_headers):
-    from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)
+    from datetime import datetime, timedelta
+    now = datetime.now(UTC)
     other = _make_user(db, email="ml_last@howl.app")
     m = _make_match(db, test_user, other)
     _send(db, match_id=m.id, sender_id=test_user.id, content="First", created_at=now - timedelta(seconds=5))

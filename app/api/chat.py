@@ -1,8 +1,17 @@
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
+
 # Query kept for before_id pagination param
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -256,7 +265,7 @@ def delete_message(
     if msg.deleted_at:
         return _to_out(msg, current_user.id)  # idempotent
 
-    msg.deleted_at = datetime.now(timezone.utc)
+    msg.deleted_at = datetime.now(UTC)
     db.commit()
     db.refresh(msg)
     logger.info("chat: user %d soft-deleted message %d", current_user.id, message_id)
@@ -292,7 +301,7 @@ def get_messages(
         raw = raw[:_PAGE_SIZE]
     messages = list(reversed(raw))
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     marked = False
     for msg in messages:
         if msg.sender_id != current_user.id and msg.read_at is None:
@@ -318,7 +327,7 @@ def send_message(
     """Send a message to a match. Rate-limited to 10 per 60 seconds."""
     match = _require_match_member(match_id, current_user.id, db)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
+    cutoff = datetime.now(UTC) - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
     recent = (
         db.query(Message)
         .filter(

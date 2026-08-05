@@ -1,6 +1,6 @@
 """Tests for the bot response system."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,7 +15,6 @@ from app.tasks.bot_response import (
     _generate_batch,
     process_bot_responses,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -74,7 +73,7 @@ def _make_match(db, u1: User, u2: User) -> Match:
 
 
 def _make_msg(db, *, match_id: int, sender_id: int, content: str = "hi", ago_seconds: int = 0) -> Message:
-    created = datetime.now(timezone.utc) - timedelta(seconds=ago_seconds)
+    created = datetime.now(UTC) - timedelta(seconds=ago_seconds)
     m = Message(match_id=match_id, sender_id=sender_id, content=content, created_at=created)
     db.add(m); db.commit(); db.refresh(m)
     return m
@@ -304,7 +303,9 @@ def test_generate_batch_falls_back_on_invalid_json(monkeypatch):
 
 
 def test_generate_batch_parses_valid_json(monkeypatch):
-    import json, anthropic as ant_module
+    import json
+
+    import anthropic as ant_module
 
     payload = json.dumps([{"index": 0, "message": "Hey there!"}])
 
@@ -353,7 +354,7 @@ def test_seed_archetype_distribution():
 
 
 def test_seed_desperate_bios_feel_needy():
-    from scripts.seed_demo_users import DEMO_USERS, _BIOS
+    from scripts.seed_demo_users import _BIOS
     # Every desperate bio should contain at least one emotionally loaded word
     needy_words = {
         "half", "soulmate", "hurt", "alone", "chance", "real", "ready",

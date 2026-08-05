@@ -16,7 +16,7 @@ from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import AvatarStatus, User
-from app.schemas.swipe import DiscoverUserOut, LastMessageOut, MatchOut, MatchedProfileOut
+from app.schemas.swipe import DiscoverUserOut, LastMessageOut, MatchedProfileOut, MatchOut
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 

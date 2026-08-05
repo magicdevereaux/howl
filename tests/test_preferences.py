@@ -1,10 +1,8 @@
 """Tests for preference fields and preference-based discover filtering."""
 
-import pytest
 
 from app.models.user import AvatarStatus, User
 from app.security import create_access_token, hash_password
-
 
 # ---------------------------------------------------------------------------
 # Helpers
