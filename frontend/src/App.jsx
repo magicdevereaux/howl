@@ -373,7 +373,6 @@ export default function HowlApp() {
         setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setGenerationStartTime(Date.now());
-        setGenerationTime(null);
         setAvatarStatus({ avatar_status: 'generating', animal: null });
         setTimeout(fetchAvatarStatus, 2000);
       } else {
@@ -675,7 +674,6 @@ export default function HowlApp() {
       const data = await res.json();
       if (res.ok) {
         setGenerationStartTime(Date.now());
-        setGenerationTime(null);
         setAvatarStatus(data);
       } else if (res.status === 429 && data.detail?.code === 'regeneration_limit_reached') {
         const resets = new Date(data.detail.resets_at);
