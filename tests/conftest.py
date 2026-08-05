@@ -126,3 +126,22 @@ def auth_headers(test_user: User) -> dict[str, str]:
 def _mock_notify_new_match(monkeypatch):
     """Suppress notify_new_match.delay so match-creating tests don't require Redis."""
     monkeypatch.setattr("app.tasks.notify.notify_new_match.delay", lambda *a, **kw: None)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _open_login_rate_limit(monkeypatch):
+    """Keep the login limiter open by default.
+
+    The limiter counts into a real Redis instance keyed by IP and email. Under
+    the test suite every request arrives from the same client IP, so counters
+    leak across tests and unrelated login assertions start failing with 429 once
+    the 10-per-15-minute IP bucket fills up.
+
+    Tests that exercise the limiter itself re-patch this in their own body,
+    which takes precedence because it runs after this fixture.
+    """
+    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (False, 0))
