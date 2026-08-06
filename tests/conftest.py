@@ -145,3 +145,18 @@ def _open_login_rate_limit(monkeypatch):
     which takes precedence because it runs after this fixture.
     """
     monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (False, 0))
+
+
+@pytest.fixture(autouse=True)
+def _open_task_locks(monkeypatch):
+    """Grant every Celery task lock by default.
+
+    The lock is backed by real Redis and keyed by user id, which repeats across
+    tests. Without this, results depend on whether Redis happens to be running
+    locally.
+
+    Patched at the client boundary rather than over acquire/release, so tests
+    that exercise the lock logic itself can still substitute their own client.
+    With no client, acquire fails open and release is a no-op.
+    """
+    monkeypatch.setattr("app.services.task_lock._get_client", lambda: None)

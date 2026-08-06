@@ -8,6 +8,7 @@ from app.celery_app import celery_app
 from app.config import settings
 from app.db import SessionLocal
 from app.models.user import AvatarStatus, User
+from app.services import task_lock
 from app.services.image_generation import generate_avatar_image
 
 logger = logging.getLogger(__name__)
@@ -44,13 +45,23 @@ def generate_avatar(self, user_id: int) -> None:
 
     Flow:
       1. Fetch user — bail if missing or has no bio.
-      2. Call Claude (claude-sonnet-4-20250514) with the bio.
+      2. Call Claude (claude-haiku-4-5-20251001) with the bio.
       3. Parse JSON → update user.animal + avatar_status = 'ready'.
       4. On Claude API errors: retry up to 3×, then mark failed.
       5. On parse / validation errors: mark failed immediately (no point retrying).
+
+    Duplicate-work protection: this task calls two paid APIs, and Celery runs
+    with task_acks_late, so a worker killed after the DALL-E call but before the
+    commit gets the message redelivered and pays for a second image. Two guards
+    apply — an already-ready check for redelivery after a successful run, and a
+    Redis single-flight lock for concurrent or in-flight duplicates. The lock
+    fails open, so a Redis outage degrades to the old behaviour rather than
+    blocking avatar generation entirely.
     """
     db = SessionLocal()
     user: User | None = None
+    lock_key = f"avatar:generate:{user_id}"
+    lock_held = False
     try:
         user = db.get(User, user_id)
         if user is None:
@@ -59,6 +70,21 @@ def generate_avatar(self, user_id: int) -> None:
 
         if not user.bio:
             logger.warning("generate_avatar: user %d has no bio — skipping", user_id)
+            return
+
+        # Redelivery after a run that already succeeded. Regeneration resets
+        # status to pending before queueing, so this never blocks a real regen.
+        if user.avatar_status == AvatarStatus.ready and user.avatar_url:
+            logger.info(
+                "generate_avatar: user %d already has a ready avatar — skipping", user_id
+            )
+            return
+
+        lock_held = task_lock.acquire(lock_key)
+        if not lock_held:
+            logger.info(
+                "generate_avatar: user %d already being generated elsewhere — skipping", user_id
+            )
             return
 
         # ── Claude call ──────────────────────────────────────────────────────
@@ -141,4 +167,6 @@ def generate_avatar(self, user_id: int) -> None:
         _mark_failed(db, user)
 
     finally:
+        if lock_held:
+            task_lock.release(lock_key)
         db.close()
