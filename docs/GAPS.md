@@ -7,9 +7,15 @@ worklist.
 Items marked **✅ verified** were confirmed by direct code read rather than inference.
 Items marked **✅ FIXED** have been resolved — the commit is noted inline.
 
-**Status:** 5 of 37 resolved (all four cheap P0s, plus CI). The suite went from 15 failing on a clean
-checkout to 386 passing. Remaining P0: **#3** (no email provider — reset tokens go to stdout) and
-**#5**/**#6**. #3 is blocked on choosing a provider.
+**Status:** 13 of 37 resolved. Every P0 is closed except **#3** (no email provider — password-reset
+tokens go to stdout), which is blocked on choosing a provider. The whole P1 cost cluster (#7–#11) is
+done, so the four ways this app could bill unboundedly are all now bounded. Suite: **413 passing**, up
+from 15 failing on a clean checkout at the start of the audit.
+
+Note on **#5**: marked MITIGATED rather than FIXED. User text is now JSON-encoded, fenced as untrusted,
+and every returned index is range-checked and de-duplicated, so a reply cannot be written into a
+conversation outside its batch. A batched call still shows one user's text to a model that is writing
+replies for others; full isolation means one call per conversation, at _BATCH_SIZE times the cost.
 
 ---
 
@@ -43,7 +49,7 @@ also simply never receive the emails, so the reset flow is non-functional in pro
 runs on every production deploy with `is_email_verified=True`. Anyone who reads this repo can log in as
 `demo1@howl.app`. Generate a random per-deploy secret, or set an unusable hash.
 
-### 5. Prompt injection across users in the bot batch
+### 5. ~~Prompt injection across users in the bot batch~~ ✅ MITIGATED (949e020)
 
 `app/tasks/bot_response.py:105` interpolates raw user messages into a single prompt covering **10
 different conversations** and asks for a JSON array keyed by index. One user's message can steer the
@@ -51,7 +57,7 @@ replies sent to *other* users. `:143` bounds `index < len(batch)` but not `index
 index silently targets the wrong conversation. Batch per conversation, or validate the index range and
 delimit user content.
 
-### 6. Password reset doesn't revoke sessions
+### 6. ~~Password reset doesn't revoke sessions~~ ✅ FIXED (949e020)
 
 `app/api/auth.py:245-277` rehashes the password but leaves every `RefreshToken` row live. A user
 resetting a password because they were compromised stays compromised for up to 30 days.
@@ -60,30 +66,30 @@ resetting a password because they were compromised stays compromised for up to 3
 
 ## P1 — Correctness and cost
 
-### 7. `generate_avatar` is not idempotent under `task_acks_late=True`
+### 7. ~~`generate_avatar` is not idempotent under `task_acks_late=True`~~ ✅ FIXED (0787283)
 
 `app/celery_app.py:26` plus zero guarding in `app/tasks/avatar.py:40`. A worker killed after the DALL·E
 call but before the commit re-runs everything — a second Claude call and a **second paid image**. Add a
 Redis lock or an "already generating" check keyed on `user_id`.
 
-### 8. Unbounded AI spend in the Beat task
+### 8. ~~Unbounded AI spend in the Beat task~~ ✅ FIXED (949e020)
 
 `app/tasks/bot_response.py:166, 243` has no cap on `pending`. With 1000 seeded bots, every 15-minute
 tick can issue `len(pending)/10` Claude calls with no ceiling and no circuit breaker. Worse, a failing
 batch returns `[]` (`:145-147`) leaving the messages unanswered, so the **same failing batch is
 re-selected and re-paid for on every subsequent tick, forever**.
 
-### 9. Premium users have no avatar generation cap at all
+### 9. ~~Premium users have no avatar generation cap at all~~ ✅ FIXED (ca62654)
 
 `app/api/avatar.py:75, 87-88` — the 1-per-30-days limit applies only to non-premium. A premium account
 can call a paid DALL·E endpoint in an unbounded loop.
 
-### 10. Orphaned R2 objects on every regeneration
+### 10. ~~Orphaned R2 objects on every regeneration~~ ✅ FIXED (1914c93)
 
 `app/api/avatar.py:82` nulls `avatar_url` without calling `delete_avatar()`, and
 `app/tasks/avatar.py:115` overwrites it. Every regeneration leaks the previous object into R2 forever.
 
-### 11. Truncated Claude output discards 10 conversations
+### 11. ~~Truncated Claude output discards 10 conversations~~ ✅ FIXED (949e020)
 
 `app/tasks/bot_response.py:129` uses `max_tokens=1024` for up to 10 replies; overflow produces invalid
 JSON and the whole batch is dropped. `:132` also does `resp.content[0].text` blindly instead of
@@ -109,7 +115,7 @@ boundaries exist in either client.
 `:104-118` can create duplicate `Match` rows on simultaneous mutual likes. `undo_last_swipe` orders by
 `created_at` rather than `id` (`:166`), which is nondeterministic at SQLite's second resolution.
 
-### 15. Demo detection by email prefix
+### 15. ~~Demo detection by email prefix~~ ✅ FIXED (1914c93)
 
 `app/api/swipes.py:135` uses `target.email.startswith("demo")`. Any real user who registers
 `demo.something@…` gets bot auto-match behavior. The `is_bot` column already exists — use it.
@@ -310,12 +316,20 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 
 ## Suggested order
 
-1. **#1, #2, #3, #4** — data exposure and credential problems. Hours, not days.
-2. **#27** — CI running the 372 tests that already exist. Highest leverage per hour spent.
-3. **#7, #8, #9, #10** — the four ways this app can bill you unboundedly.
-4. **#12, #13** — the two crashes users hit today.
-5. **#18** — consolidate the auth routers before they drift further.
-6. Then P2 as scale requires: #17 gates horizontal scaling, #20 gates swipe volume.
+~~1. **#1, #2, #3, #4** — data exposure and credential problems.~~ done except #3
+~~2. **#27** — CI.~~ done
+~~3. **#7, #8, #9, #10** — the four ways this app can bill you unboundedly.~~ done
+
+What's left, in order:
+
+1. **#3** — wire a real email provider. The only remaining P0; blocked on picking one. Until then
+   password reset is non-functional and reset tokens sit in the log stream.
+2. **#13** — mobile has no network error handling; offline throws an unhandled rejection at every
+   call site. The most likely crash a real user hits.
+3. **#14** — swipe race conditions, and **#16** — notifications never retry.
+4. **#18** — consolidate the auth routers before they drift further.
+5. **#20** — missing indexes; gates swipe volume. **#17** gates horizontal scaling.
+6. **#21** — the Alembic drift, before someone trusts `--autogenerate`.
 
 ## Product-shaped ideas
 
