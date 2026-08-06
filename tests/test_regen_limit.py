@@ -93,12 +93,36 @@ def test_counter_increments_after_manual_regeneration(client, db):
     assert user.avatar_regenerations_this_month == 1
 
 
-def test_premium_counter_stays_at_zero(client, db):
+def test_premium_regens_are_counted_against_the_abuse_ceiling(client, db):
+    """Premium is unlimited in product terms but still bounded.
+
+    Every regeneration is a paid DALL-E call, so premium usage is counted
+    against a much higher ceiling rather than not counted at all.
+    """
     user = _make_user(db, email="nocount@howl.app", is_premium=True)
     _regen(client, user)
     _regen(client, user)
     db.refresh(user)
-    assert user.avatar_regenerations_this_month == 0
+    assert user.avatar_regenerations_this_month == 2
+
+
+def test_premium_is_blocked_at_the_abuse_ceiling(client, db):
+    from app.api.avatar import _PREMIUM_REGEN_LIMIT
+
+    user = _make_user(db, email="prem_ceiling@howl.app", is_premium=True)
+    user.avatar_regenerations_this_month = _PREMIUM_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(hours=1)
+    db.commit()
+
+    res = _regen(client, user)
+    assert res.status_code == 429
+    assert res.json()["detail"]["limit"] == _PREMIUM_REGEN_LIMIT
+
+
+def test_premium_ceiling_is_far_above_the_free_limit(client, db):
+    from app.api.avatar import _MONTHLY_REGEN_LIMIT, _PREMIUM_REGEN_LIMIT
+
+    assert _PREMIUM_REGEN_LIMIT > _MONTHLY_REGEN_LIMIT * 10
 
 
 def test_bio_update_counts_against_shared_limit(client, db):

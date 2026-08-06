@@ -15,8 +15,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
-_MONTHLY_REGEN_LIMIT = 1
-_REGEN_WINDOW_SECONDS = 30 * 24 * 3600  # 30-day window (mirrors avatar.py)
+# Single source of truth — these used to be duplicated here and drift was only
+# prevented by a comment.
+from app.api.avatar import (  # noqa: E402
+    _MONTHLY_REGEN_LIMIT,
+    _PREMIUM_REGEN_LIMIT,
+    _REGEN_WINDOW_SECONDS,
+)
 
 
 def _try_consume_regen_slot(user: User, db: Session) -> bool:
@@ -24,10 +29,13 @@ def _try_consume_regen_slot(user: User, db: Session) -> bool:
 
     Returns True if a slot was available (and the counter is incremented).
     Returns False if the limit is exhausted for the current window.
-    Premium users always get True without touching any counter.
+
+    Premium users share the same counter but against a far higher ceiling. They
+    are "unlimited" as a product promise, but each regeneration is a paid
+    DALL-E call, so the bio-edit path needs the same abuse ceiling as the
+    explicit regenerate endpoint — otherwise it is a trivial way around it.
     """
-    if user.is_premium:
-        return True
+    limit = _PREMIUM_REGEN_LIMIT if user.is_premium else _MONTHLY_REGEN_LIMIT
 
     now = datetime.now(UTC)
     reset_at = user.regenerations_reset_at
@@ -40,7 +48,7 @@ def _try_consume_regen_slot(user: User, db: Session) -> bool:
         user.regenerations_reset_at = now
         db.flush()
 
-    if user.avatar_regenerations_this_month >= _MONTHLY_REGEN_LIMIT:
+    if user.avatar_regenerations_this_month >= limit:
         return False
 
     user.avatar_regenerations_this_month += 1

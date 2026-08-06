@@ -15,14 +15,28 @@ router = APIRouter(prefix="/api/avatar", tags=["avatar"])
 _MONTHLY_REGEN_LIMIT = 1
 _REGEN_WINDOW_SECONDS = 30 * 24 * 3600  # 30-day rolling window
 
+#: Premium is "unlimited" as a product promise, but every regeneration is a paid
+#: DALL-E call, so there is still an abuse ceiling. Set high enough that no
+#: legitimate user reaches it.
+_PREMIUM_REGEN_LIMIT = 100
+
+
+def _regen_limit_for(user: User) -> int:
+    return _PREMIUM_REGEN_LIMIT if user.is_premium else _MONTHLY_REGEN_LIMIT
+
 
 def _enforce_regen_limit(user: User, db: Session) -> None:
     """Reset the monthly counter if the window has expired, then enforce the limit.
 
-    Only called for non-premium users.  Does not count stale-detection regenerations
-    triggered by profile bio updates — those go through the Celery task directly.
+    Applies to everyone. Free users get _MONTHLY_REGEN_LIMIT; premium users get
+    the much higher _PREMIUM_REGEN_LIMIT, which exists only to bound runaway
+    spend on a paid image endpoint, not as a product-visible cap.
+
+    Does not count stale-detection regenerations triggered by profile bio
+    updates — those go through the Celery task directly.
     """
     now = datetime.now(UTC)
+    limit = _regen_limit_for(user)
 
     reset_at = user.regenerations_reset_at
     if reset_at is not None and reset_at.tzinfo is None:
@@ -35,17 +49,22 @@ def _enforce_regen_limit(user: User, db: Session) -> None:
         db.flush()
         return  # counter just reset — this regeneration is allowed
 
-    if user.avatar_regenerations_this_month >= _MONTHLY_REGEN_LIMIT:
+    if user.avatar_regenerations_this_month >= limit:
         resets_at = reset_at + timedelta(seconds=_REGEN_WINDOW_SECONDS)
+        message = (
+            "You've reached the maximum number of avatar regenerations for this month."
+            if user.is_premium
+            else (
+                f"You've used your {_MONTHLY_REGEN_LIMIT} free avatar regeneration "
+                "this month. Upgrade to premium for unlimited regenerations."
+            )
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
                 "code": "regeneration_limit_reached",
-                "message": (
-                    f"You've used your {_MONTHLY_REGEN_LIMIT} free avatar regeneration "
-                    "this month. Upgrade to premium for unlimited regenerations."
-                ),
-                "limit": _MONTHLY_REGEN_LIMIT,
+                "message": message,
+                "limit": limit,
                 "resets_at": resets_at.isoformat(),
             },
         )
@@ -73,8 +92,7 @@ def regenerate_avatar(
             detail="Cannot generate avatar without a bio. Update your profile first.",
         )
 
-    if not current_user.is_premium:
-        _enforce_regen_limit(current_user, db)
+    _enforce_regen_limit(current_user, db)
 
     # Delete the previous image before dropping the reference to it. Without
     # this every regeneration leaks the old object into R2 permanently.
@@ -90,8 +108,7 @@ def regenerate_avatar(
     current_user.avatar_status_updated_at = datetime.now(UTC)
     current_user.profile_needs_regen = False  # avatar now reflects current profile
 
-    if not current_user.is_premium:
-        current_user.avatar_regenerations_this_month += 1
+    current_user.avatar_regenerations_this_month += 1
 
     db.commit()
     db.refresh(current_user)

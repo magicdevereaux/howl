@@ -160,17 +160,23 @@ def test_premium_user_always_regens(client, db):
     assert len(called) == 1
     db.refresh(user)
     assert user.profile_needs_regen is False
-    assert user.avatar_regenerations_this_month == _MONTHLY_REGEN_LIMIT + 5  # unchanged for premium
+    # Premium shares the counter but against the far higher abuse ceiling.
+    assert user.avatar_regenerations_this_month == _MONTHLY_REGEN_LIMIT + 6
 
 
-def test_premium_counter_not_incremented(client, db):
+def test_premium_bio_edit_counts_against_the_ceiling(client, db):
+    """The bio-edit path must share the premium ceiling.
+
+    If it did not, editing a bio repeatedly would be a trivial way around the
+    limit on the explicit regenerate endpoint.
+    """
     user = _make_user(db, email="prem_count@howl.app", is_premium=True)
     assert user.avatar_regenerations_this_month == 0
 
     _patch_bio(client, user)
 
     db.refresh(user)
-    assert user.avatar_regenerations_this_month == 0
+    assert user.avatar_regenerations_this_month == 1
 
 
 # ---------------------------------------------------------------------------
