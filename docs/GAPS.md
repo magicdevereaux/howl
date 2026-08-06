@@ -21,7 +21,7 @@ replies for others; full isolation means one call per conversation, at _BATCH_SI
 
 ## P0 — Fix before any real user touches this
 
-### 1. ~~`GET /api/profile/{user_id}` is unauthenticated and returns every user's email~~ ✅ FIXED (187c73e)
+### 1. ~~`GET /api/profile/{user_id}` is unauthenticated and returns every user's email~~ ✅ FIXED (cf5f690)
 
 `app/api/profile.py:132-137` has no `get_current_user` dependency and returns the full `UserOut`, which
 includes `email`, `is_premium`, `daily_swipes`, and `swipes_reset_at` (`app/schemas/user.py:35-61`).
@@ -30,7 +30,7 @@ Anyone can walk `?user_id=1,2,3…` and harvest the entire user table's email ad
 The codebase already has the right pattern — `DiscoverUserOut` and `MatchedProfileOut` are deliberately
 narrow. Fix: add the auth dependency **and** return a narrow schema.
 
-### 2. ~~`/api/mobile/auth/login` has no rate limiting~~ ✅ FIXED (187c73e)
+### 2. ~~`/api/mobile/auth/login` has no rate limiting~~ ✅ FIXED (cf5f690)
 
 `app/api/mobile_auth.py:102-111` is a straight credential check. The IP + email brute-force protection
 at `app/api/auth.py:136-158` doesn't exist on this path, so the mobile endpoint is an unthrottled
@@ -43,13 +43,13 @@ tests**.
 Railway log stream, which is a complete account-takeover primitive for anyone with log access. Users
 also simply never receive the emails, so the reset flow is non-functional in production.
 
-### 4. ~~All 1000 seeded bots share one committed password~~ ✅ FIXED (187c73e)
+### 4. ~~All 1000 seeded bots share one committed password~~ ✅ FIXED (cf5f690)
 
 `scripts/seed_demo_users.py:208` bcrypts the literal string `"howl-demo-placeholder"`, and the seed
 runs on every production deploy with `is_email_verified=True`. Anyone who reads this repo can log in as
 `demo1@howl.app`. Generate a random per-deploy secret, or set an unusable hash.
 
-### 5. ~~Prompt injection across users in the bot batch~~ ✅ MITIGATED (949e020)
+### 5. ~~Prompt injection across users in the bot batch~~ ✅ MITIGATED (b2efe68)
 
 `app/tasks/bot_response.py:105` interpolates raw user messages into a single prompt covering **10
 different conversations** and asks for a JSON array keyed by index. One user's message can steer the
@@ -57,7 +57,7 @@ replies sent to *other* users. `:143` bounds `index < len(batch)` but not `index
 index silently targets the wrong conversation. Batch per conversation, or validate the index range and
 delimit user content.
 
-### 6. ~~Password reset doesn't revoke sessions~~ ✅ FIXED (949e020)
+### 6. ~~Password reset doesn't revoke sessions~~ ✅ FIXED (b2efe68)
 
 `app/api/auth.py:245-277` rehashes the password but leaves every `RefreshToken` row live. A user
 resetting a password because they were compromised stays compromised for up to 30 days.
@@ -66,37 +66,37 @@ resetting a password because they were compromised stays compromised for up to 3
 
 ## P1 — Correctness and cost
 
-### 7. ~~`generate_avatar` is not idempotent under `task_acks_late=True`~~ ✅ FIXED (0787283)
+### 7. ~~`generate_avatar` is not idempotent under `task_acks_late=True`~~ ✅ FIXED (e4f64ba)
 
 `app/celery_app.py:26` plus zero guarding in `app/tasks/avatar.py:40`. A worker killed after the DALL·E
 call but before the commit re-runs everything — a second Claude call and a **second paid image**. Add a
 Redis lock or an "already generating" check keyed on `user_id`.
 
-### 8. ~~Unbounded AI spend in the Beat task~~ ✅ FIXED (949e020)
+### 8. ~~Unbounded AI spend in the Beat task~~ ✅ FIXED (b2efe68)
 
 `app/tasks/bot_response.py:166, 243` has no cap on `pending`. With 1000 seeded bots, every 15-minute
 tick can issue `len(pending)/10` Claude calls with no ceiling and no circuit breaker. Worse, a failing
 batch returns `[]` (`:145-147`) leaving the messages unanswered, so the **same failing batch is
 re-selected and re-paid for on every subsequent tick, forever**.
 
-### 9. ~~Premium users have no avatar generation cap at all~~ ✅ FIXED (ca62654)
+### 9. ~~Premium users have no avatar generation cap at all~~ ✅ FIXED (78bde8e)
 
 `app/api/avatar.py:75, 87-88` — the 1-per-30-days limit applies only to non-premium. A premium account
 can call a paid DALL·E endpoint in an unbounded loop.
 
-### 10. ~~Orphaned R2 objects on every regeneration~~ ✅ FIXED (1914c93)
+### 10. ~~Orphaned R2 objects on every regeneration~~ ✅ FIXED (eda6430)
 
 `app/api/avatar.py:82` nulls `avatar_url` without calling `delete_avatar()`, and
 `app/tasks/avatar.py:115` overwrites it. Every regeneration leaks the previous object into R2 forever.
 
-### 11. ~~Truncated Claude output discards 10 conversations~~ ✅ FIXED (949e020)
+### 11. ~~Truncated Claude output discards 10 conversations~~ ✅ FIXED (b2efe68)
 
 `app/tasks/bot_response.py:129` uses `max_tokens=1024` for up to 10 replies; overflow produces invalid
 JSON and the whole batch is dropped. `:132` also does `resp.content[0].text` blindly instead of
 filtering for `block.type == "text"` the way `app/tasks/avatar.py:73-76` correctly does. No
 `stop_reason` check exists anywhere in the codebase.
 
-### 12. ~~Live `ReferenceError` in the web client~~ ✅ FIXED (1df4e92)
+### 12. ~~Live `ReferenceError` in the web client~~ ✅ FIXED (d4a69b4)
 
 `frontend/src/App.jsx:678` calls `setGenerationTime(null)` inside `handleRegenerate`. The state was
 deleted in commit `1fbd58d`; only `setGenerationStartTime` exists (`App.jsx:41`). Clicking "Regenerate"
@@ -115,7 +115,7 @@ boundaries exist in either client.
 `:104-118` can create duplicate `Match` rows on simultaneous mutual likes. `undo_last_swipe` orders by
 `created_at` rather than `id` (`:166`), which is nondeterministic at SQLite's second resolution.
 
-### 15. ~~Demo detection by email prefix~~ ✅ FIXED (1914c93)
+### 15. ~~Demo detection by email prefix~~ ✅ FIXED (eda6430)
 
 `app/api/swipes.py:135` uses `target.email.startswith("demo")`. Any real user who registers
 `demo.something@…` gets bot auto-match behavior. The `is_bot` column already exists — use it.
@@ -223,7 +223,7 @@ limit at all (`chat.py:202-203`).
 
 ## P3 — Engineering hygiene
 
-### 27. ~~No CI, and none of the configured quality tools ever run~~ ✅ FIXED (8ed5e59, 59d42f1)
+### 27. ~~No CI, and none of the configured quality tools ever run~~ ✅ FIXED (419f580, 2b37407)
 
 There is no `.github/`, no pre-commit, no Makefile. **372 tests exist and nothing runs them
 automatically.** ruff (`pyproject.toml:36-41`) and mypy `strict=true` (`:43-46`) are both configured and
