@@ -217,3 +217,82 @@ def test_multiple_reports_allowed(client, db, auth_headers, test_user):
             json={"reported_user_id": other.id, "reason": reason},
         )
     assert db.query(Report).filter(Report.reporter_id == test_user.id).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Report survival  (GAPS #24)
+#
+# A report is moderation evidence and outlives the rows it points at.  Every FK
+# is ON DELETE SET NULL, so a deletion anonymises the report but never destroys
+# it.  Before this, reporter_id and reported_user_id cascaded, which meant an
+# abuser deleting their own account erased the case against them.
+# ---------------------------------------------------------------------------
+
+def test_report_survives_the_reported_user_being_deleted(client, db, auth_headers, test_user):
+    abuser = _make_user(db, email="abuser@howl.app")
+    client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": abuser.id, "reason": "harassment", "notes": "kept as evidence"},
+    )
+    report_id = db.query(Report.id).scalar()
+    assert report_id is not None
+
+    db.delete(abuser)
+    db.commit()
+    db.expire_all()
+
+    report = db.get(Report, report_id)
+    assert report is not None, "deleting the reported user destroyed the report"
+    assert report.reported_user_id is None      # anonymised
+    assert report.reporter_id == test_user.id   # the reporter is still known
+    assert report.reason == ReportReason.harassment
+    assert report.notes == "kept as evidence"   # the evidence itself is intact
+
+
+def test_report_survives_the_reporter_being_deleted(client, db, auth_headers, test_user):
+    abuser = _make_user(db, email="abuser2@howl.app")
+    client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": abuser.id, "reason": "spam_scam"},
+    )
+    report_id = db.query(Report.id).scalar()
+
+    db.delete(db.get(User, test_user.id))
+    db.commit()
+    db.expire_all()
+
+    report = db.get(Report, report_id)
+    assert report is not None, "deleting the reporter destroyed the report"
+    assert report.reporter_id is None
+    assert report.reported_user_id == abuser.id
+
+
+def test_report_survives_the_message_being_deleted(client, db, auth_headers, test_user):
+    """The one FK that was already SET NULL — kept covered so it stays that way."""
+    other = _make_user(db, email="msgabuser@howl.app")
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+    msg = _make_message(db, match_id=match.id, sender_id=other.id, content="bad thing")
+
+    client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={
+            "reported_user_id": other.id,
+            "reason": "inappropriate_content",
+            "message_id": msg.id,
+        },
+    )
+    report_id = db.query(Report.id).scalar()
+
+    db.delete(db.get(Message, msg.id))
+    db.commit()
+    db.expire_all()
+
+    report = db.get(Report, report_id)
+    assert report is not None
+    assert report.message_id is None
+    assert report.reason == ReportReason.inappropriate_content

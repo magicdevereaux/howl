@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -23,6 +23,7 @@ class Block(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+        server_default=func.now(),
     )
 
     def __repr__(self) -> str:

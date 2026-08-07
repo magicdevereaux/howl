@@ -19,6 +19,16 @@ from app.models import Base  # noqa: F401 — imports User too via __init__
 
 target_metadata = Base.metadata
 
+# Without these, `alembic revision --autogenerate` silently ignores column type
+# changes (String(50) -> String(100), Integer -> BigInteger) and server-default
+# changes, so drift between the models and the migrations accumulates unseen.
+# Keeping them on means a clean checkout must autogenerate an *empty* migration;
+# if it doesn't, models and migrations have diverged.
+COMPARE_OPTS = {
+    "compare_type": True,
+    "compare_server_default": True,
+}
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
@@ -27,6 +37,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        **COMPARE_OPTS,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -39,7 +50,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            **COMPARE_OPTS,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

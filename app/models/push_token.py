@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -13,11 +13,15 @@ class PushToken(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # Globally unique, not unique per user: one physical device must only ever
+    # receive notifications for the account currently signed in on it.
+    # app/api/push_tokens.py reassigns an existing row instead of inserting.
     token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+        server_default=func.now(),
     )
 
     def __repr__(self) -> str:

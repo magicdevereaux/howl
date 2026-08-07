@@ -123,7 +123,12 @@ def test_skips_when_recipient_sent_message_recently(patched_db, monkeypatch):
 def test_skips_when_missing_recipient(patched_db, monkeypatch):
     db = patched_db
     sender = _make_user(db, email="sender4@howl.app")
-    m = _make_match(db, sender, sender)  # degenerate; just need a match_id
+    # A real match between two real users. The recipient id handed to the task
+    # below is the one that doesn't exist — that is what's under test. (A
+    # self-match would be simpler but ck_matches_user_order rejects it, and
+    # rightly so.)
+    other = _make_user(db, email="sender4_other@howl.app")
+    m = _make_match(db, sender, other)
     sent = []
     monkeypatch.setattr("app.tasks.notify.send_message_notification", lambda **kw: sent.append(kw))
 

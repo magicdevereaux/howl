@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 from app.models.user import AvatarStatus
 
@@ -133,6 +133,26 @@ class ProfileUpdate(BaseModel):
         if v is not None and (v < 18 or v > 120):
             raise ValueError("age_preference_max must be between 18 and 120")
         return v
+
+    @model_validator(mode="after")
+    def age_preference_range_ordered(self) -> "ProfileUpdate":
+        """Reject an inverted age range.
+
+        Per-field validation cannot catch this: 18 and 120 are both individually
+        valid, but min=40 with max=25 matches nobody and silently empties the
+        discover queue (``app/api/users.py`` ANDs the two bounds).
+
+        Only checks the bounds present in *this* payload. A PATCH that sends one
+        bound and leaves the other at its stored value can still land inverted;
+        closing that needs the merge to happen against the persisted row, which
+        is API-layer work.
+        """
+        low, high = self.age_preference_min, self.age_preference_max
+        if low is not None and high is not None and low > high:
+            raise ValueError(
+                "age_preference_min must be less than or equal to age_preference_max"
+            )
+        return self
 
     @field_validator("location")
     @classmethod
