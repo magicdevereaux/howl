@@ -1,8 +1,10 @@
 """Tests for the bot response system."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import event
 
 from app.models.match import Match
 from app.models.message import Message
@@ -525,6 +527,217 @@ def test_run_aborts_after_consecutive_batch_failures(monkeypatch, patched_sessio
 def test_pending_is_capped_per_run():
     from app.tasks.bot_response import _MAX_PENDING_PER_RUN
     assert _MAX_PENDING_PER_RUN > 0
+
+
+# ---------------------------------------------------------------------------
+# Query volume  (docs/GAPS.md #19 — the N+1 storm)
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _count_selects(db):
+    """Record every SELECT issued on the session's connection."""
+    stmts: list[str] = []
+    bind = db.get_bind()
+
+    def _before(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            stmts.append(statement)
+
+    event.listen(bind, "before_cursor_execute", _before)
+    try:
+        yield stmts
+    finally:
+        event.remove(bind, "before_cursor_execute", _before)
+
+
+def _seed_conversations(
+    db, *, bots: int, per_bot: int, tag: str = "a", archetype: str = "responsive"
+) -> None:
+    """`bots` bot users, each with `per_bot` matches holding one stale user message.
+
+    `tag` namespaces the generated emails so a test can seed twice without
+    tripping the unique constraint on users.email.
+    """
+    for b in range(bots):
+        bot = _make_bot(db, email=f"qbot_{tag}{b}@bot.app", archetype=archetype)
+        for r in range(per_bot):
+            real = _make_real(db, email=f"qreal_{tag}{b}_{r}@howl.app")
+            m = _make_match(db, bot, real)
+            _make_msg(db, match_id=m.id, sender_id=real.id, content="hello", ago_seconds=18000)
+
+
+def test_collect_pending_is_a_single_query_regardless_of_bot_count(db):
+    """Collection must not scale its query count with the bot population.
+
+    This is the regression guard for #19: the old implementation issued one
+    match query per bot plus a user fetch, a last-message query and a count per
+    match, so this count grew linearly and 1000 seeded bots meant thousands of
+    round-trips every 15 minutes.
+    """
+    from app.tasks.bot_response import _collect_pending
+
+    now = datetime.now(UTC)
+
+    _seed_conversations(db, bots=2, per_bot=2, tag="small")
+    with _count_selects(db) as small_stmts:
+        small = _collect_pending(db, now)
+
+    _seed_conversations(db, bots=8, per_bot=2, tag="big")
+    with _count_selects(db) as big_stmts:
+        big = _collect_pending(db, now)
+
+    # The work actually grew...
+    assert len(small) == 4
+    assert len(big) == 20
+    # ...but the number of round-trips did not.
+    assert len(small_stmts) == 1, small_stmts
+    assert len(big_stmts) == 1, big_stmts
+
+
+def test_history_is_one_query_for_many_matches(db):
+    """Prompt history is fetched in bulk, not per conversation."""
+    from app.tasks.bot_response import _history_for_matches
+
+    _seed_conversations(db, bots=1, per_bot=6)
+    match_ids = [m.id for m in db.query(Match).all()]
+    assert len(match_ids) == 6
+
+    with _count_selects(db) as stmts:
+        history = _history_for_matches(db, match_ids)
+
+    assert len(stmts) == 1, stmts
+    assert set(history) == set(match_ids)
+
+
+def test_full_run_select_count_does_not_scale_with_bots(patched_session, db):
+    """End-to-end: more bots must not mean more SELECTs.
+
+    INSERTs legitimately scale with the number of replies written, so only
+    SELECTs are counted here.
+    """
+    _seed_conversations(db, bots=2, per_bot=1, tag="few")
+    with _count_selects(db) as small_stmts:
+        process_bot_responses()
+
+    _seed_conversations(db, bots=10, per_bot=1, tag="many")
+    with _count_selects(db) as big_stmts:
+        process_bot_responses()
+
+    assert len(small_stmts) == len(big_stmts), (len(small_stmts), len(big_stmts))
+
+
+# ---------------------------------------------------------------------------
+# Prompt history assembly
+# ---------------------------------------------------------------------------
+
+def test_history_is_chronological_and_depth_limited(db):
+    from app.tasks.bot_response import _HISTORY_DEPTH, _history_for_matches
+
+    bot  = _make_bot(db, email="hbot@bot.app")
+    real = _make_real(db, email="hreal@howl.app")
+    m    = _make_match(db, bot, real)
+
+    # Eight messages, oldest first, all inside the same wall-clock second at
+    # SQLite's resolution unless created_at is explicitly spread out.
+    for i in range(8):
+        _make_msg(db, match_id=m.id, sender_id=real.id if i % 2 == 0 else bot.id,
+                  content=f"msg{i}", ago_seconds=800 - i * 100)
+
+    got = _history_for_matches(db, [m.id])[m.id]
+
+    assert len(got) == _HISTORY_DEPTH
+    # The trailing window, still in send order.
+    assert [text for _, text in got] == ["msg3", "msg4", "msg5", "msg6", "msg7"]
+
+
+def test_history_roles_are_relative_to_the_bot(patched_session, db):
+    """`you` must mean the bot writing the reply, `them` the other person."""
+    from app.tasks import bot_response as br
+
+    seen: list[dict] = []
+    monkeypatch_target = lambda batch: (seen.extend(batch) or [])  # noqa: E731
+    br_generate = br._generate_batch
+    br._generate_batch = monkeypatch_target
+    try:
+        bot  = _make_bot(db, email="rolebot@bot.app")
+        real = _make_real(db, email="rolereal@howl.app")
+        m    = _make_match(db, bot, real)
+        _make_msg(db, match_id=m.id, sender_id=bot.id,  content="from bot",  ago_seconds=900)
+        _make_msg(db, match_id=m.id, sender_id=real.id, content="from real", ago_seconds=800)
+
+        process_bot_responses()
+    finally:
+        br._generate_batch = br_generate
+
+    assert len(seen) == 1
+    assert seen[0]["history"] == [
+        {"role": "you",  "text": "from bot"},
+        {"role": "them", "text": "from real"},
+    ]
+
+
+def test_history_is_not_fetched_for_conversations_dropped_by_the_cap(monkeypatch, patched_session, db):
+    """The per-run cap is applied before history is paid for."""
+    from app.tasks import bot_response as br
+
+    monkeypatch.setattr(br, "_MAX_PENDING_PER_RUN", 2)
+
+    requested: list[list[int]] = []
+    real_history = br._history_for_matches
+    monkeypatch.setattr(
+        br, "_history_for_matches",
+        lambda db_, ids, **kw: requested.append(list(ids)) or real_history(db_, ids, **kw),
+    )
+
+    _seed_conversations(db, bots=1, per_bot=5)
+
+    process_bot_responses()
+
+    assert len(requested) == 1
+    assert len(requested[0]) == 2, "history was fetched for conversations the cap discarded"
+
+
+# ---------------------------------------------------------------------------
+# Reply persistence
+# ---------------------------------------------------------------------------
+
+def test_save_replies_commits_the_batch_once(db):
+    from app.tasks.bot_response import _save_replies
+
+    bot  = _make_bot(db, email="sbot@bot.app")
+    real = _make_real(db, email="sreal@howl.app")
+    m    = _make_match(db, bot, real)
+
+    results = [{"match_id": m.id, "bot_id": bot.id, "message": f"r{i}"} for i in range(3)]
+    assert _save_replies(db, results) == 3
+    assert _bot_msg_count(db, m.id, bot.id) == 3
+
+
+def test_save_replies_falls_back_to_individual_writes(db):
+    """One unwritable reply must not discard the rest of the batch.
+
+    The bad row references a match_id that doesn't exist, which trips the FK
+    (conftest enables PRAGMA foreign_keys=ON) and fails the whole batch commit.
+    """
+    from app.tasks.bot_response import _save_replies
+
+    bot  = _make_bot(db, email="fbot@bot.app")
+    real = _make_real(db, email="freal@howl.app")
+    m    = _make_match(db, bot, real)
+
+    results = [
+        {"match_id": m.id,     "bot_id": bot.id, "message": "good one"},
+        {"match_id": 10_000,   "bot_id": bot.id, "message": "orphan"},
+        {"match_id": m.id,     "bot_id": bot.id, "message": "good two"},
+    ]
+
+    assert _save_replies(db, results) == 2
+    assert _bot_msg_count(db, m.id, bot.id) == 2
+
+
+def test_save_replies_handles_an_empty_batch(db):
+    from app.tasks.bot_response import _save_replies
+    assert _save_replies(db, []) == 0
 
 
 # ---------------------------------------------------------------------------

@@ -10,10 +10,12 @@ when the bot's own message has gone unanswered for 2 hours.
 
 import json
 import logging
+from collections import defaultdict
 from datetime import UTC, datetime
 
 import anthropic
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_, select
+from sqlalchemy.orm import aliased
 
 from app.celery_app import celery_app
 from app.config import settings
@@ -77,24 +79,214 @@ def _tz(dt: datetime) -> datetime:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
-def _recent_history(db, match_id: int, bot_id: int, limit: int = 5) -> list[dict]:
-    """Return the last *limit* messages as labelled dicts for the prompt."""
-    msgs = (
-        db.query(Message)
-        .filter(Message.match_id == match_id)
-        .order_by(Message.created_at.desc())
-        .limit(limit)
+#: How many trailing messages of a conversation are shown to the model.
+_HISTORY_DEPTH = 5
+
+
+def _history_for_matches(
+    db, match_ids: list[int], limit: int = _HISTORY_DEPTH
+) -> dict[int, list[tuple[int, str]]]:
+    """Return the trailing *limit* messages of each match, oldest first.
+
+    One ROW_NUMBER query for every match instead of one query per match — the
+    per-match version was the last N+1 in this task (docs/GAPS.md #19).  Values
+    are ``(sender_id, content)`` pairs; the caller labels them ``you``/``them``
+    because that depends on which bot the prompt is being written for.
+
+    ``id`` breaks ties on ``created_at``.  Under SQLite timestamps only carry
+    second resolution, so ordering by ``created_at`` alone shuffles messages
+    sent in the same second.
+    """
+    if not match_ids:
+        return {}
+
+    ranked = (
+        db.query(
+            Message.match_id.label("match_id"),
+            Message.sender_id.label("sender_id"),
+            Message.content.label("content"),
+            func.row_number()
+            .over(
+                partition_by=Message.match_id,
+                order_by=(Message.created_at.desc(), Message.id.desc()),
+            )
+            .label("rn"),
+        )
+        .filter(Message.match_id.in_(match_ids))
+        .subquery("ranked_history")
+    )
+
+    rows = (
+        db.query(ranked.c.match_id, ranked.c.sender_id, ranked.c.content)
+        .filter(ranked.c.rn <= limit)
+        # rn descending walks from the oldest kept message to the newest, which
+        # is the chronological order the prompt wants.
+        .order_by(ranked.c.match_id, ranked.c.rn.desc())
         .all()
     )
-    return [
-        {"role": "you" if m.sender_id == bot_id else "them", "text": m.content or ""}
-        for m in reversed(msgs)
-    ]
+
+    history: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for match_id, sender_id, content in rows:
+        history[match_id].append((sender_id, content or ""))
+    return history
+
+
+def _collect_pending(db, now: datetime) -> list[dict]:
+    """Find every bot conversation that is due a reply, in one query.
+
+    The previous implementation walked all bots, then every match per bot, then
+    issued a ``db.get(User)``, a last-message query and a count per match — at
+    1000 seeded bots that is thousands of round-trips every 15 minutes against
+    the same database serving requests (docs/GAPS.md #19).  This collapses to a
+    single query built the same way as ``list_matches`` in app/api/users.py:
+    a CASE-based join to resolve the other participant, a ROW_NUMBER subquery
+    for the newest message per match, and a correlated COUNT for the bot's own
+    message tally.
+
+    History is deliberately *not* fetched here; the caller applies the per-run
+    cap first so we only pay for the conversations we are actually going to
+    answer.
+    """
+    bot = aliased(User, name="bot")
+    other = aliased(User, name="other")
+
+    # "The participant who isn't the bot", as a SQL expression.
+    other_id_col = case(
+        (Match.user1_id == bot.id, Match.user2_id),
+        else_=Match.user1_id,
+    )
+
+    ranked_msgs = (
+        db.query(
+            Message.match_id.label("match_id"),
+            Message.sender_id.label("sender_id"),
+            Message.content.label("content"),
+            Message.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=Message.match_id,
+                order_by=(Message.created_at.desc(), Message.id.desc()),
+            )
+            .label("rn"),
+        )
+        .subquery("ranked_msgs")
+    )
+
+    # Ghost archetypes go quiet after GHOST_MSG_LIMIT of their own messages.
+    # Counting in SQL keeps this inside the single round-trip.
+    bot_sent_sq = (
+        select(func.count())
+        .where(Message.match_id == Match.id, Message.sender_id == bot.id)
+        .correlate(Match, bot)
+        .scalar_subquery()
+    )
+
+    rows = (
+        db.query(
+            Match.id.label("match_id"),
+            bot.id.label("bot_id"),
+            bot.name.label("bot_name"),
+            bot.animal.label("bot_animal"),
+            bot.personality_traits.label("bot_traits"),
+            bot.archetype.label("bot_archetype"),
+            other.id.label("real_id"),
+            ranked_msgs.c.sender_id.label("last_sender_id"),
+            ranked_msgs.c.content.label("last_content"),
+            ranked_msgs.c.created_at.label("last_created_at"),
+            bot_sent_sq.label("bot_sent"),
+        )
+        .select_from(Match)
+        # A match with a bot on either side; a bot-to-bot match joins twice and
+        # is then dropped by the is_bot filter on `other`.
+        .join(bot, or_(Match.user1_id == bot.id, Match.user2_id == bot.id))
+        # INNER JOIN, so a match whose counterpart row is gone is skipped —
+        # same outcome as the old `if real_user is None: continue`.
+        .join(other, other.id == other_id_col)
+        # INNER JOIN on rn == 1, so matches with no messages at all are skipped,
+        # same as the old `if last_msg is None: continue`.
+        .join(ranked_msgs, (ranked_msgs.c.match_id == Match.id) & (ranked_msgs.c.rn == 1))
+        .filter(bot.is_bot.is_(True), other.is_bot.is_(False))
+        # Deterministic, so the per-run cap always truncates the same way.
+        .order_by(bot.id, Match.id)
+        .all()
+    )
+
+    pending: list[dict] = []
+    for r in rows:
+        archetype = r.bot_archetype or "responsive"
+        min_delay_sec = ARCHETYPE_MIN_DELAY.get(archetype, 5) * 60
+
+        if archetype == "ghost" and r.bot_sent >= GHOST_MSG_LIMIT:
+            continue
+
+        elapsed = (now - _tz(r.last_created_at)).total_seconds()
+
+        if r.last_sender_id == r.real_id:
+            # The real user spoke last — reply once the archetype delay has passed.
+            if elapsed < min_delay_sec:
+                continue
+            response_type, message_received = "reply", r.last_content or ""
+        elif r.last_sender_id == r.bot_id and archetype == "desperate":
+            # Desperate bots chase their own unanswered message.
+            if elapsed < DESPERATE_FOLLOWUP_SECONDS:
+                continue
+            response_type, message_received = "followup", None
+        else:
+            continue
+
+        pending.append({
+            "match_id":         r.match_id,
+            "bot_id":           r.bot_id,
+            "name":             r.bot_name or "Someone",
+            "animal":           r.bot_animal or "wolf",
+            "traits":           r.bot_traits,
+            "archetype":        archetype,
+            "response_type":    response_type,
+            "message_received": message_received,
+        })
+
+    return pending
 
 
 def _chunks(lst: list, n: int):
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
+
+
+def _save_replies(db, results: list[dict]) -> int:
+    """Persist a batch's replies, returning how many were written.
+
+    One commit per batch rather than one per message.  If the batch commit
+    fails, each row is retried on its own so a single bad reply (a match deleted
+    mid-run, say) costs one message instead of the whole batch.
+    """
+    if not results:
+        return 0
+
+    def _msg(r: dict) -> Message:
+        return Message(match_id=r["match_id"], sender_id=r["bot_id"], content=r["message"])
+
+    try:
+        db.add_all([_msg(r) for r in results])
+        db.commit()
+        return len(results)
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "bot_response: batch save of %d replies failed (%s); retrying individually",
+            len(results), exc,
+        )
+
+    saved = 0
+    for r in results:
+        try:
+            db.add(_msg(r))
+            db.commit()
+            saved += 1
+        except Exception as exc:
+            db.rollback()
+            logger.warning("bot_response: failed to save message: %s", exc)
+    return saved
 
 
 # ---------------------------------------------------------------------------
@@ -271,81 +463,12 @@ def process_bot_responses() -> None:
     db = SessionLocal()
     try:
         now = datetime.now(UTC)
-        pending: list[dict] = []
 
-        bots = db.query(User).filter(User.is_bot == True).all()  # noqa: E712
-
-        for bot in bots:
-            archetype = bot.archetype or "responsive"
-            min_delay_sec = ARCHETYPE_MIN_DELAY.get(archetype, 5) * 60
-
-            matches = (
-                db.query(Match)
-                .filter(or_(Match.user1_id == bot.id, Match.user2_id == bot.id))
-                .all()
-            )
-
-            for match in matches:
-                real_id = match.user2_id if match.user1_id == bot.id else match.user1_id
-
-                # Skip bot-to-bot matches (shouldn't happen, but be defensive)
-                real_user = db.get(User, real_id)
-                if real_user is None or real_user.is_bot:
-                    continue
-
-                last_msg = (
-                    db.query(Message)
-                    .filter(Message.match_id == match.id)
-                    .order_by(Message.created_at.desc())
-                    .first()
-                )
-                if last_msg is None:
-                    continue
-
-                # Ghost silencing: count how many messages the bot has sent
-                if archetype == "ghost":
-                    bot_sent = (
-                        db.query(Message)
-                        .filter(Message.match_id == match.id, Message.sender_id == bot.id)
-                        .count()
-                    )
-                    if bot_sent >= GHOST_MSG_LIMIT:
-                        continue
-
-                last_dt = _tz(last_msg.created_at)
-                elapsed = (now - last_dt).total_seconds()
-
-                if last_msg.sender_id == real_id:
-                    # Real user sent the last message — bot should reply if delay has passed
-                    if elapsed >= min_delay_sec:
-                        pending.append({
-                            "match_id":       match.id,
-                            "bot_id":         bot.id,
-                            "name":           bot.name or "Someone",
-                            "animal":         bot.animal or "wolf",
-                            "traits":         bot.personality_traits,
-                            "archetype":      archetype,
-                            "response_type":  "reply",
-                            "message_received": last_msg.content or "",
-                            "history":        _recent_history(db, match.id, bot.id),
-                        })
-
-                elif last_msg.sender_id == bot.id and archetype == "desperate":
-                    # Desperate bot: follow up if ignored for 2 hours
-                    if elapsed >= DESPERATE_FOLLOWUP_SECONDS:
-                        pending.append({
-                            "match_id":       match.id,
-                            "bot_id":         bot.id,
-                            "name":           bot.name or "Someone",
-                            "animal":         bot.animal or "wolf",
-                            "traits":         bot.personality_traits,
-                            "archetype":      "desperate",
-                            "response_type":  "followup",
-                            "message_received": None,
-                            "history":        _recent_history(db, match.id, bot.id),
-                        })
-
-        logger.info("bot_response: %d pending responses across %d bots", len(pending), len(bots))
+        pending = _collect_pending(db, now)
+        logger.info(
+            "bot_response: %d pending responses across %d bot conversations",
+            len(pending), len({p["bot_id"] for p in pending}),
+        )
 
         if len(pending) > _MAX_PENDING_PER_RUN:
             logger.warning(
@@ -353,6 +476,14 @@ def process_bot_responses() -> None:
                 "remainder to the next tick", len(pending), _MAX_PENDING_PER_RUN,
             )
             pending = pending[:_MAX_PENDING_PER_RUN]
+
+        # Fetch history only for the conversations that survived the cap.
+        history = _history_for_matches(db, [p["match_id"] for p in pending])
+        for p in pending:
+            p["history"] = [
+                {"role": "you" if sender_id == p["bot_id"] else "them", "text": text}
+                for sender_id, text in history.get(p["match_id"], [])
+            ]
 
         saved = 0
         consecutive_failures = 0
@@ -370,19 +501,7 @@ def process_bot_responses() -> None:
                 continue
             consecutive_failures = 0
 
-            for r in results:
-                try:
-                    msg = Message(
-                        match_id=r["match_id"],
-                        sender_id=r["bot_id"],
-                        content=r["message"],
-                    )
-                    db.add(msg)
-                    db.commit()
-                    saved += 1
-                except Exception as exc:
-                    db.rollback()
-                    logger.warning("bot_response: failed to save message: %s", exc)
+            saved += _save_replies(db, results)
 
         logger.info("bot_response: saved %d/%d responses", saved, len(pending))
 
