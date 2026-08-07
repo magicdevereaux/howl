@@ -9,11 +9,23 @@ from app.models.message import Message
 from app.models.push_token import PushToken
 from app.models.user import AvatarStatus, User
 from app.security import hash_password
+from app.services.push_notifications import PushSendResult
 from app.tasks.notify import notify_new_match, notify_new_message
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _record_push(recorder: list, result: PushSendResult | None = None):
+    """
+    Stand-in for send_push_notifications: records ``(tokens, title, body, data)``
+    and reports every token accepted unless ``result`` says otherwise.
+    """
+    def _send(tokens, title, body, data=None):
+        recorder.append((tokens, title, body, data))
+        return result if result is not None else PushSendResult(accepted=list(tokens))
+    return _send
+
 
 def _make_user(db, *, email: str, email_notifications: bool = True, **kwargs) -> User:
     user = User(
@@ -201,10 +213,7 @@ def test_new_message_sends_push_to_registered_tokens(patched_db, monkeypatch):
 
     monkeypatch.setattr("app.tasks.notify.send_message_notification", lambda **kw: None)
     pushes = []
-    monkeypatch.setattr(
-        "app.tasks.notify.send_push_notifications",
-        lambda tokens, title, body, data=None: pushes.append((tokens, title, body, data)),
-    )
+    monkeypatch.setattr("app.tasks.notify.send_push_notifications", _record_push(pushes))
 
     notify_new_message(m.id, recipient.id, sender.id)
 
@@ -225,15 +234,12 @@ def test_new_message_push_sent_even_when_email_notifications_disabled(patched_db
     emails = []
     monkeypatch.setattr("app.tasks.notify.send_message_notification", lambda **kw: emails.append(kw))
     pushes = []
-    monkeypatch.setattr(
-        "app.tasks.notify.send_push_notifications",
-        lambda tokens, title, body, data=None: pushes.append(tokens),
-    )
+    monkeypatch.setattr("app.tasks.notify.send_push_notifications", _record_push(pushes))
 
     notify_new_message(m.id, recipient.id, sender.id)
 
     assert emails == []
-    assert pushes == [["ExponentPushToken[r9]"]]
+    assert [tokens for tokens, *_ in pushes] == [["ExponentPushToken[r9]"]]
 
 
 def test_notify_new_match_sends_push_with_match_data(patched_db, monkeypatch):
@@ -245,10 +251,7 @@ def test_notify_new_match_sends_push_with_match_data(patched_db, monkeypatch):
     m = _make_match(db, user, other)
 
     pushes = []
-    monkeypatch.setattr(
-        "app.tasks.notify.send_push_notifications",
-        lambda tokens, title, body, data=None: pushes.append((tokens, title, body, data)),
-    )
+    monkeypatch.setattr("app.tasks.notify.send_push_notifications", _record_push(pushes))
 
     notify_new_match(m.id, user.id)
 
@@ -264,10 +267,7 @@ def test_notify_new_match_skips_when_match_missing(patched_db, monkeypatch):
     user = _make_user(db, email="lonely@howl.app")
 
     pushes = []
-    monkeypatch.setattr(
-        "app.tasks.notify.send_push_notifications",
-        lambda *a, **kw: pushes.append(True),
-    )
+    monkeypatch.setattr("app.tasks.notify.send_push_notifications", _record_push(pushes))
 
     notify_new_match(999999, user.id)
 
