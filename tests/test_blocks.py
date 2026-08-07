@@ -158,6 +158,40 @@ def test_list_blocks_returns_blocked_users(client, db, test_user):
     assert "password_hash" not in data[0]
 
 
+def test_list_blocks_is_one_query_regardless_of_count(client, db, test_user):
+    """GAPS #19: the per-block `db.get(User, ...)` loop is gone.
+
+    Counts SELECTs issued while serving GET /api/blocks. The old N+1 loop cost
+    1 + N; the join costs a constant number no matter how many blocks exist.
+    """
+    from sqlalchemy import event
+
+    for i in range(6):
+        u = _make_user(db, email=f"n1_{i}@howl.app", name=f"User {i}")
+        db.add(Block(blocker_id=test_user.id, blocked_id=u.id))
+    db.commit()
+
+    selects: list[str] = []
+
+    def before_cursor_execute(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        res = client.get("/api/blocks", headers=_headers(test_user))
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+    assert res.status_code == 200
+    assert len(res.json()) == 6
+    # One SELECT for get_current_user, one for the joined listing.
+    assert len(selects) == 2, "\n".join(selects)
+    # Nothing user-sensitive is hydrated by the listing query.
+    assert "password_hash" not in selects[-1]
+
+
 def test_list_blocks_only_returns_own_blocks(client, db, test_user):
     a = _make_user(db, email="a@howl.app")
     b = _make_user(db, email="b@howl.app")

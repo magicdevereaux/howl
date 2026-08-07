@@ -48,11 +48,26 @@ def engine():
     )
     # SQLite disables FK enforcement by default; enable it so ON DELETE CASCADE
     # behaves the same as PostgreSQL in production.
+    #
+    # Setting isolation_level=None also disables pysqlite's implicit-BEGIN
+    # behaviour, which we have to replace by emitting BEGIN ourselves (below).
+    # Without this, pysqlite never opens a transaction before DML, so SAVEPOINTs
+    # are emitted outside any transaction and effectively autocommit: work done
+    # inside a `begin_nested()` block survives a later `rollback()`.  Code that
+    # relies on savepoints to recover from an IntegrityError — see
+    # `_insert_swipe` / `_get_or_create_match` in app/api/swipes.py — is correct
+    # on PostgreSQL but silently untestable without this.  This is SQLAlchemy's
+    # documented pysqlite workaround.
     @event.listens_for(eng, "connect")
-    def set_sqlite_fk_pragma(dbapi_conn, _):
+    def set_sqlite_pragmas(dbapi_conn, _):
+        dbapi_conn.isolation_level = None
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+
+    @event.listens_for(eng, "begin")
+    def emit_explicit_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 
     Base.metadata.create_all(eng)
     yield eng

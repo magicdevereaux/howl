@@ -83,22 +83,35 @@ def list_blocks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[BlockedUserOut]:
-    """List all users blocked by the current user."""
-    records = (
-        db.query(Block)
+    """List all users blocked by the current user in a single query.
+
+    Replaces the previous N+1 loop (one ``db.get(User, ...)`` per block) with a
+    hand-written join, the same approach as `list_matches` in
+    `app/api/users.py`.  The join is inner, which reproduces the old
+    ``if user:`` skip — and `blocks.blocked_id` is ``ON DELETE CASCADE``, so a
+    block can never outlive its user anyway.  Only the five columns the response
+    schema exposes are selected, so no `password_hash` or `email` is hydrated.
+    """
+    rows = (
+        db.query(
+            Block.blocked_id,
+            Block.created_at,
+            User.name,
+            User.animal,
+            User.avatar_url,
+        )
+        .join(User, User.id == Block.blocked_id)
         .filter(Block.blocker_id == current_user.id)
         .order_by(Block.created_at.desc())
         .all()
     )
-    result = []
-    for b in records:
-        user = db.get(User, b.blocked_id)
-        if user:
-            result.append(BlockedUserOut(
-                id=b.blocked_id,
-                name=user.name,
-                animal=user.animal,
-                avatar_url=user.avatar_url,
-                blocked_at=b.created_at,
-            ))
-    return result
+    return [
+        BlockedUserOut(
+            id=r.blocked_id,
+            name=r.name,
+            animal=r.animal,
+            avatar_url=r.avatar_url,
+            blocked_at=r.created_at,
+        )
+        for r in rows
+    ]
