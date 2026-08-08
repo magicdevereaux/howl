@@ -22,6 +22,10 @@ def _mock_celery(monkeypatch):
 
 
 def _make_user(db, *, email: str, bio: str = "A lone wolf who howls at the moon.", is_premium: bool = False, **kwargs) -> User:
+    # animal is defaulted because ck_users_ready_avatar_has_animal forbids
+    # avatar_status='ready' with animal IS NULL — a state the pipeline can never
+    # produce, so a ready fixture without one was never a realistic user.
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass"),

@@ -35,6 +35,29 @@ class User(Base):
             "age IS NULL OR (age >= 18 AND age <= 120)",
             name="ck_users_age_range",
         ),
+        # avatar_status='ready' is the app's word for "this profile is renderable
+        # and belongs in the discover queue" (app/api/users.py filters on exactly
+        # this), and the spirit animal is the product. A ready row with no animal
+        # is a swipe card with nothing on it, shown to everyone, forever — the
+        # clients fall back to a generic emoji rather than crashing, so nothing
+        # would ever surface the mistake.
+        #
+        # Deliberately about `animal` and NOT `avatar_url`. Two legitimate states
+        # have ready + avatar_url IS NULL, so constraining the URL would be
+        # simply false:
+        #   1. the 1000 seeded bots (scripts/seed_demo_users.py) never get a
+        #      DALL-E image and render from `animal` alone;
+        #   2. generate_avatar treats image generation as best-effort — a failed
+        #      or unconfigured DALL-E call yields avatar_url=None and the profile
+        #      still goes ready with its emoji fallback.
+        # See GAPS #23, which deferred this constraint pending a transactional
+        # ready-transition; app/tasks/avatar.py flips status in the same commit
+        # that writes animal, so the invariant already holds at every commit
+        # boundary and this makes it the database's job.
+        CheckConstraint(
+            "avatar_status <> 'ready' OR animal IS NOT NULL",
+            name="ck_users_ready_avatar_has_animal",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -135,6 +135,15 @@ def generate_avatar(self, user_id: int) -> None:
         avatar_url = generate_avatar_image(image_prompt, animal)
 
         # ── Persist ──────────────────────────────────────────────────────────
+        # One commit, deliberately. ck_users_ready_avatar_has_animal enforces
+        # "avatar_status='ready' implies animal IS NOT NULL", and a CHECK is
+        # evaluated per *statement*, not per transaction — so inserting a
+        # db.commit() or db.flush() between the status flip and the animal write
+        # (in either order) turns this into an IntegrityError. If you need to
+        # persist something mid-task, do it before this block, not inside it.
+        #
+        # `animal` is guaranteed non-empty here: the parse above raises
+        # ValueError on a blank animal, which routes to _mark_failed instead.
         user.animal = animal
         user.personality_traits = personality_traits
         user.avatar_description = avatar_description

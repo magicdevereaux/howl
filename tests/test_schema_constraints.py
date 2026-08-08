@@ -24,6 +24,15 @@ from app.security import hash_password
 
 
 def _make_user(db, *, email: str, **kwargs) -> User:
+    """Build a *legal* ready user.
+
+    `animal` is defaulted rather than left NULL because
+    ck_users_ready_avatar_has_animal makes ready-with-no-animal impossible — and
+    it is impossible in production too, so a fixture that produced it was
+    building a user the app can never create. Pass animal=None explicitly to
+    construct the illegal state on purpose.
+    """
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),
@@ -282,6 +291,167 @@ def test_shared_device_reassigns_its_push_token(client, db, auth_headers, test_u
     rows = db.query(PushToken).filter(PushToken.token == device).all()
     assert len(rows) == 1, "the device must not end up registered twice"
     assert rows[0].user_id == test_user.id, "the token still points at the old account"
+
+
+# ---------------------------------------------------------------------------
+# ck_users_ready_avatar_has_animal  (#23)
+# ---------------------------------------------------------------------------
+#
+# "avatar_status='ready' implies animal IS NOT NULL". GAPS #23 deferred this
+# pending a transactional ready-transition; every writer turned out to already
+# flip status in the same commit that writes animal, so the invariant held and
+# the constraint just moves enforcement into the database.
+#
+# The constraint is deliberately about `animal` and NOT `avatar_url` — see
+# test_bot_shape_is_permitted for the two states that make a url-based version
+# outright false.
+
+def test_ready_status_without_an_animal_is_rejected(db):
+    """The state the constraint exists to forbid.
+
+    A ready row is admitted to the discover queue on avatar_status alone
+    (app/api/users.py), and the spirit animal *is* the product. Both clients
+    fall back to a generic emoji instead of erroring, so this would sit in a
+    thousand queues silently.
+    """
+    with pytest.raises(IntegrityError):
+        _make_user(db, email="ready_no_animal@howl.app", animal=None)
+    db.rollback()
+
+
+def test_clearing_the_animal_on_a_ready_row_is_rejected(db):
+    """The UPDATE form, not just the INSERT form."""
+    user = _make_user(db, email="clear_animal@howl.app", animal="otter")
+
+    user.animal = None
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_bot_shape_is_permitted(db):
+    """ready + animal + avatar_url IS NULL must be legal.
+
+    This is the 1000-bot seed shape (scripts/seed_demo_users.py): bots never get
+    a DALL-E image and render from `animal` alone. It is also the emoji-fallback
+    shape for real users, since generate_avatar treats image generation as
+    best-effort. Constraining avatar_url instead of animal would have been the
+    intuitive choice and would have aborted every production deploy's seed step.
+    """
+    bot = _make_user(
+        db,
+        email="bot_shape@howl.app",
+        animal="wolf",
+        avatar_url=None,
+        is_bot=True,
+    )
+    assert bot.avatar_status is AvatarStatus.ready
+    assert bot.avatar_url is None
+
+
+@pytest.mark.parametrize("status", [AvatarStatus.pending, AvatarStatus.failed])
+def test_non_ready_status_may_have_no_animal(db, status):
+    """pending is a fresh signup; failed is generation that never produced one.
+
+    Neither is renderable, neither is in the discover queue, and both legitimately
+    have animal IS NULL — the constraint must not reach them.
+    """
+    user = User(
+        email=f"{status.value}_no_animal@howl.app",
+        password_hash=hash_password("testpass1"),
+        avatar_status=status,
+        animal=None,
+    )
+    db.add(user)
+    db.commit()
+    assert db.get(User, user.id).animal is None
+
+
+def test_the_generate_avatar_ready_transition_does_not_trip_the_constraint(db):
+    """The pipeline's own write, in the order app/tasks/avatar.py performs it.
+
+    A CHECK is evaluated per *statement*, so what matters is that the status flip
+    and the animal write land in one flush. This mirrors that block exactly; if
+    someone splits it with a commit or flush, this fails.
+    """
+    user = User(
+        email="pipeline@howl.app",
+        password_hash=hash_password("testpass1"),
+        avatar_status=AvatarStatus.pending,
+        bio="I hike alone and like the cold.",
+    )
+    db.add(user)
+    db.commit()
+
+    # Exactly the assignment block from generate_avatar, single commit.
+    user.animal = "wolf"
+    user.personality_traits = ["loyal", "watchful"]
+    user.avatar_description = "A grey wolf under aurora light."
+    user.avatar_url = None            # DALL-E unconfigured — emoji fallback
+    user.avatar_status = AvatarStatus.ready
+    db.commit()
+
+    assert db.get(User, user.id).avatar_status is AvatarStatus.ready
+
+
+def test_the_regeneration_transition_does_not_trip_the_constraint(db):
+    """ready+animal -> pending+NULL, the way regenerate/profile-update write it.
+
+    The reverse direction is the one with a trap: clearing animal while status is
+    still 'ready' violates the constraint, so the two writes must flush together.
+    They do — both call sites assign every field then commit once.
+    """
+    user = _make_user(db, email="regen@howl.app", animal="fox", avatar_url="/avatars/f.png")
+
+    user.animal = None
+    user.personality_traits = None
+    user.avatar_description = None
+    user.avatar_url = None
+    user.avatar_status = AvatarStatus.pending
+    db.commit()
+
+    reloaded = db.get(User, user.id)
+    assert reloaded.avatar_status is AvatarStatus.pending
+    assert reloaded.animal is None
+
+
+def test_regeneration_limit_flush_happens_before_the_avatar_is_cleared(db):
+    """Pins the ordering that keeps app/api/avatar.py safe under the constraint.
+
+    _enforce_regen_limit calls db.flush() when the 30-day window has expired. That
+    flush is only safe because it runs *before* any avatar field is touched, so it
+    writes a row still in its previous consistent state. Moving it after the
+    clearing block would flush ready+animal=NULL and raise IntegrityError.
+    """
+    user = _make_user(db, email="regen_flush@howl.app", animal="hawk")
+
+    # The limit check's own write: counter + window only, avatar untouched.
+    user.avatar_regenerations_this_month = 0
+    user.regenerations_reset_at = datetime.now(UTC)
+    db.flush()          # must not raise — row is still ready *with* an animal
+
+    # Only now does the caller clear the avatar, and commits it as one unit.
+    user.animal = None
+    user.avatar_status = AvatarStatus.pending
+    db.commit()
+
+    assert db.get(User, user.id).avatar_status is AvatarStatus.pending
+
+
+def test_the_seed_script_user_shape_satisfies_the_constraint():
+    """Every seeded bot must be insertable, without importing 375 lines of script.
+
+    scripts/seed_demo_users.py runs on every production deploy. Asserting against
+    its actual DEMO_USERS data means a future archetype that forgets `animal`
+    fails here rather than at deploy time.
+    """
+    from scripts.seed_demo_users import DEMO_USERS
+
+    animal_less = [u["email"] for u in DEMO_USERS if not u.get("animal")]
+    assert not animal_less, (
+        f"{len(animal_less)} seeded bots have no animal but are seeded as "
+        f"avatar_status=ready: {animal_less[:5]}"
+    )
 
 
 # ---------------------------------------------------------------------------
