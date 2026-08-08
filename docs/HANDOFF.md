@@ -1,7 +1,7 @@
 # Handoff — GAPS.md fan-out session
 
 **Date:** 2026-08-06/07. **Baseline at session start:** `379e6d4` on `main`, **413 tests passing**,
-suite runtime ~3m50s. **Now: 497 passing.**
+suite runtime ~3m50s. **Now: 539 passing, 90.01% coverage.**
 
 This file exists so a fresh session can pick up mid-flight. Delete it once the fan-out is merged and
 `docs/GAPS.md` reflects reality.
@@ -36,15 +36,19 @@ was mechanical and should have run on Sonnet. See `feedback-fanout-model-choice`
 | 2 | `acb8378e9a3ac8ada` | #16 notify retries | ✅ | `9933488` |
 | 3 | `af501333c9ead3e7d` | #20/#21/#22/#23/#24 schema | ✅ | `026ef4b` |
 | 4 | `a5425f6c66cc50b17` | #17 chat pub/sub, #26 chat | ✅ | `b2a36f8` |
-| 5 | `a8507a6340a4f3f28` | #18/#25/#26 auth | | |
-| 6 | `ae0e08715fe99fe3c` | #13 mobile, #34 a11y, #35 | | |
-| 7 | `a1e0f6a2dee03c0d2` | #28/#31/#32/#36/#37 hygiene | | |
+| 5 | `a8507a6340a4f3f28` | #18/#25/#26 auth | ✅ | `5583de5` |
+| 6 | `ae0e08715fe99fe3c` | #13 mobile, #34 a11y, #35 | ✅ | `85554af`, `567b3ef` |
+| 7 | `a1e0f6a2dee03c0d2` | #28/#31/#32/#36/#37 hygiene | ✅ | `658cf2b` |
 | 8 | `a1c6076c3a028ab73` | #29 client tests + lint | | |
 
-Remaining order: **auth (5)** is the largest refactor and touches `tests/conftest.py`, which the
-integration has already modified three times — expect to merge by hand, not by patch. **7 and 8** are
-low-risk and mostly independent of the backend. **6** needs `npx tsc --noEmit` from `mobile/`, not
-pytest.
+Seven of eight landed. Only **8** (`a1c6076c3a028ab73`, #29 client-side tests + ESLint/Prettier)
+remains; it is node-only and touches no backend file. Verify it with `npm test` and the linters in each
+client, not pytest.
+
+Two items were finished by hand rather than by the agent that owned them, because the agent died
+before reaching them: the hygiene branch had only done #32, so #28/#31/#36/#37 were done directly; and
+the mobile a11y pass had skipped `matches`/`profile`/`register` plus the two icon-only-button files
+GAPS named by number.
 
 ## Things learned the hard way (read before touching tests)
 
@@ -69,8 +73,14 @@ pytest.
 - **#21 is verified, not assumed.** `alembic revision --autogenerate` now emits an empty migration and
   `downgrade base` → `upgrade head` completes on PostgreSQL. Checked against a throwaway database
   (`howl_migration_test`, since dropped) — never the dev DB.
-- **Write docs with the Write tool, not Python.** `pathlib.write_text` uses cp1252 on this machine and
-  truncated this file to zero bytes mid-write when it hit an emoji.
+- **Windows cp1252 will eat your file.** `pathlib.write_text` (and bare `print`) default to cp1252 on
+  this machine. It truncated this very file to zero bytes mid-write when it hit an emoji. Use the Write
+  tool for docs, and `encoding="utf-8"` plus `PYTHONIOENCODING=utf-8` for any Python that touches
+  non-ASCII.
+- **`mobile/.expo/types/router.d.ts` is generated and gitignored.** expo-router derives route types
+  from the filesystem, so adding a screen leaves it stale and `tsc` rejects the new route. Regenerate
+  with `npx expo start` (it writes on boot). CI has no generation step, so it typechecks against the
+  permissive fallback and will NOT catch a bad route path — worth fixing.
 
 ## Deliberately NOT in scope
 
@@ -86,6 +96,6 @@ pytest.
 ## If the session dies again
 
 1. `git log main..worktree-agent-<id>` per branch — unmerged work is on the branch or in the worktree.
-2. Re-run the full suite after each merge: `pytest -q`. Expect ≥497 passing. It takes ~3 minutes.
+2. Re-run the full suite after each merge: `pytest -q`. Expect ≥539 passing. It takes ~3 minutes.
 3. Docker must be up for the Postgres/Redis-dependent checks: `docker compose up -d` (pg on 5433).
 4. Clean up merged worktrees: `git worktree remove <path> && git branch -D worktree-agent-<id>`.
