@@ -7,6 +7,10 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://localhost:8001",
+        "EXPO_PUBLIC_WEB_URL": "http://localhost:3000"
+      },
       "ios": {
         "resourceClass": "m-medium"
       },
@@ -16,6 +20,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://howl-staging.up.railway.app",
+        "EXPO_PUBLIC_WEB_URL": "https://howl-staging.vercel.app"
+      },
       "ios": {
         "resourceClass": "m-medium"
       },
@@ -25,6 +33,10 @@
     },
     "production": {
       "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://howl-production.up.railway.app",
+        "EXPO_PUBLIC_WEB_URL": "https://howl.vercel.app"
+      },
       "ios": {
         "resourceClass": "m-medium"
       },
@@ -34,6 +46,15 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "//": "ascAppId, appleTeamId and appleId come from the Apple Developer account. `eas submit` will prompt for them and can write them back here; they are not secrets. See mobile/CLAUDE.md."
+      },
+      "android": {
+        "//": "serviceAccountKeyPath points at a Google Play service-account JSON. Keep the file OUT of the repo (it is a credential) and set the path locally, or upload it to EAS with `eas credentials`.",
+        "track": "internal",
+        "releaseStatus": "draft"
+      }
+    }
   }
 }

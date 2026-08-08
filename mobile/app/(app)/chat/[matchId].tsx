@@ -215,17 +215,29 @@ export default function ChatScreen() {
     <SafeAreaView style={styles.shell}>
       {/* Header */}
       <View style={styles.header}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
+        <Pressable
+          style={styles.backBtn}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Back to matches"
+        >
           <Text style={styles.backText}>← Matches</Text>
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerName}>{name || 'Chat'}</Text>
+          <Text style={styles.headerName} accessibilityRole="header">{name || 'Chat'}</Text>
           {animal ? (
             <Text style={styles.headerAnimal}>{animalEmoji(animal)} {capitalise(animal)}</Text>
           ) : null}
         </View>
-        <Pressable style={styles.headerRight} onPress={() => setMenuOpen(true)}>
-          <Text style={styles.menuDots}>⋯</Text>
+        <Pressable
+          style={styles.headerRight}
+          onPress={() => setMenuOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={`More options for ${name || 'this conversation'}`}
+          accessibilityHint="Report or block this person"
+        >
+          {/* Decorative glyph; the label above carries the meaning. */}
+          <Text style={styles.menuDots} accessibilityElementsHidden importantForAccessibility="no">⋯</Text>
         </Pressable>
       </View>
 
@@ -291,17 +303,25 @@ export default function ChatScreen() {
             style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
             onPress={handleSend}
             disabled={!input.trim() || sending}
+            accessibilityRole="button"
+            accessibilityLabel={sending ? 'Sending message' : 'Send message'}
+            accessibilityState={{ disabled: !input.trim() || sending, busy: sending }}
           >
             {sending
               ? <ActivityIndicator color={C.text} size="small" />
-              : <Text style={styles.sendIcon}>➤</Text>
+              : <Text style={styles.sendIcon} accessibilityElementsHidden importantForAccessibility="no">➤</Text>
             }
           </Pressable>
         </View>
       </KeyboardAvoidingView>
       {/* Action feedback toast */}
       {actionFeedback && (
-        <View style={styles.toast} pointerEvents="none">
+        <View
+          style={styles.toast}
+          pointerEvents="none"
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >
           <Text style={styles.toastText}>{actionFeedback}</Text>
         </View>
       )}
@@ -315,6 +335,8 @@ export default function ChatScreen() {
             <Pressable
               style={styles.menuItem}
               onPress={() => { setMenuOpen(false); setReportOpen(true); }}
+              accessibilityRole="button"
+              accessibilityLabel={`Report ${name || 'this person'}`}
             >
               <Text style={styles.menuItemText}>🚩  Report</Text>
             </Pressable>
@@ -325,6 +347,10 @@ export default function ChatScreen() {
               style={[styles.menuItem, blockLoading && styles.menuItemDisabled]}
               onPress={handleBlock}
               disabled={blockLoading}
+              accessibilityRole="button"
+              accessibilityLabel={`Block ${name || 'this person'}`}
+              accessibilityHint="Removes the match and hides you from each other"
+              accessibilityState={{ disabled: blockLoading, busy: blockLoading }}
             >
               <Text style={[styles.menuItemText, styles.menuItemDanger]}>
                 {blockLoading ? 'Blocking…' : '🚫  Block'}
@@ -333,7 +359,12 @@ export default function ChatScreen() {
 
             <View style={styles.menuDivider} />
 
-            <Pressable style={styles.menuItem} onPress={() => setMenuOpen(false)}>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => setMenuOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel"
+            >
               <Text style={[styles.menuItemText, { textAlign: 'center', color: C.textSec }]}>Cancel</Text>
             </Pressable>
           </View>

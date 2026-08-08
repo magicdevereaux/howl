@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider } from '../src/auth/AuthContext';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { UnreadProvider } from '../src/contexts/UnreadContext';
 
 type NotificationData = { type?: string; match_id?: number | string };
@@ -22,25 +23,41 @@ function handleNotificationResponse(response: Notifications.NotificationResponse
 export default function RootLayout() {
   useEffect(() => {
     // Cold start: app was launched by tapping a notification.
-    Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (response) handleNotificationResponse(response);
-    });
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (response) handleNotificationResponse(response);
+      })
+      .catch((err) => {
+        if (__DEV__) console.warn('[push] could not read the launch notification:', err);
+      });
 
     // Warm start: app was already running (foreground or background).
-    const subscription = Notifications.addNotificationResponseReceivedListener(
-      handleNotificationResponse,
-    );
-    return () => subscription.remove();
+    let subscription: Notifications.Subscription | null = null;
+    try {
+      subscription = Notifications.addNotificationResponseReceivedListener(
+        handleNotificationResponse,
+      );
+    } catch (err) {
+      if (__DEV__) console.warn('[push] could not subscribe to notification taps:', err);
+    }
+    return () => subscription?.remove();
   }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <UnreadProvider>
-        <AuthProvider>
-          <StatusBar style="light" />
-          <Stack screenOptions={{ headerShown: false }} />
-        </AuthProvider>
-      </UnreadProvider>
+      {/* Outer boundary: catches failures in the providers themselves. */}
+      <ErrorBoundary>
+        <UnreadProvider>
+          <AuthProvider>
+            <StatusBar style="light" />
+            {/* Inner boundary: a screen-level render throw is recoverable
+                without tearing down the session. */}
+            <ErrorBoundary>
+              <Stack screenOptions={{ headerShown: false }} />
+            </ErrorBoundary>
+          </AuthProvider>
+        </UnreadProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

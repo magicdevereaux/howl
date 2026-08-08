@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 
-import { API_URL } from '../api/client';
+import { API_URL, IS_API_CONFIGURED, endSession, refreshAccessToken } from '../api/client';
 import { getAccessToken } from '../auth/storage';
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -21,46 +21,103 @@ export type WsEvent =
   | { type: 'message_deleted'; message: WsMessage }
   | { type: 'typing';         user_name: string };
 
+/** Connection state, so the UI can tell the user why messages aren't arriving. */
+export type WsStatus =
+  | 'connecting'
+  /** Live: messages arrive in real time. */
+  | 'open'
+  /** Disconnected, retrying with backoff. Sending still works over REST. */
+  | 'reconnecting'
+  /** Gave up: the session or this match is no longer usable over WS. */
+  | 'closed';
+
+// ── Close codes (see app/api/chat.py:171-197) ──────────────────────────────────
+
+const CLOSE_UNAUTHENTICATED = 4001; // missing/expired/invalid token
+const CLOSE_FORBIDDEN       = 4003; // not a participant in this match
+
+const RECONNECT_BASE_MS = 2_500;
+const RECONNECT_MAX_MS  = 30_000;
+/** Refreshes per mount before we stop trying — prevents a refresh/close loop. */
+const MAX_AUTH_REFRESHES = 2;
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 /**
  * Manages a WebSocket connection to /api/matches/{matchId}/ws.
  *
- * - Authenticates via ?token= query param (mobile bearer auth).
- * - Reconnects after 2.5 s on unexpected close.
+ * - Authenticates via `?token=` query param (mobile bearer auth). See the note
+ *   in the repo docs: query-string placement is a backend contract, not a
+ *   client choice.
+ * - On a 4001 close (expired access token) it refreshes the token and
+ *   reconnects, instead of spinning forever on a token the server rejects.
+ * - Reconnects with exponential backoff, capped, and resets on a good open.
  * - Disconnects when the app goes to background; reconnects on foreground.
  * - Cleans up completely on component unmount.
  */
 export function useMatchWebSocket(
   matchId: number,
   onEvent: (event: WsEvent) => void,
-): { sendTyping: () => void } {
+): { sendTyping: () => void; status: WsStatus } {
   const wsRef           = useRef<WebSocket | null>(null);
   const reconnectRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isActiveRef     = useRef(true);
+  const attemptsRef     = useRef(0);
+  const authRefreshRef  = useRef(0);
   // Keep onEvent stable in the closure without restarting the socket on every render
   const onEventRef      = useRef(onEvent);
   onEventRef.current    = onEvent;
+
+  const [status, setStatus] = useState<WsStatus>('connecting');
 
   const clearReconnect = () => {
     if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; }
   };
 
+  const connectRef = useRef<() => void>(() => {});
+
+  /** Queue another attempt with exponential backoff. */
+  const scheduleReconnect = useCallback((immediate = false) => {
+    if (!isActiveRef.current) return;
+    clearReconnect();
+    const delay = immediate
+      ? 0
+      : Math.min(RECONNECT_BASE_MS * 2 ** attemptsRef.current, RECONNECT_MAX_MS);
+    attemptsRef.current += 1;
+    setStatus('reconnecting');
+    reconnectRef.current = setTimeout(() => connectRef.current(), delay);
+  }, []);
+
   const connect = useCallback(async () => {
     if (!isActiveRef.current) return;
+    if (!IS_API_CONFIGURED || !Number.isFinite(matchId)) { setStatus('closed'); return; }
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const token = await getAccessToken();
-    if (!token) return;
+    if (!isActiveRef.current) return;
+    if (!token) { setStatus('closed'); return; }
+
+    setStatus((prev) => (prev === 'open' ? prev : 'connecting'));
 
     // Convert http(s):// → ws(s)://
     const wsBase = API_URL.replace(/^http/, 'ws');
     const url = `${wsBase}/api/matches/${matchId}/ws?token=${encodeURIComponent(token)}`;
 
-    const ws = new WebSocket(url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch (err) {
+      if (__DEV__) console.warn('[ws] could not open socket:', err);
+      scheduleReconnect();
+      return;
+    }
     wsRef.current = ws;
 
-    ws.onopen = () => { clearReconnect(); };
+    ws.onopen = () => {
+      clearReconnect();
+      attemptsRef.current = 0;
+      setStatus('open');
+    };
 
     ws.onmessage = (e) => {
       try {
@@ -68,32 +125,73 @@ export function useMatchWebSocket(
       } catch { /* ignore malformed frames */ }
     };
 
-    ws.onerror = () => { ws.close(); };
+    // onerror fires before onclose; closing here funnels everything through
+    // the single reconnect decision in onclose.
+    ws.onerror = () => {
+      try { ws.close(); } catch { /* already closing */ }
+    };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       wsRef.current = null;
+      const code = (event as { code?: number } | undefined)?.code;
       if (!isActiveRef.current) return;
       clearReconnect();
-      reconnectRef.current = setTimeout(connect, 2500);
+
+      if (code === CLOSE_FORBIDDEN) {
+        // Blocked, unmatched, or never a participant — retrying cannot help.
+        setStatus('closed');
+        return;
+      }
+
+      if (code === CLOSE_UNAUTHENTICATED) {
+        if (authRefreshRef.current >= MAX_AUTH_REFRESHES) {
+          setStatus('closed');
+          return;
+        }
+        authRefreshRef.current += 1;
+        setStatus('reconnecting');
+        refreshAccessToken().then(async (outcome) => {
+          if (!isActiveRef.current) return;
+          if (outcome.kind === 'ok') {
+            attemptsRef.current = 0;
+            scheduleReconnect(true);
+          } else if (outcome.kind === 'invalid') {
+            // Session is genuinely over; let the app route to sign-in.
+            setStatus('closed');
+            await endSession();
+          } else {
+            // Offline — the token may well still be good. Back off and retry.
+            scheduleReconnect();
+          }
+        });
+        return;
+      }
+
+      scheduleReconnect();
     };
-  }, [matchId]);
+  }, [matchId, scheduleReconnect]);
+
+  connectRef.current = () => { void connect(); };
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
     isActiveRef.current = true;
-    connect();
+    attemptsRef.current = 0;
+    authRefreshRef.current = 0;
+    void connect();
 
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') {
         // Reconnect if socket dropped while backgrounded
         if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-          connect();
+          attemptsRef.current = 0;
+          void connect();
         }
       } else if (state === 'background') {
         // Close proactively to save battery; we'll reconnect on foreground
         clearReconnect();
-        wsRef.current?.close();
+        try { wsRef.current?.close(); } catch { /* already closing */ }
         wsRef.current = null;
       }
     });
@@ -101,7 +199,7 @@ export function useMatchWebSocket(
     return () => {
       isActiveRef.current = false;
       clearReconnect();
-      wsRef.current?.close();
+      try { wsRef.current?.close(); } catch { /* already closing */ }
       wsRef.current = null;
       sub.remove();
     };
@@ -110,10 +208,14 @@ export function useMatchWebSocket(
   // ── Actions ───────────────────────────────────────────────────────────────
 
   const sendTyping = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    try {
       wsRef.current.send(JSON.stringify({ type: 'typing' }));
+    } catch {
+      // Socket died between the readyState check and the send; the close
+      // handler will take care of reconnecting.
     }
   }, []);
 
-  return { sendTyping };
+  return { sendTyping, status };
 }

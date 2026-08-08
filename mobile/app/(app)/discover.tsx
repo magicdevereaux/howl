@@ -209,10 +209,15 @@ export default function DiscoverScreen() {
         </View>
       ) : !topUser ? (
         <View style={styles.center}>
-          <Text style={styles.emptyEmoji}>🎉</Text>
-          <Text style={styles.emptyTitle}>You've seen everyone!</Text>
+          <Text style={styles.emptyEmoji} accessibilityElementsHidden importantForAccessibility="no">🎉</Text>
+          <Text style={styles.emptyTitle} accessibilityRole="header">You've seen everyone!</Text>
           <Text style={styles.emptySub}>Check back later for new members.</Text>
-          <Pressable style={styles.refreshBtn} onPress={fetchUsers}>
+          <Pressable
+            style={styles.refreshBtn}
+            onPress={fetchUsers}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh the discover queue"
+          >
             <Text style={styles.refreshBtnText}>Refresh</Text>
           </Pressable>
         </View>
@@ -256,22 +261,38 @@ export default function DiscoverScreen() {
               style={({ pressed }) => [styles.btn, styles.passBtn, pressed && styles.btnPressed]}
               onPress={() => tapSwipe('pass')}
               disabled={swiping}
+              accessibilityRole="button"
+              accessibilityLabel={`Pass on ${topUser.name || 'this person'}`}
+              accessibilityHint="Removes them from your queue"
+              accessibilityState={{ disabled: swiping, busy: swiping }}
             >
-              <Text style={styles.btnEmoji}>✕</Text>
+              {/* Decorative: the label above carries the meaning. */}
+              <Text style={styles.btnEmoji} accessibilityElementsHidden importantForAccessibility="no">✕</Text>
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.btn, styles.likeBtn, pressed && styles.btnPressed]}
               onPress={() => tapSwipe('like')}
               disabled={swiping}
+              accessibilityRole="button"
+              accessibilityLabel={`Like ${topUser.name || 'this person'}`}
+              accessibilityHint="You match if they like you back"
+              accessibilityState={{ disabled: swiping, busy: swiping }}
             >
-              <Text style={styles.btnEmoji}>❤️</Text>
+              <Text style={styles.btnEmoji} accessibilityElementsHidden importantForAccessibility="no">❤️</Text>
             </Pressable>
           </View>
 
           {/* Undo last swipe */}
           <View style={styles.undoRow}>
             {lastSwiped && !swiping ? (
-              <Pressable onPress={handleUndo} disabled={undoing} style={styles.undoBtn}>
+              <Pressable
+                onPress={handleUndo}
+                disabled={undoing}
+                style={styles.undoBtn}
+                accessibilityRole="button"
+                accessibilityLabel={undoing ? 'Undoing last swipe' : 'Undo last swipe'}
+                accessibilityState={{ disabled: undoing, busy: undoing }}
+              >
                 <Text style={styles.undoText}>{undoing ? '…' : '↩ Undo'}</Text>
               </Pressable>
             ) : (
@@ -286,8 +307,8 @@ export default function DiscoverScreen() {
       <Modal visible={!!matchPopup} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.matchCard}>
-            <Text style={styles.matchEmoji}>🎉</Text>
-            <Text style={styles.matchTitle}>It's a Match!</Text>
+            <Text style={styles.matchEmoji} accessibilityElementsHidden importantForAccessibility="no">🎉</Text>
+            <Text style={styles.matchTitle} accessibilityRole="header">It's a Match!</Text>
             <Text style={styles.matchSub}>
               You and {matchPopup?.other_user?.name || 'someone'} liked each other!
             </Text>
@@ -299,6 +320,8 @@ export default function DiscoverScreen() {
             <Pressable
               style={styles.matchBtn}
               onPress={() => setMatchPopup(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss and keep swiping"
             >
               <Text style={styles.matchBtnText}>Keep Swiping</Text>
             </Pressable>

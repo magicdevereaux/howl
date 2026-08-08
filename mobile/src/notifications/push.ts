@@ -18,46 +18,67 @@ Notifications.setNotificationHandler({
 
 let cachedToken: string | null = null;
 
-/** Request permission (if needed) and return this device's Expo push token. */
+/**
+ * Request permission (if needed) and return this device's Expo push token.
+ *
+ * Every call here can reject: permission dialogs can be dismissed by the OS,
+ * `getExpoPushTokenAsync` throws outright when `extra.eas.projectId` is absent
+ * (see app.json / `eas init`), and channel setup fails on some Android OEMs.
+ * Push is a nice-to-have, so all of it degrades to "no token" rather than
+ * taking down the caller — which is the login path.
+ */
 async function getExpoPushToken(): Promise<string | null> {
   if (cachedToken) return cachedToken;
   if (!Device.isDevice) return null; // push tokens aren't reliable on simulators
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-  if (finalStatus !== 'granted') return null;
+  try {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') return null;
 
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.DEFAULT,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#9B59D4',
-    });
-  }
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.DEFAULT,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#9B59D4',
+      });
+    }
 
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-  const result = await Notifications.getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined,
-  );
-  cachedToken = result.data;
-  return cachedToken;
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const result = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
+    cachedToken = result.data;
+    return cachedToken;
+  } catch (err) {
+    if (__DEV__) console.warn('[push] could not obtain an Expo push token:', err);
+    return null;
+  }
 }
 
 /** Request permission and register this device's push token with the backend. */
 export async function syncPushToken(): Promise<void> {
   const token = await getExpoPushToken();
   if (!token) return;
-  await api('/api/push-tokens', { method: 'POST', body: JSON.stringify({ token }) });
+  const res = await api('/api/push-tokens', { method: 'POST', body: JSON.stringify({ token }) });
+  if (!res.ok && __DEV__) {
+    console.warn('[push] token registration failed:', res.error);
+  }
 }
 
 /** Remove this device's push token from the backend, e.g. on logout. */
 export async function unregisterPushToken(): Promise<void> {
   const token = cachedToken;
   if (!token) return;
-  await api('/api/push-tokens', { method: 'DELETE', body: JSON.stringify({ token }) });
+  const res = await api('/api/push-tokens', { method: 'DELETE', body: JSON.stringify({ token }) });
+  if (!res.ok && __DEV__) {
+    console.warn('[push] token removal failed:', res.error);
+  }
+  // Drop the cache either way: the next sign-in re-registers it.
+  cachedToken = null;
 }
