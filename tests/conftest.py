@@ -175,3 +175,68 @@ def _open_task_locks(monkeypatch):
     With no client, acquire fails open and release is a no-op.
     """
     monkeypatch.setattr("app.services.task_lock._get_client", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chat_rate_limit(monkeypatch):
+    """Give each test its own in-memory message-send limiter.
+
+    `app/api/chat.py` used to count sent messages with a DB `COUNT` per request,
+    which was hermetic but wasteful; it now uses the shared Redis limiter. Redis
+    is real in this suite and its keys are `(user_id, match_id)`, both of which
+    repeat across tests, so counters leak between tests *and* between runs — the
+    same failure mode as the login limiter above.
+
+    This mirrors the real limiter's semantics exactly (INCR, then block once the
+    count exceeds the limit) so a test can still prove the limit fires; it just
+    starts from zero every time.
+    """
+    counters: dict[str, int] = {}
+
+    def fake_check_rate_limit(key: str, limit: int, window: int = 60) -> tuple[bool, int]:
+        counters[key] = counters.get(key, 0) + 1
+        if counters[key] > limit:
+            return True, window
+        return False, 0
+
+    monkeypatch.setattr("app.api.chat.check_rate_limit", fake_check_rate_limit)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_pubsub: leave ChatPubSub un-patched (tests that exercise the fan-out itself)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _local_only_chat_pubsub(request, monkeypatch):
+    """Keep chat delivery local so tests never touch Redis pub/sub.
+
+    `ChatPubSub` opens a real connection and runs a supervised reader task that
+    loops until the process ends. Left live under pytest it keeps each test's
+    event loop from closing, which hangs the run outright.
+
+    Neutering publish/subscribe is faithful rather than a cop-out: pub/sub fails
+    open to local-only delivery by design (see the module docstring), so this is
+    the documented Redis-down path. Cross-replica fan-out is covered separately
+    in tests/test_chat_pubsub.py, which drives two replicas against a fake Redis
+    and opts out of this fixture with @pytest.mark.real_pubsub.
+    """
+    if request.node.get_closest_marker("real_pubsub"):
+        return
+
+    from app.services.pubsub import ChatPubSub
+
+    async def noop_subscribe(self, match_id: int) -> None:
+        return None
+
+    async def noop_unsubscribe(self, match_id: int) -> None:
+        return None
+
+    async def noop_publish(self, match_id: int, payload: dict) -> bool:
+        return False
+
+    monkeypatch.setattr(ChatPubSub, "subscribe", noop_subscribe)
+    monkeypatch.setattr(ChatPubSub, "unsubscribe", noop_unsubscribe)
+    monkeypatch.setattr(ChatPubSub, "publish", noop_publish)

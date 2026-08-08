@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+import time
+from datetime import UTC, datetime
 
 from fastapi import (
     APIRouter,
@@ -24,54 +26,156 @@ from app.models.swipe import Swipe
 from app.models.user import User
 from app.schemas.chat import MessageIn, MessageOut, MessagePageOut, UnreadCountOut
 from app.security import decode_access_token
+from app.services.pubsub import ChatPubSub
+from app.services.rate_limit import check_rate_limit
 from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/matches", tags=["chat"])
 
-_RATE_LIMIT_MAX = 10       # messages per window
+_RATE_LIMIT_MAX = 10       # messages per window, per sender per match
 _RATE_LIMIT_WINDOW_S = 60  # seconds
 _PAGE_SIZE = 50            # messages returned per request
+
+# Inbound WS "typing" events, budgeted per connection. See _TypingBudget.
+_TYPING_LIMIT = 5
+_TYPING_WINDOW_S = 2.0
+
+# A single slow socket must not stall delivery for everyone else on this
+# replica, because remote events are all delivered by the one pub/sub reader
+# task. Past this, treat the socket as dead and drop it.
+_SEND_TIMEOUT_S = 5.0
+
+
+def _message_rate_limit_key(user_id: int, match_id: int) -> str:
+    """Redis key for the send limit. Scoped per (sender, match), as the
+    previous DB COUNT implementation was."""
+    return f"rl:msg:{user_id}:{match_id}"
+
+
+class _TypingBudget:
+    """Fixed-window counter for inbound `typing` frames on one WebSocket.
+
+    Deliberately in-process and per-connection rather than Redis-backed: a
+    WebSocket is pinned to the process that accepted it, so a local counter is
+    *exact* for that connection and needs no coordination. It also avoids
+    paying a Redis round-trip per keystroke — which, on an endpoint whose whole
+    problem is that it can be spammed, would make the limiter the amplifier.
+    The state dies with the socket, so nothing leaks.
+    """
+
+    __slots__ = ("_window_start", "_count")
+
+    def __init__(self) -> None:
+        self._window_start = 0.0
+        self._count = 0
+
+    def allow(self) -> bool:
+        now = time.monotonic()
+        if now - self._window_start >= _TYPING_WINDOW_S:
+            self._window_start = now
+            self._count = 0
+        self._count += 1
+        return self._count <= _TYPING_LIMIT
 
 
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
 #
-# Tracks open WebSocket connections per match.  Stores user_id alongside
-# each connection so that is_mine can be computed correctly per recipient
-# without an extra DB call.
+# Tracks open WebSocket connections per match, storing user_id alongside each
+# connection so is_mine can be computed per recipient without an extra DB call.
 #
-# This is an in-process singleton.  On a multi-instance deployment (multiple
-# Railway replicas or Gunicorn workers) connections are not shared between
-# processes — add Redis pub/sub if that becomes a requirement.
+# The local registry is still an in-process dict — a socket can only be written
+# to by the process holding it — but it is no longer the whole story. Outbound
+# events are delivered to local sockets *and* published to a Redis channel for
+# the match, and every replica serving that match subscribes to it. That makes
+# delivery correct across replicas. See app/services/pubsub.py for the
+# transport, its fail-open-to-local-delivery policy, and why double delivery
+# to the publishing replica cannot happen (origin stamping).
 # ---------------------------------------------------------------------------
 
 class ConnectionManager:
-    def __init__(self) -> None:
+    def __init__(self, pubsub: ChatPubSub | None = None) -> None:
         # match_id → {WebSocket: (user_id, display_name)}
         self._conns: dict[int, dict[WebSocket, tuple[int, str | None]]] = {}
+        self._pubsub = pubsub if pubsub is not None else ChatPubSub()
+        self._pubsub.set_handler(self._on_remote_event)
+
+    @property
+    def pubsub(self) -> ChatPubSub:
+        return self._pubsub
 
     async def connect(self, match_id: int, user_id: int, display_name: str | None, ws: WebSocket) -> None:
         await ws.accept()
+        first_for_match = match_id not in self._conns
         self._conns.setdefault(match_id, {})[ws] = (user_id, display_name)
+        if first_for_match:
+            # Only subscribe once per match, on the first local socket.
+            await self._pubsub.subscribe(match_id)
         logger.debug("ws: user %d connected to match %d", user_id, match_id)
 
-    def disconnect(self, match_id: int, ws: WebSocket) -> None:
+    async def disconnect(self, match_id: int, ws: WebSocket) -> None:
         conns = self._conns.get(match_id, {})
         entry = conns.pop(ws, None)
         if not conns:
             self._conns.pop(match_id, None)
+            # No local socket cares about this match any more.
+            await self._pubsub.unsubscribe(match_id)
         if entry is not None:
             logger.debug("ws: user %d disconnected from match %d", entry[0], match_id)
 
+    # ── outbound: local delivery + cross-replica publish ────────────────────
+
     async def broadcast(self, match_id: int, event: dict) -> None:
-        """Push event to all connections for a match.
+        """Push event to every connection for a match, on any replica.
 
         event must have a "message" dict containing at least "sender_id".
-        is_mine is computed per recipient so each client receives the
-        correct value without the server needing to send separate payloads.
+        is_mine is computed per recipient so each client receives the correct
+        value without the server needing to send separate payloads.
+
+        Local sockets are served first and synchronously, so delivery on this
+        replica does not depend on Redis at all.
         """
+        await self._deliver_message(match_id, event)
+        await self._pubsub.publish(match_id, {"kind": "message", "event": event})
+
+    async def broadcast_typing(self, match_id: int, sender_user_id: int) -> None:
+        """Notify everyone else in the match that sender_user_id is typing."""
+        conns = self._conns.get(match_id) or {}
+        sender_name = next(
+            (name for _ws, (uid, name) in conns.items() if uid == sender_user_id),
+            None,
+        )
+        display = sender_name or "Someone"
+        await self._deliver_typing(match_id, sender_user_id, display)
+        # The name has to travel with the event: on another replica the typer
+        # has no local connection to look it up from.
+        await self._pubsub.publish(
+            match_id,
+            {"kind": "typing", "sender_id": sender_user_id, "user_name": display},
+        )
+
+    # ── inbound: events published by another replica ─────────────────────────
+
+    async def _on_remote_event(self, match_id: int, payload: dict) -> None:
+        """Handle an event another replica published. Never called for our own
+        publishes — ChatPubSub filters those out by origin id."""
+        kind = payload.get("kind")
+        if kind == "message":
+            event = payload.get("event")
+            if isinstance(event, dict):
+                await self._deliver_message(match_id, event)
+        elif kind == "typing":
+            sender_id = payload.get("sender_id")
+            if isinstance(sender_id, int):
+                await self._deliver_typing(
+                    match_id, sender_id, payload.get("user_name") or "Someone"
+                )
+
+    # ── local socket writes ──────────────────────────────────────────────────
+
+    async def _deliver_message(self, match_id: int, event: dict) -> None:
         conns = self._conns.get(match_id)
         if not conns:
             return
@@ -79,33 +183,35 @@ class ConnectionManager:
         sender_id = msg.get("sender_id")
         dead: list[WebSocket] = []
         for ws, (uid, _name) in list(conns.items()):
-            try:
-                await ws.send_json({**event, "message": {**msg, "is_mine": uid == sender_id}})
-            except Exception:
+            payload = {**event, "message": {**msg, "is_mine": uid == sender_id}}
+            if not await self._send(ws, payload):
                 dead.append(ws)
         for ws in dead:
             conns.pop(ws, None)
 
-    async def broadcast_typing(self, match_id: int, sender_user_id: int) -> None:
-        """Notify everyone else in the match that sender_user_id is typing."""
+    async def _deliver_typing(self, match_id: int, sender_user_id: int, display: str) -> None:
         conns = self._conns.get(match_id)
         if not conns:
             return
-        sender_name = next(
-            (name for _ws, (uid, name) in conns.items() if uid == sender_user_id),
-            None,
-        )
-        display = sender_name or "Someone"
         dead: list[WebSocket] = []
         for ws, (uid, _name) in list(conns.items()):
             if uid == sender_user_id:
                 continue  # don't echo back to the typer
-            try:
-                await ws.send_json({"type": "typing", "user_name": display})
-            except Exception:
+            if not await self._send(ws, {"type": "typing", "user_name": display}):
                 dead.append(ws)
         for ws in dead:
             conns.pop(ws, None)
+
+    async def _send(self, ws: WebSocket, payload: dict) -> bool:
+        """Write one frame. Returns False if the socket should be dropped."""
+        try:
+            await asyncio.wait_for(ws.send_json(payload), timeout=_SEND_TIMEOUT_S)
+            return True
+        except TimeoutError:
+            logger.warning("ws: send timed out after %.0fs; dropping socket", _SEND_TIMEOUT_S)
+            return False
+        except Exception:
+            return False
 
 
 manager = ConnectionManager()
@@ -200,6 +306,7 @@ async def chat_websocket(
 
     # ── Register and handle incoming events ──────────────────────────────────
     await manager.connect(match_id, user_id, user.name, ws)
+    typing_budget = _TypingBudget()
     try:
         while True:
             try:
@@ -209,11 +316,21 @@ async def chat_websocket(
             try:
                 data = json.loads(raw)
                 if data.get("type") == "typing":
-                    await manager.broadcast_typing(match_id, user_id)
+                    # Rate limited: an unbounded typing stream now fans out to
+                    # every replica serving the match, so spam amplifies.
+                    # Excess frames are dropped silently rather than closing the
+                    # socket — the event is cosmetic and the client cannot tell.
+                    if typing_budget.allow():
+                        await manager.broadcast_typing(match_id, user_id)
+                    else:
+                        logger.debug(
+                            "ws: dropping typing flood from user %d on match %d",
+                            user_id, match_id,
+                        )
             except Exception:
                 pass  # malformed input — keep the connection alive
     finally:
-        manager.disconnect(match_id, ws)
+        await manager.disconnect(match_id, ws)
 
 
 @router.delete("/{match_id}", status_code=204)
@@ -327,18 +444,20 @@ def send_message(
     """Send a message to a match. Rate-limited to 10 per 60 seconds."""
     match = _require_match_member(match_id, current_user.id, db)
 
-    cutoff = datetime.now(UTC) - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
-    recent = (
-        db.query(Message)
-        .filter(
-            Message.match_id == match_id,
-            Message.sender_id == current_user.id,
-            Message.created_at >= cutoff,
-        )
-        .count()
+    # Counted in Redis rather than with a DB COUNT over the messages table, so
+    # the limit costs one INCR instead of an index scan that grows with the
+    # conversation. Fails open on Redis errors, like the login limiter.
+    limited, retry_after = check_rate_limit(
+        _message_rate_limit_key(current_user.id, match_id),
+        _RATE_LIMIT_MAX,
+        _RATE_LIMIT_WINDOW_S,
     )
-    if recent >= _RATE_LIMIT_MAX:
-        raise HTTPException(status_code=429, detail="Sending too fast. Please wait a moment.")
+    if limited:
+        raise HTTPException(
+            status_code=429,
+            detail="Sending too fast. Please wait a moment.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
     msg = Message(
         match_id=match_id,

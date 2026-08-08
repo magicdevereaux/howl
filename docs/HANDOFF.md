@@ -79,19 +79,34 @@ Orchestrator's own work landed first, independently of the fan-out:
 
 Fan-out branches, in integration order (most-complete and lowest-risk first):
 
-| # | Agent id | Items | Left off at | Landed? |
+| # | Agent id | Items | Landed | Commit |
 |---|---|---|---|---|
-| 1 | `adb0b77b3bc740de0` | #14 swipe races, #19 blocks | "add a query-count test and run everything" | |
-| 2 | `acb8378e9a3ac8ada` | #16 notify retries | "now the service tests" | |
-| 3 | `a1e0f6a2dee03c0d2` | #28/#31/#32/#36/#37 | "testing the build with requirements-driven pyproject" | |
-| 4 | `a1c6076c3a028ab73` | #29 client tests | "now let me write the frontend config" | |
-| 5 | `ae0e08715fe99fe3c` | #13 mobile, #34 a11y | "now push.ts and the WebSocket hook" | |
-| 6 | `a5425f6c66cc50b17` | #17 chat pub/sub | "now the WS handler + send rate limit" | |
-| 7 | `af501333c9ead3e7d` | #20/#21/#22/#23/#24 schema | "now fix the broken downgrades" — 5 migrations written | |
-| 8 | `a8507a6340a4f3f28` | #18/#25/#26 auth | mid-writing rate-limit tests | |
+| 1 | `adb0b77b3bc740de0` | #14 swipe races, #19 blocks | ✅ | `a7e7ef3` |
+| 2 | `acb8378e9a3ac8ada` | #16 notify retries | ✅ | `9933488` |
+| 3 | `af501333c9ead3e7d` | #20/#21/#22/#23/#24 schema | ✅ | `026ef4b` |
+| 4 | `a5425f6c66cc50b17` | #17 chat pub/sub | | |
+| 5 | `a8507a6340a4f3f28` | #18/#25/#26 auth | | |
+| 6 | `ae0e08715fe99fe3c` | #13 mobile, #34 a11y | | |
+| 7 | `a1e0f6a2dee03c0d2` | #28/#31/#32/#36/#37 hygiene | | |
+| 8 | `a1c6076c3a028ab73` | #29 client tests | | |
 
-The schema branch (#7) is deliberately late despite being nearly done: it writes **five new
-migrations** and needs Postgres verification, and the swipe branch (#1) may need a constraint from it.
-The auth branch (#8) is last because it is the largest refactor and touches `tests/conftest.py`.
+**Suite: 413 → 481 passing.** Every landed branch was verified before it went in; nothing was
+merged on trust. Three findings worth knowing:
+
+- **The pysqlite savepoint trap.** `tests/conftest.py` now disables pysqlite's implicit `BEGIN` and
+  emits `BEGIN` itself (SQLAlchemy's documented workaround). Without it, `SAVEPOINT`s are issued
+  outside any transaction and effectively autocommit, so work inside `begin_nested()` *survived a
+  rollback*. Any future `IntegrityError`-recovery code is correct on Postgres but untestable without
+  this. Same intent as the pre-existing `PRAGMA foreign_keys=ON`.
+- **Two GAPS claims were wrong,** not merely unfixed. #23's `(user_id, token)` push-token constraint
+  should NOT be added — the global uniqueness is deliberate (one device, one signed-in account) and
+  `app/api/push_tokens.py` already reassigns. Pinned with a test. And `test_notify.py` was building a
+  self-match, which the new `ck_matches_user_order` correctly rejects.
+- **#21 is verified, not assumed.** `alembic revision --autogenerate` now emits an empty migration and
+  `downgrade base` → `upgrade head` completes on PostgreSQL. Both were checked against a throwaway
+  database (`howl_migration_test`, since dropped) — never the dev DB.
+
+Still deferred inside the landed work: `users.age` stays nullable (NOT NULL breaks existing rows and
+the 18+ gate is an API decision), and no CHECK ties `avatar_status='ready'` to `avatar_url`/`animal`.
 
 Cleanup once landed: `git worktree remove <path> && git branch -D worktree-agent-<id>`.
