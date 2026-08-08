@@ -1,16 +1,29 @@
 # Gaps & Improvements
 
-A prioritized audit of the current `main`, from a full read of the backend, both clients, the data
-layer, and the tooling. Every item has a file reference. Nothing here has been fixed — this is the
-worklist.
+A prioritized audit of `main`, from a full read of the backend, both clients, the data layer, and the
+tooling. Every item has a file reference. This started as a pure worklist; most of it is now closed, and
+each entry records how.
 
-Items marked **✅ verified** were confirmed by direct code read rather than inference.
-Items marked **✅ FIXED** have been resolved — the commit is noted inline.
+- **✅ FIXED** — resolved, commit noted inline.
+- **🟡 PARTLY / MOSTLY / HALF** — the substance is done but something specific is deliberately left.
+  Every one says what and why, and none of them is left because it was hard.
+- No marker — still open. There are three: **#3**, **#33**, and the enforcement half of **#25**.
 
-**Status:** 13 of 37 resolved. Every P0 is closed except **#3** (no email provider — password-reset
-tokens go to stdout), which is blocked on choosing a provider. The whole P1 cost cluster (#7–#11) is
-done, so the four ways this app could bill unboundedly are all now bounded. Suite: **413 passing**, up
-from 15 failing on a clean checkout at the start of the audit.
+File and line references in unstruck text describe the code *as it was when the gap was found*. Some
+have moved; the struck entries note where. Two claims turned out to be **wrong on inspection** and are
+withdrawn rather than "fixed" — see #23's push-token bullet.
+
+**Status: 30 of 37 fully closed, 5 partial, 2 open.**
+
+**Every P0 and P1 is closed except #3** — no email provider, so password-reset tokens go to stdout. That
+one is blocked on choosing a provider, not on effort.
+
+Suite: **539 backend tests at 90.01% coverage** (from 413, and from 15 failing on a clean checkout when
+the audit started), plus **39 client-side tests** where there were zero.
+
+The 5 partials are #22, #23, #25, #30, #35 — in each case the substance landed and something specific was
+left deliberately, stated in the entry. The 2 open are **#3** (needs a provider decision) and **#33** (a
+session of its own). Full breakdown under "Remaining work" at the bottom.
 
 Note on **#5**: marked MITIGATED rather than FIXED. User text is now JSON-encoded, fenced as untrusted,
 and every returned index is range-checked and de-duplicated, so a reply cannot be written into a
@@ -103,13 +116,13 @@ deleted in commit `1fbd58d`; only `setGenerationStartTime` exists (`App.jsx:41`)
 throws before `setAvatarStatus(data)` runs, and with no error boundary anywhere the UI dies. `:376` has
 the same call in `handleUpdateBio`, which is dead code.
 
-### 13. Mobile has no network error handling
+### 13. ~~Mobile has no network error handling~~ ✅ FIXED (85554af)
 
 `mobile/src/api/client.ts:50` — no timeout, no `AbortController`, no try/catch around `fetch`. Every
 call site awaits `api()` without a guard, so airplane mode produces an unhandled rejection. No error
 boundaries exist in either client.
 
-### 14. Race conditions in swipe handling
+### 14. ~~Race conditions in swipe handling~~ ✅ FIXED (a7e7ef3)
 
 `app/api/swipes.py:80-98` check-then-insert on duplicate swipes and on the `daily_swipes` increment;
 `:104-118` can create duplicate `Match` rows on simultaneous mutual likes. `undo_last_swipe` orders by
@@ -120,7 +133,7 @@ boundaries exist in either client.
 `app/api/swipes.py:135` uses `target.email.startswith("demo")`. Any real user who registers
 `demo.something@…` gets bot auto-match behavior. The `is_bot` column already exists — use it.
 
-### 16. Notifications have no retries
+### 16. ~~Notifications have no retries~~ ✅ FIXED (9933488)
 
 `app/tasks/notify.py:26, 105` — neither task binds or retries, and
 `app/services/push_notifications.py:49-50` swallows every exception. Expo's per-ticket errors in the
@@ -131,13 +144,13 @@ accumulate forever.
 
 ## P2 — Architecture and scale
 
-### 17. Real-time chat is single-replica-only
+### 17. ~~Real-time chat is single-replica-only~~ ✅ FIXED (b2a36f8)
 
 `app/api/chat.py:36-38` — `ConnectionManager` is an in-process dict, correctly documented as unsafe for
 multiple replicas. Any horizontal scaling silently drops delivery for users on other processes. Needs
 Redis pub/sub fan-out before scaling past one web process.
 
-### 18. `auth.py` and `mobile_auth.py` are drifting duplicates
+### 18. ~~`auth.py` and `mobile_auth.py` are drifting duplicates~~ ✅ FIXED (5583de5)
 
 Beyond the missing rate limit (#2), `mobile_auth.py:66` hardcodes `timedelta(days=30)` instead of
 `settings.refresh_token_expire_days`, and `:85` uses `_TOKEN_EXPIRY_HOURS` (1h, the *password-reset*
@@ -145,7 +158,7 @@ constant) for email verification where web uses 24h — mobile verification link
 `:19-26` imports four names it never uses. Extract a shared auth service; keep the two routers as thin
 token-delivery shells.
 
-### 19. N+1 query storms
+### 19. ~~N+1 query storms~~ ✅ FIXED (5698a72, a7e7ef3)
 
 - `app/tasks/bot_response.py:168-206` — all bots, then per bot all matches, then per match a
   `db.get(User)`, a last-message query, and a count. At 1000 bots this runs every 15 minutes against
@@ -153,7 +166,7 @@ token-delivery shells.
 - `app/api/blocks.py:94-96` — per-block `db.get(User, ...)`, in contrast to the deliberately optimized
   `list_matches`.
 
-### 20. Missing indexes on hot paths
+### 20. ~~Missing indexes on hot paths~~ ✅ FIXED (026ef4b)
 
 - `swipes.target_user_id` (`app/models/swipe.py:25-27`) — no index, and it's the reciprocal-like lookup
   at `app/api/swipes.py:108, 193` and `app/api/blocks.py:29-30`. Every match check scans.
@@ -162,7 +175,11 @@ token-delivery shells.
   scan on every message delete.
 - No composite `(match_id, created_at)` for chat pagination.
 
-### 21. Alembic autogenerate produces wrong output
+### 21. ~~Alembic autogenerate produces wrong output~~ ✅ FIXED (026ef4b)
+
+Verified end to end, not assumed: `alembic revision --autogenerate` now emits an **empty**
+migration, and `downgrade base` → `upgrade head` completes on PostgreSQL. Checked against a
+throwaway database, never the dev one.
 
 Four model/migration drifts mean `--autogenerate` proposes destructive DDL:
 - `ix_users_is_bot` exists in migration `l3f4g5h6i7j8:20` but the model has no `index=True`
@@ -177,41 +194,82 @@ Also: `downgrade base` → `upgrade head` **fails on Postgres** because migratio
 drops the `avatar_status` enum type on downgrade, and `m4g5h6i7j8k9:20-22` is an irreversible no-op
 downgrade (contradicting ADR-005's "each reversible" claim).
 
-### 22. Timezone handling is ad hoc
+### 22. ~~Timezone handling is ad hoc~~ 🟡 PARTLY FIXED (026ef4b)
 
-Every datetime column is `DateTime(timezone=True)` with a Python-side default and **no
-`server_default=func.now()`** (all 9 models). Consequences: raw-SQL and bulk inserts violate NOT NULL;
-timestamps carry app-host clock skew rather than DB time; `updated_at`'s Python `onupdate` is skipped by
-bulk `.update()`. Under SQLite (the entire test suite) these read back naive, and the
-`replace(tzinfo=utc)` normalization is applied in only a couple of places —
-`swipes_reset_at`, `regenerations_reset_at`, `avatar_status_updated_at`,
-`email_verification_token_expires_at`, `message.read_at` and `deleted_at` have none.
+**Done:** every *creation* timestamp now carries `server_default=func.now()`, so raw-SQL and bulk
+inserts no longer violate NOT NULL and history records DB time rather than app-host clock skew.
+`tests/test_schema_constraints.py` asserts this for all six tables and proves a raw `INSERT` gets a
+`created_at`.
 
-### 23. Missing constraints
+**Still open, deliberately:** the scattered `replace(tzinfo=utc)` normalization. Under SQLite (the whole
+test suite) these columns read back **naive**, so the normalization is load-bearing wherever a stored
+timestamp is compared against `datetime.now(UTC)`. Sites still lacking it: `regenerations_reset_at`,
+`avatar_status_updated_at`, `message.read_at`, `deleted_at`. (`swipes_reset_at` and
+`email_verification_token_expires_at` were normalized as part of #14 and #18.) The right fix is one
+helper used everywhere rather than fixing them one at a time — a `TypeDecorator` on the column would
+also work and would remove the need to remember.
 
-- `matches.user1_id < user2_id` is a comment (`app/models/match.py:16`), not a CHECK.
-- `age_preference_min <= age_preference_max` is never cross-validated —
-  `app/schemas/user.py:123-135` validates each field in isolation.
-- `users.age` is nullable, so the 18+ gate is bypassed entirely by simply never setting an age.
-- No CHECK tying `avatar_status = 'ready'` to the presence of `avatar_url`/`animal`.
-- `push_tokens.token` is globally unique with no `(user_id, token)` pair constraint — a shared device
-  re-registering under a second account hits a unique violation instead of reassigning.
-- `app/db.py:13-18` — `get_db()` has no `except: db.rollback()`, so a failed request can return a
-  dirty session to the pool.
+`updated_at`'s Python `onupdate` being skipped by bulk `.update()` is unchanged and is still a real
+trap: `app/api/swipes.py` and `app/tasks/notify.py` both use bulk updates now.
 
-### 24. Report evidence is destroyed by cascade
+### 23. ~~Missing constraints~~ 🟡 MOSTLY FIXED (026ef4b)
+
+**Done:**
+- `ck_matches_user_order` makes `user1_id < user2_id` a real CHECK. `uq_match_users` only blocked an
+  exact duplicate pair, so the same two people could hold both `(a, b)` and `(b, a)`. Being strict also
+  makes a self-match impossible.
+- `age_preference_min <= age_preference_max` is cross-validated with a pydantic `model_validator`.
+  Per-field checks could never catch it: 40 and 25 are both individually legal, but the range matches
+  nobody and silently empties the discover queue.
+- `get_db()` rolls back on exception, so a request that raises mid-flush cannot hand a dirty session
+  back to the pool for the next request to commit.
+
+**This bullet was WRONG and is withdrawn:** `push_tokens.token` should *not* gain a `(user_id, token)`
+pair constraint. The global uniqueness is deliberate — one physical device must only ever receive pushes
+for the account currently signed in on it, and a pair constraint would let two accounts both hold the
+same device and both get its notifications. `app/api/push_tokens.py` already reassigns the row instead
+of inserting, which is the correct behaviour. Pinned by
+`test_shared_device_reassigns_its_push_token` so a future "fix" cannot regress it.
+
+**Deferred, with reasons:**
+- `users.age` stays nullable. Making it NOT NULL breaks every existing row, and the 18+ gate needs an
+  API-layer decision about what to do with accounts that never set an age — reject them at login, or
+  force a completion step. That is a product call.
+- No CHECK ties `avatar_status = 'ready'` to `avatar_url`/`animal`. The avatar pipeline writes these in
+  more than one step, so a CHECK would need the whole transition to be transactional first.
+
+### 24. ~~Report evidence is destroyed by cascade~~ ✅ FIXED (026ef4b)
+
+Resolved in favour of retention: all three FKs are now `SET NULL`, so a deletion anonymises a
+report but never destroys it. The abuser deleting their own account was erasing the case against
+them.
 
 `app/models/report.py:29` sets `message_id` to `SET NULL` explicitly "so reports survive message
 deletion" — but `reporter_id` and `reported_user_id` are `CASCADE` (`:24, 27`). Deleting the reported
 user deletes the report. The stated intent and the constraints contradict each other.
 
-### 25. `is_email_verified` is never enforced
+### 25. ~~`is_email_verified` is never enforced~~ 🟡 HALF DONE (5583de5) — **needs Nathan's decision**
 
-Written at `app/api/auth.py:127`, read nowhere. Unverified accounts have full access including
-messaging. There's also no resend-verification endpoint. Either enforce it on a dependency or drop the
-flow.
+**Done:** the missing resend-verification endpoint now exists on both routers, rate-limited, with a
+generic response that does not reveal whether an address has an account or is already verified. A
+`require_verified_email` dependency is built and tested (403, not 401 — the caller authenticated fine,
+re-authenticating won't help).
 
-### 26. Rate limiting is login-only and defeatable
+**Not done, on purpose:** the dependency is attached to **no route**. Turning it on retroactively locks
+out every account created before enforcement existed, including all 1000 seeded bot users, which would
+empty the discover queue and break every demo conversation. That is a product decision, not a code one.
+
+`test_require_verified_email_is_not_wired_to_any_route` asserts it stays unwired and will fail loudly
+the moment someone enables it — at which point delete the test and decide:
+1. which routes get it (messaging and swiping are the plausible ones; profile editing probably not, or
+   users can't fix a typo'd email), and
+2. what happens to existing accounts — backfill `is_email_verified = true` for everything created before
+   a cutoff, and set it on the bots in `scripts/seed_demo_users.py`.
+
+Blocked in practice by **#3** anyway: with no email provider wired, a user who is locked out cannot
+receive the link that would unlock them.
+
+### 26. ~~Rate limiting is login-only and defeatable~~ ✅ FIXED (5583de5, b2a36f8)
 
 Registration, forgot-password, reset-password, verify-email, and message send are unthrottled. The IP
 bucket trusts the first `X-Forwarded-For` value unconditionally (`app/api/auth.py:136-139`) with no
@@ -232,33 +290,44 @@ installed and have **zero invocation points** in the repo.
 This is the single highest-leverage fix on this list: a GitHub Actions workflow running
 `pytest` + `ruff check` on PRs costs an hour and permanently protects everything above.
 
-### 28. `pyproject.toml` dependencies are stale and would install a broken app
+### 28. ~~`pyproject.toml` dependencies are stale and would install a broken app~~ ✅ FIXED (658cf2b)
 
 `pyproject.toml:10-24` omits `openai`, `boto3`, `sentry-sdk`, `httpx`, and `pydantic[email]` — all
 present in `requirements.txt:11-18` and imported by the app. `pip install -e .` yields an app that
 can't start. Pick one source of truth.
 
-### 29. Zero client-side tests
+### 29. ~~Zero client-side tests~~ ✅ FIXED (2488c3a)
 
 23 backend test files, and **no test script in either `package.json`**. No jest, vitest, RTL, Detox, or
 Playwright. No ESLint or Prettier config in either client either.
 
-### 30. Untested backend surfaces
+### 30. ~~Untested backend surfaces~~ 🟡 MOSTLY FIXED (cf5f690, 9933488, 5583de5)
 
-- `app/api/mobile_auth.py` — **zero tests**, and it is the entire auth surface the shipped mobile app
-  uses.
-- The R2 upload path (`app/services/image_generation.py:53-113`) — the *production* avatar persistence
-  path, never exercised. Tests only cover the local-filesystem fallback.
-- `app/services/push_notifications.py` and `app/services/rate_limit.py` — never called, only mocked at
-  their call sites.
-- `scripts/seed_demo_users.py` — 375 lines that run on every production deploy, untested.
+**Now covered:**
+- `app/api/mobile_auth.py` — was **zero tests** while being the entire auth surface the shipped mobile
+  app uses. Now covered by `test_mobile_auth.py` plus `test_auth_hardening.py`, which specifically pins
+  the two drift bugs from #18.
+- `app/services/push_notifications.py` — was never called outside mocks. `test_push_notifications.py`
+  is 29 tests against the real module, including the Expo ticket parsing.
+- `app/services/rate_limit.py` — now exercised directly, including the client-IP derivation and the
+  fail-open-on-Redis-error path.
 
-### 31. No coverage gate
+**Still untested:**
+- The **R2 upload path** (`app/services/image_generation.py:53-113`) — the *production* avatar
+  persistence path. Tests only cover the local-filesystem fallback, and `boto3`/`openai` are not even
+  installed in the local venv (both are lazily imported behind `None` guards, which is why nothing
+  fails). Testing it properly means either `moto` or a fake S3 client injected at the boundary.
+- `scripts/seed_demo_users.py` — 375 lines that run on every production deploy. Partly covered
+  indirectly by `test_bot_response.py`'s seed assertions, but the script itself is not driven.
+
+### 31. ~~No coverage gate~~ ✅ FIXED (658cf2b)
+
+Measured 90.0%; `fail_under = 88` so the gate passes today and can ratchet.
 
 `[tool.coverage]` has no `fail_under`, and coverage isn't in pytest's `addopts`. `.coverage` and
 `htmlcov/` in the repo root are ~2 months stale relative to the code.
 
-### 32. Two clients duplicating drifting logic
+### 32. ~~Two clients duplicating drifting logic~~ ✅ FIXED (658cf2b)
 
 Discover, matches, messages, swipes, blocks and reports are each implemented twice. The duplication has
 already drifted: the two animal→emoji maps disagree (`mobile/src/utils/avatar.ts:4-8` has
@@ -275,25 +344,37 @@ A shared `packages/shared` for the animal map, reason lists, and limit constants
 20, `ChatView` 21. No memoization, so every keystroke in the chat input re-renders the tree. No URL
 routes means the back button and deep links don't work.
 
-### 34. Mobile accessibility is absent
+### 34. ~~Mobile accessibility is absent~~ ✅ FIXED (85554af, 567b3ef)
+
+Zero accessibility props → 173, across every file containing an interactive element.
 
 **Zero** `accessibilityLabel` / `accessibilityRole` / `accessibilityHint` in the entire app. Icon-only
 buttons are bare emoji (`discover.tsx:260, 267`, `chat/[matchId].tsx:228, 297`). All font sizes are
 fixed numbers, so no dynamic type. The web client has exactly one `aria-label`.
 
-### 35. Mobile is not actually shippable yet
+### 35. ~~Mobile is not actually shippable yet~~ 🟡 MOSTLY FIXED (85554af) — **one item needs an EAS account**
 
-- `extra.eas.projectId` is missing from `app.json`, so `getExpoPushTokenAsync` fails in real builds.
-- No `eas.json` profile sets `EXPO_PUBLIC_API_URL`, so a production build points at
-  `http://localhost:8001` (`mobile/src/api/client.ts:6`).
-- `submit.production` in `eas.json` is an empty object — `eas submit` isn't configured.
-- No privacy policy URL in the app config, which both stores require given push + user-generated
-  content. The web client has `LegalPage.jsx` but mobile doesn't link it.
-- No password reset or email verification on mobile at all — forgotten passwords have no in-app path.
-- WS auth puts the access token in the query string (`mobile/src/hooks/useMatchWebSocket.ts:57-58`),
-  where it lands in proxy logs, with no refresh-on-expiry path.
+**Done:**
+- every `eas.json` build profile now sets `EXPO_PUBLIC_API_URL` (and `EXPO_PUBLIC_WEB_URL`). A
+  production build previously pointed at `http://localhost:8001`, which on a real phone resolves to the
+  phone itself. `client.ts` also no longer falls back to localhost outside dev — a missing value now
+  surfaces as a diagnosable configuration error instead of an opaque network failure.
+- `submit.production` documents exactly which values need the Apple/Google accounts, and notes that the
+  Play service-account JSON is a credential that must stay out of the repo.
+- password reset exists on mobile at all now — there was previously **no in-app path** for a forgotten
+  password. Two new screens, using the shared cookie-free `/api/auth/*` endpoints.
+- a legal screen is reachable in-app, which both stores require given push plus user-generated content.
+  It is a substantive summary plus an outbound link rather than a copy of the web page's 213 lines,
+  because duplicated legal text that disagrees with itself is worse than a summary. It cannot deep-link
+  to the canonical page yet — the web client addresses legal by a `view` string, not a URL (see #33).
+- the WS token is still in the query string (moving it needs a backend change) but now has the
+  refresh-on-expiry path it was missing.
 
-### 36. Docs were stale before this pass
+**Needs Nathan:** `eas login && eas init` to populate `extra.eas.projectId` in `app.json`.
+`getExpoPushTokenAsync` fails in real builds without it. The Railway/Vercel hostnames in `eas.json` are
+placeholders and need the real ones.
+
+### 36. ~~Docs were stale before this pass~~ ✅ FIXED (658cf2b)
 
 Now corrected in `CLAUDE.md` / `RUNBOOK.md`, but `README.md` still says: `DATABASE_URL` on port 5432
 with password `howl` (`:107` — actually 5433/`howl_dev`), "18 migrations" (`:253` — there are 21), an
@@ -303,7 +384,7 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 "five related tables" (there are nine) and "9 migration files" (21). There's no LICENSE file despite
 `README:537` claiming MIT.
 
-### 37. Repo litter
+### 37. ~~Repo litter~~ ✅ FIXED (658cf2b)
 
 - Three empty directories named `c:UsersnathaDocumentsmagicshit…` — created by `mkdir -p` on a Windows
   path inside Git Bash, where backslashes were eaten as escapes. Untracked, empty, safe to delete.
@@ -314,22 +395,51 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 
 ---
 
-## Suggested order
+## Remaining work
 
-~~1. **#1, #2, #3, #4** — data exposure and credential problems.~~ done except #3
-~~2. **#27** — CI.~~ done
-~~3. **#7, #8, #9, #10** — the four ways this app can bill you unboundedly.~~ done
+**30 fully closed, 5 partial, 2 open.** What is actually left:
 
-What's left, in order:
+1. **#3 — wire an email provider.** The only open P0, and the only one blocking a real launch. Password
+   reset is non-functional and reset tokens print to the Railway log stream, which is an account-takeover
+   primitive for anyone with log access. Needs a decision: Resend, Postmark or SES. Everything else in
+   the reset flow is built and tested and will work the moment `app/services/email.py` has a transport.
+   This also unblocks the second half of **#25**.
 
-1. **#3** — wire a real email provider. The only remaining P0; blocked on picking one. Until then
-   password reset is non-functional and reset tokens sit in the log stream.
-2. **#13** — mobile has no network error handling; offline throws an unhandled rejection at every
-   call site. The most likely crash a real user hits.
-3. **#14** — swipe race conditions, and **#16** — notifications never retry.
-4. **#18** — consolidate the auth routers before they drift further.
-5. **#20** — missing indexes; gates swipe volume. **#17** gates horizontal scaling.
-6. **#21** — the Alembic drift, before someone trusts `--autogenerate`.
+2. **#25 enforcement — a product decision.** The dependency and the resend endpoint exist; attaching it
+   locks out every pre-existing account and all 1000 bots. See the entry for the two questions to answer.
+
+3. **#33 — decompose `App.jsx`.** Untouched: still one 1073-line component, ~45 `useState` hooks, a
+   `view` string instead of routing, `ProfileView` taking 24 props. It is a session of its own, and it
+   is also what blocks mobile from deep-linking to a real `/privacy` URL (see #35). The new ESLint config
+   already reports eight missing hook dependencies and several dead bindings in here.
+
+4. **Leftovers inside otherwise-closed entries**, each documented in place:
+   - **#22** — the `replace(tzinfo=utc)` sites still scattered across four columns. Wants one helper or a
+     `TypeDecorator`, not four more one-off fixes.
+   - **#23** — `users.age` nullable (the 18+ gate), and no CHECK tying `avatar_status='ready'` to
+     `avatar_url`/`animal`.
+   - **#30** — the R2 upload path, i.e. the production avatar persistence path, still never exercised.
+   - **#35** — `eas login && eas init` for `extra.eas.projectId`, plus the real deploy hostnames.
+   - **#29** — 21 real findings the new linters surface in existing client code (dead code, four
+     swallowed `err` bindings, eight missing hook deps). Left for a deliberate pass rather than an
+     autofix that would have collided with the rest of this work.
+   - CI typechecks mobile against expo-router's permissive `Href` fallback, because
+     `.expo/types/router.d.ts` is generated and gitignored — so a bad route path will not fail CI.
+
+### Notes for whoever picks this up
+
+Two traps in the test harness, both now handled in `tests/conftest.py`, both of which will waste an hour
+if you hit them cold:
+
+- **pysqlite breaks SAVEPOINTs by default.** It never emits `BEGIN` before DML, so a `SAVEPOINT` lands
+  outside any transaction and effectively autocommits — work inside `begin_nested()` *survives a
+  rollback*. `IntegrityError`-recovery code is correct on Postgres and silently untestable without the
+  workaround. Same spirit as the `PRAGMA foreign_keys=ON` that was already there.
+- **Redis is real in this suite and leaks across tests and across runs.** Three autouse fixtures exist
+  for this now: the login limiter, the chat send limiter (keyed on `(user_id, match_id)` — both repeat),
+  and `ChatPubSub`, whose supervised reader task otherwise keeps each test's event loop open and hangs
+  the entire run. `test_chat_pubsub.py` opts out via a `real_pubsub` marker because there the fan-out is
+  the thing under test.
 
 ## Product-shaped ideas
 
