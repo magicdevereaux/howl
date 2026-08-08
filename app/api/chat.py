@@ -19,7 +19,12 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.dependencies import get_current_user
+from app.dependencies import (
+    WS_EMAIL_VERIFICATION_REQUIRED,
+    email_verification_error,
+    get_current_user,
+    require_verified_email,
+)
 from app.models.match import Match
 from app.models.message import Message
 from app.models.swipe import Swipe
@@ -304,6 +309,35 @@ async def chat_websocket(
     finally:
         db.close()
 
+    # ── Enforce email verification (GAPS #25) ────────────────────────────────
+    # Rejected at connect rather than per-frame: the socket exists to carry live
+    # chat, and the REST send path is gated too, so admitting a connection that
+    # may not send would only defer the same refusal. Read access to the
+    # conversation is unaffected -- history is a plain REST GET, deliberately
+    # ungated, so the user can still see what they are about to lose.
+    #
+    # Deliberately after the match-authorisation check above, so probing a match
+    # you are not part of still yields 4003 regardless of verification state.
+    #
+    # `user` is detached here (its session is closed) but its columns were
+    # already loaded, so reading them is safe -- the same reason `user.name`
+    # below works.
+    verification_error = email_verification_error(user)
+    if verification_error is not None:
+        await ws.accept()
+        # Send the structured payload before closing, so the client can branch on
+        # the same `code` the REST routes return rather than having to map a bare
+        # close code. Best-effort: if the peer is already gone, still close.
+        try:
+            await ws.send_json({"type": "error", "error": verification_error})
+        except Exception:
+            pass
+        await ws.close(code=WS_EMAIL_VERIFICATION_REQUIRED)
+        logger.info(
+            "ws: refused unverified user %d on match %d (grace expired)", user_id, match_id
+        )
+        return
+
     # ── Register and handle incoming events ──────────────────────────────────
     await manager.connect(match_id, user_id, user.name, ws)
     typing_budget = _TypingBudget()
@@ -438,10 +472,14 @@ def send_message(
     match_id: int,
     body: MessageIn,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: Session = Depends(get_db),
 ) -> MessageOut:
-    """Send a message to a match. Rate-limited to 10 per 60 seconds."""
+    """Send a message to a match. Rate-limited to 10 per 60 seconds.
+
+    Gated on email verification (GAPS #25): sending is outbound and reaches a
+    real person. Reading history via `GET /{match_id}/messages` stays open.
+    """
     match = _require_match_member(match_id, current_user.id, db)
 
     # Counted in Redis rather than with a DB COUNT over the messages table, so

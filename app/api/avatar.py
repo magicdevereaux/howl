@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_verified_email
 from app.models.user import AvatarStatus, User
 from app.schemas.avatar import AvatarStatusOut
 from app.services.image_generation import delete_avatar
@@ -77,7 +77,7 @@ def get_avatar_status(current_user: User = Depends(get_current_user)) -> User:
 
 @router.post("/regenerate", response_model=AvatarStatusOut)
 def regenerate_avatar(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: Session = Depends(get_db),
 ) -> User:
     """
@@ -85,6 +85,13 @@ def regenerate_avatar(
 
     Safe to call when stuck in a stale pending state. Idempotent: calling
     it multiple times just re-queues generation each time.
+
+    Gated on email verification (GAPS #25): every regeneration is a paid DALL-E
+    call, so an unverified throwaway address must not be able to burn spend past
+    the grace window. Reading `GET /status` stays open. Note the regeneration
+    triggered indirectly by a bio edit on `PATCH /api/profile/me` is *not* gated
+    -- profile editing is deliberately left open so a user can fix a typo'd
+    email, which leaves that as a narrower remaining spend path.
     """
     if not current_user.bio:
         raise HTTPException(
