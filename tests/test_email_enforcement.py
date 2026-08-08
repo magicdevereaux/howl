@@ -97,6 +97,25 @@ def _h(user: User) -> dict[str, str]:
     return {"Cookie": f"access_token={create_access_token(user.id)}"}
 
 
+class _NoCloseSession:
+    """Proxy a Session but ignore close().
+
+    Both scripts under test own their session's lifecycle and close it in a
+    `finally`. Handed the test session directly that would expunge every
+    instance, so assertions afterwards raise "not persistent within this
+    Session". The `db` fixture owns this session, so close() is not ours to call.
+    """
+
+    def __init__(self, session):
+        self._session = session
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def close(self):
+        return None
+
+
 def _assert_verification_403(res, *, route: str) -> None:
     """Pin the 403 contract exactly. Both clients branch on this shape."""
     assert res.status_code == 403, f"{route}: expected 403, got {res.status_code} {res.text}"
@@ -582,6 +601,192 @@ def test_require_verified_email_is_wired_to_exactly_the_intended_routes():
         "POST /api/matches/{match_id}/messages",
         "POST /api/avatar/regenerate",
     }, f"gated route set changed: {sorted(wired)}"
+
+
+# ---------------------------------------------------------------------------
+# scripts/backfill_email_verification.py
+#
+# Grandfathers in accounts that registered before enforcement existed, so
+# turning it on does not retroactively strip them. Dry-run by default because
+# it writes to the production users table.
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_dry_run_changes_nothing(db):
+    from scripts.backfill_email_verification import backfill
+
+    old = _make_user(db, email="bf_old@howl.app", verified=False, created_at=_past_grace())
+
+    scanned, changed = backfill(db, datetime.now(UTC), apply_changes=False)
+
+    assert scanned == 1
+    assert changed == 1  # it *reports* the work it would do
+    db.refresh(old)
+    assert old.is_email_verified is False, "dry run wrote to the database"
+
+
+def test_backfill_apply_marks_pre_cutoff_accounts_verified(db):
+    from scripts.backfill_email_verification import backfill
+
+    old = _make_user(db, email="bf_a@howl.app", verified=False, created_at=_past_grace())
+
+    scanned, changed = backfill(db, datetime.now(UTC), apply_changes=True)
+
+    assert (scanned, changed) == (1, 1)
+    db.refresh(old)
+    assert old.is_email_verified is True
+    # And the point of the whole exercise: they are no longer refused.
+    assert email_verification_error(old) is None
+
+
+def test_backfill_respects_the_cutoff(db):
+    """Accounts created after the cutoff are what enforcement is *for*."""
+    from scripts.backfill_email_verification import backfill
+
+    cutoff = datetime.now(UTC) - timedelta(days=10)
+    before = _make_user(
+        db, email="bf_before@howl.app", verified=False,
+        created_at=cutoff - timedelta(days=5),
+    )
+    after = _make_user(
+        db, email="bf_after@howl.app", verified=False,
+        created_at=cutoff + timedelta(days=5),
+    )
+
+    scanned, changed = backfill(db, cutoff, apply_changes=True)
+
+    assert (scanned, changed) == (1, 1)
+    db.refresh(before)
+    db.refresh(after)
+    assert before.is_email_verified is True
+    assert after.is_email_verified is False, "an account newer than the cutoff was touched"
+
+
+def test_backfill_is_idempotent(db):
+    from scripts.backfill_email_verification import backfill
+
+    _make_user(db, email="bf_idem@howl.app", verified=False, created_at=_past_grace())
+
+    first = backfill(db, datetime.now(UTC), apply_changes=True)
+    second = backfill(db, datetime.now(UTC), apply_changes=True)
+
+    assert first[1] == 1
+    assert second[1] == 0, "a second run reported changes it did not make"
+
+
+def test_backfill_leaves_already_verified_accounts_alone(db):
+    """`changed` must count rows actually updated, not rows scanned."""
+    from scripts.backfill_email_verification import backfill
+
+    _make_user(db, email="bf_v1@howl.app", verified=True, created_at=_past_grace())
+    _make_user(db, email="bf_v2@howl.app", verified=True, created_at=_past_grace())
+    _make_user(db, email="bf_u1@howl.app", verified=False, created_at=_past_grace())
+
+    scanned, changed = backfill(db, datetime.now(UTC), apply_changes=True)
+
+    assert scanned == 3
+    assert changed == 1
+
+
+def test_backfill_never_unverifies_anyone(db):
+    from scripts.backfill_email_verification import backfill
+
+    verified = _make_user(db, email="bf_keep@howl.app", verified=True, created_at=_past_grace())
+
+    backfill(db, datetime.now(UTC), apply_changes=True)
+
+    db.refresh(verified)
+    assert verified.is_email_verified is True
+
+
+def test_backfill_cutoff_parsing():
+    """Naive input means UTC -- every timestamp in this app is stored as UTC."""
+    from scripts.backfill_email_verification import parse_cutoff
+
+    assert parse_cutoff("2026-08-08T00:00:00Z") == datetime(2026, 8, 8, tzinfo=UTC)
+    assert parse_cutoff("2026-08-08T00:00:00") == datetime(2026, 8, 8, tzinfo=UTC)
+    assert parse_cutoff("2026-08-08") == datetime(2026, 8, 8, tzinfo=UTC)
+    # An explicit offset is respected and normalised to UTC.
+    assert parse_cutoff("2026-08-08T02:00:00+02:00") == datetime(2026, 8, 8, tzinfo=UTC)
+
+
+def test_backfill_cli_defaults_to_dry_run(db, monkeypatch, capsys):
+    """--apply must be explicit: this writes to the production user table."""
+    from scripts import backfill_email_verification as bf
+
+    user = _make_user(db, email="bf_cli@howl.app", verified=False, created_at=_past_grace())
+    monkeypatch.setattr(bf, "SessionLocal", lambda: _NoCloseSession(db))
+
+    assert bf.main([]) == 0
+
+    db.refresh(user)
+    assert user.is_email_verified is False, "the default run wrote to the database"
+
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "Would mark verified:            1" in out
+
+
+def test_backfill_cli_apply_writes(db, monkeypatch, capsys):
+    from scripts import backfill_email_verification as bf
+
+    user = _make_user(db, email="bf_cli2@howl.app", verified=False, created_at=_past_grace())
+    monkeypatch.setattr(bf, "SessionLocal", lambda: _NoCloseSession(db))
+
+    assert bf.main(["--apply"]) == 0
+
+    db.refresh(user)
+    assert user.is_email_verified is True
+    assert "APPLY" in capsys.readouterr().out
+
+
+def test_backfill_cli_rejects_apply_with_dry_run(db, monkeypatch):
+    from scripts import backfill_email_verification as bf
+
+    monkeypatch.setattr(bf, "SessionLocal", lambda: _NoCloseSession(db))
+    with pytest.raises(SystemExit):
+        bf.main(["--apply", "--dry-run"])
+
+
+# ---------------------------------------------------------------------------
+# The seeded bots
+# ---------------------------------------------------------------------------
+
+
+def test_every_seeded_bot_is_email_verified(db, monkeypatch):
+    """`scripts/seed_demo_users.py` sets is_email_verified=True. Pin it.
+
+    The seed backdates `created_at` across the previous ~30 days, so every bot
+    is far past any grace window. Verified is what keeps them exempt from
+    enforcement.
+
+    Precise scope, so this test is not read as promising more than it checks:
+    the gate is HTTP-only, and bots act through Celery tasks
+    (`auto_match_demo_user`, `bot_response`) that write to the database
+    directly. Discover filters on `avatar_status`, not on verification. So
+    unverified bots would not *by themselves* empty the discover queue -- this
+    is defence in depth for anything that ever drives a bot through the API,
+    and it keeps the demo's premise (1000 usable accounts) explicit.
+
+    Runs the real `seed()` rather than string-matching the source, so it fails
+    for a behavioural change however it is written.
+    """
+    from scripts import seed_demo_users
+
+    monkeypatch.setattr(seed_demo_users, "SessionLocal", lambda: _NoCloseSession(db))
+
+    seed_demo_users.seed()
+
+    bots = db.query(User).filter(User.is_bot.is_(True)).all()
+    assert len(bots) == len(seed_demo_users.DEMO_USERS) == 1000
+
+    unverified = [b.email for b in bots if not b.is_email_verified]
+    assert unverified == [], (
+        f"{len(unverified)} seeded bot(s) are unverified, e.g. {unverified[:3]}"
+    )
+
+    # The invariant that actually matters: the gate never refuses a bot.
+    assert [b.email for b in bots if email_verification_error(b) is not None] == []
 
 
 def test_reads_are_not_gated_by_the_dependency():
