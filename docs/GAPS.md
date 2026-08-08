@@ -7,7 +7,7 @@ each entry records how.
 - **✅ FIXED** — resolved, commit noted inline.
 - **🟡 PARTLY / MOSTLY / HALF** — the substance is done but something specific is deliberately left.
   Every one says what and why, and none of them is left because it was hard.
-- No marker — still open. There are three: **#3**, **#33**, and the enforcement half of **#25**.
+- No marker — still open. There are two: **#3** and **#33**.
 
 File and line references in unstruck text describe the code *as it was when the gap was found*. Some
 have moved; the struck entries note where. Two claims turned out to be **wrong on inspection** and are

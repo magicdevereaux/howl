@@ -17,8 +17,8 @@ The avatar pipeline is the product differentiator. Treat it as the critical path
 | `app/` | FastAPI backend — the source of truth for all business rules |
 | `frontend/` | React 18 + Vite web client (cookie auth). **The more feature-complete client.** |
 | `mobile/` | Expo SDK 53 + expo-router React Native client (bearer-token auth) |
-| `alembic/versions/` | 21 hand-written migrations, single linear head `n5h6i7j8k9l0` |
-| `tests/` | 372 pytest tests, backend only |
+| `alembic/versions/` | 26 hand-written migrations, single linear head `s0m1n2o3p4q5` |
+| `tests/` | 539 pytest tests (90% coverage). Client tests live in `frontend/src` and `mobile/src` |
 | `docs/` | [ARCHITECTURE.md](docs/ARCHITECTURE.md), [RUNBOOK.md](docs/RUNBOOK.md), [GAPS.md](docs/GAPS.md), [decisions/ADR.md](docs/decisions/ADR.md) |
 | `scripts/seed_demo_users.py` | Seeds 1000 bot users; runs on every prod deploy |
 
@@ -44,8 +44,15 @@ cd mobile && npx expo start
 pytest                                        # needs a .env to exist — config has required fields
 pytest tests/test_chat.py -v
 pytest --cov=app --cov-report=term-missing
-ruff check app tests                          # configured in pyproject, nothing runs it automatically
-mypy app                                       # strict=true, currently unenforced
+ruff check app tests scripts                  # what CI runs
+mypy app                                       # strict=true, advisory in CI
+
+# Client tests (both have real suites now; CI runs them)
+cd frontend && npm test        # vitest
+cd frontend && npm run lint    # eslint 9 flat config
+cd mobile   && npm test        # jest-expo
+cd mobile   && npm run lint
+cd mobile   && npx tsc --noEmit   # regenerate route types first: npx expo start
 
 # Migrations
 alembic revision -m "add thing"      # write by hand; see the autogenerate warning below
@@ -83,35 +90,57 @@ written by hand in the API layer. Full detail in [docs/ARCHITECTURE.md](docs/ARC
 
 ## Gotchas that will bite you
 
-1. **`alembic revision --autogenerate` produces wrong output here.** Models and migrations have four
-   known drifts (a missing `index=True` on `users.is_bot`, and unique-constraint-vs-unique-index
-   mismatches on all four token tables). Autogenerate will propose dropping real indexes. Write
-   migrations by hand and follow the existing `sa.ForeignKeyConstraint`/`sa.PrimaryKeyConstraint` style.
+1. **Write migrations by hand anyway.** The four model/migration drifts that made
+   `--autogenerate` propose dropping real indexes are fixed, and autogenerate now emits an empty
+   migration against a clean head — but `env.py` still has no naming convention, so generated
+   constraint names won't match the existing hand-written ones. Follow the existing
+   `sa.ForeignKeyConstraint`/`sa.PrimaryKeyConstraint` style. Use autogenerate as a *diff check*
+   ("is my model in sync?"), not as a generator.
 2. **Migration filenames don't sort in dependency order.** `a2b3c4d5e6f7` is the 8th migration, not the
    2nd. Trust `down_revision`, never `ls`.
-3. **`app/api/auth.py` and `app/api/mobile_auth.py` are near-duplicates that have drifted.** Any change
-   to registration, login, or token issuance must be made in both — and `mobile_auth.py` currently has
-   no rate limiting and a wrong verification-token TTL. Prefer consolidating over copying again.
+3. **Auth logic lives in `app/services/auth_service.py`, not in the routers.** `app/api/auth.py` and
+   `app/api/mobile_auth.py` used to be near-duplicates that had drifted; they are now thin
+   credential-delivery shells (web sets a cookie, mobile returns a bearer token) over one shared
+   service. Put changes to registration, login, token issuance or TTLs in the service. Don't
+   reintroduce logic into either router.
 4. **Emails are `print()` statements.** `app/services/email.py` has no provider wired. Password-reset
    and verification tokens go to stdout, which in production means the Railway log stream.
 5. **Celery worker and Beat are not started by `scripts/startup.sh`.** In production they must be
    separate Railway services. If avatars are stuck `pending` in prod, this is why.
 6. **Avatars written locally are ephemeral.** Without the `R2_*` env vars, `static/avatars/` is wiped on
    every redeploy.
-7. **`generate_avatar` is not idempotent and `task_acks_late=True`.** A worker killed mid-task re-runs
-   the whole thing, including a second paid DALL·E call.
-8. **`ConnectionManager` is an in-process dict** (`app/api/chat.py:36-38`). Any second web replica
-   silently breaks real-time chat delivery.
+7. **`task_acks_late=True`, so any killed task re-runs from the top.** `generate_avatar` is guarded by
+   a Redis lock so it won't pay twice for an image, but notifications have no dedup key — a push or
+   email can be delivered twice. That's a deliberate trade-off (a duplicate banner is cheap, a dropped
+   notification is invisible); don't "fix" it without deciding the cost.
+8. **Chat fan-out is Redis pub/sub and fails OPEN to local-only delivery.** `ConnectionManager` owns
+   local sockets; `app/services/pubsub.py` carries events between replicas. If Redis is down, delivery
+   silently degrades to single-replica behaviour by design. Messages commit to Postgres *before* they
+   are broadcast, so the socket is the optimistic layer — never make it the source of truth.
 
 ## Testing
 
 `tests/conftest.py` gives you `client`, `db`, `test_user`, and `auth_headers` (cookie-based, not
-bearer). Redis, Anthropic, OpenAI, email and push are **not** faked centrally — each test patches the
-call site it needs. Follow the existing per-file patterns rather than inventing a new mocking layer.
+bearer). Anthropic, OpenAI and email are **not** faked centrally — each test patches the call site it
+needs. Follow the existing per-file patterns rather than inventing a new mocking layer.
 
-Untested surfaces to be careful in: `app/api/mobile_auth.py` (zero tests, and it is the entire auth
-surface the shipped mobile app uses), the R2 upload path in `app/services/image_generation.py:53-113`,
-`app/services/push_notifications.py`, and both client apps.
+**Two harness details that will waste your time if you don't know them:**
+
+- **conftest disables pysqlite's implicit `BEGIN`** and emits `BEGIN` itself. Without that, SQLite
+  issues `SAVEPOINT` outside any transaction and it effectively autocommits — so work inside
+  `begin_nested()` *survives a `rollback()`*. Code that recovers from an `IntegrityError` via a
+  savepoint (see `app/api/swipes.py`) is correct on Postgres and silently untestable without it.
+- **Redis *is* real here and leaks across tests and across runs**, because the keys are built from ids
+  that repeat. Autouse fixtures neutralise the login limiter, the chat send limiter and `ChatPubSub` —
+  that last one matters because its supervised reader task otherwise holds each test's event loop open
+  and **hangs the whole run with no output**. `tests/test_chat_pubsub.py` opts out via a `real_pubsub`
+  marker, since there the fan-out is what's under test.
+
+Untested surfaces to be careful in: the **R2 upload path** in
+`app/services/image_generation.py:53-113` — the *production* avatar persistence path, still only ever
+exercised via its local-filesystem fallback (note `boto3` and `openai` aren't even installed in `.venv`;
+both are lazily imported behind `None` guards, which is why nothing fails loudly) — and
+`scripts/seed_demo_users.py`, 375 lines that run on every production deploy.
 
 ## Before you commit
 
