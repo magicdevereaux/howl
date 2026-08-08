@@ -66,7 +66,7 @@ jobs:
       - run: mypy app
 
   mobile:
-    name: Mobile typecheck
+    name: Mobile (typecheck, lint, test)
     runs-on: ubuntu-latest
 
     steps:
@@ -77,6 +77,47 @@ jobs:
       - name: Install dependencies
         working-directory: mobile
         run: npm install --legacy-peer-deps
+
+      # NOTE: expo-router generates .expo/types/router.d.ts from the filesystem
+      # and it is gitignored, so it does not exist here. tsc therefore checks
+      # against the permissive Href fallback and will NOT catch a bad route path
+      # — see docs/GAPS.md #29. Everything else is checked normally.
       - name: Typecheck
         working-directory: mobile
         run: npx tsc --noEmit
+
+      - name: Lint
+        working-directory: mobile
+        run: npm run lint
+
+      - name: Test
+        working-directory: mobile
+        run: npm test -- --ci
+
+  web:
+    name: Web client (lint, test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
+      # A build failure is a real break — the deployed client is built from this.
+      - name: Build
+        working-directory: frontend
+        run: npm run build
