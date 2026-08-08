@@ -41,6 +41,13 @@ jobs:
       - name: Test
         run: pytest -q
 
+      # Coverage runs here rather than in pytest's addopts: it roughly doubles a
+      # run, and every contributor would pay that on every local invocation.
+      # fail_under lives in pyproject.toml [tool.coverage.report] — 88, measured
+      # at 90.0%. See docs/GAPS.md #31.
+      - name: Coverage gate
+        run: pytest -q --cov=app --cov-report=term-missing
+
   typecheck:
     name: Type check (advisory)
     runs-on: ubuntu-latest

@@ -1,15 +1,9 @@
 import { API_URL } from '../api/client';
-
-const EMOJI: Record<string, string> = {
-  wolf: '🐺', fox: '🦊', bear: '🐻', owl: '🦉', otter: '🦦',
-  eagle: '🦅', lion: '🦁', deer: '🦌', panther: '🐆', dolphin: '🐬',
-  hawk: '🦅', crow: '🐦', cat: '🐱', elephant: '🐘', tiger: '🐯',
-  salmon: '🐟', coyote: '🐺', hummingbird: '🐦', raven: '🐦', lynx: '🐱',
-};
+import { ANIMAL_EMOJI, FALLBACK_ANIMAL_EMOJI } from '../shared/constants';
 
 export function animalEmoji(animal: string | null | undefined): string {
-  if (!animal) return '🐾';
-  return EMOJI[animal.toLowerCase()] ?? '🐾';
+  if (!animal) return FALLBACK_ANIMAL_EMOJI;
+  return ANIMAL_EMOJI.get(animal.toLowerCase()) ?? FALLBACK_ANIMAL_EMOJI;
 }
 
 /**

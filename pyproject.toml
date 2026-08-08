@@ -7,6 +7,12 @@ name = "howl"
 version = "0.1.0"
 description = "AI-powered dating app with animal-human hybrid avatars"
 requires-python = ">=3.11"
+# MUST stay identical to requirements.txt, which is the source of truth for
+# installs (CLAUDE.md tells contributors to use `pip install -r requirements.txt`).
+# This list previously omitted openai, boto3, sentry-sdk, httpx and pydantic's
+# email extra — all imported by the app — so `pip install -e .` produced an app
+# that could not start. `test_dependency_manifests_agree` in
+# tests/test_packaging.py fails if the two files drift again.
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -18,9 +24,13 @@ dependencies = [
     "bcrypt>=4.0.0",
     "celery>=5.4.0",
     "anthropic>=0.40.0",
+    "openai>=1.40.0",
+    "boto3>=1.35.0",
+    "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
+    "sentry-sdk[fastapi,celery,sqlalchemy]>=2.0.0",
     "pydantic-settings>=2.7.0",
-    "pydantic>=2.10.0",
+    "pydantic[email]>=2.10.0",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +87,12 @@ omit = [
 show_missing = true
 skip_covered = false
 precision = 1
+# Measured at 90.0% on 2026-08-07 (539 tests). Set just below so the gate passes
+# on a clean checkout and can be ratcheted up — a gate that fails immediately
+# gets disabled instead of fixed. Enforced by the `coverage` CI job, deliberately
+# NOT in pytest's addopts: coverage roughly doubles a local run and every
+# contributor pays that on every invocation.
+fail_under = 88
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

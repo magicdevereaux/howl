@@ -134,7 +134,7 @@ The 3-second poll also doubles as the read-receipt mechanism: fetching messages 
 
 ### Context
 
-The data model has five related tables (users, swipes, matches, messages, password_reset_tokens) with foreign key constraints, cascade deletes, and a canonical ordering invariant on matches (`user1_id < user2_id`). The query patterns include subqueries (filtering swiped users from discover), multi-table joins (matches with last message), and range comparisons (token expiry).
+The data model has nine related tables (users, swipes, matches, messages, blocks, reports, password_reset_tokens, refresh_tokens, push_tokens) with foreign key constraints, cascade deletes, and a canonical ordering invariant on matches (`user1_id < user2_id`). The query patterns include subqueries (filtering swiped users from discover), multi-table joins (matches with last message), and range comparisons (token expiry).
 
 ### Decision
 
@@ -150,7 +150,7 @@ SQLite was evaluated and rejected for production because it does not enforce for
 
 ### Consequences
 
-- Alembic manages migrations. The current chain has 9 migration files, each reversible.
+- Alembic manages migrations. The current chain has 26 migration files on a single linear head.
 - The ORM layer uses SQLAlchemy 2.0's `Mapped[]` / `mapped_column` typed API throughout. Column types map to PostgreSQL native types (`Enum`, `DateTime(timezone=True)`, `JSON`).
 - Enum columns (`avatar_status`, `swipe_direction`) are created as PostgreSQL native enum types. The downgrade path for the swipes migration explicitly drops the type: `op.execute("DROP TYPE IF EXISTS swipe_direction")`.
 

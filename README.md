@@ -60,7 +60,7 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 **Backend:**
 - FastAPI (Python)
 - PostgreSQL (database)
-- Alembic (19 migrations)
+- Alembic (26 migrations, single linear head)
 - Celery (async task queue)
 - Redis (Celery broker + login rate limiting)
 - Anthropic Claude Haiku (spirit animal generation)
@@ -118,7 +118,7 @@ pip install -r requirements.txt
 Create `.env` (see `.env.example` for all options):
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_URL=postgresql://howl:howl@localhost:5432/howl
+DATABASE_URL=postgresql://howl:howl_dev@localhost:5433/howl
 REDIS_URL=redis://localhost:6379/0
 SECRET_KEY=your-secret-key-here
 
@@ -262,7 +262,7 @@ howl/
 │   ├── main.py             # FastAPI app, CORS (allow_credentials=True), routers, Sentry
 │   └── security.py         # JWT, bcrypt, refresh token helpers
 ├── alembic/
-│   └── versions/           # 18 migrations, all reversible
+│   └── versions/           # 26 migrations, single linear head
 ├── scripts/
 │   ├── seed_demo_users.py   # 1,000 diverse bot users across 6 archetypes (idempotent)
 │   └── startup.sh           # Railway: migrate → seed → uvicorn
@@ -487,7 +487,12 @@ DATABASE_URL
 REDIS_URL
 SECRET_KEY
 ANTHROPIC_API_KEY
-ALLOWED_ORIGINS          # comma-separated Vercel origins
+```
+
+**Required for a cross-origin deployment** (defaults to empty in `app/config.py`, so the
+app boots without it — but the browser will then block every authenticated request):
+```
+ALLOWED_ORIGINS          # comma-separated frontend origins, e.g. https://howl.vercel.app
 ```
 
 **Optional:**

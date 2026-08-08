@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_URL, WS_URL, fetchApi } from './utils';
+import { WS_RECONNECT_DELAY_MS } from './shared/constants';
 import ChatView from './components/ChatView';
 import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
@@ -9,6 +10,19 @@ import MatchesView from './components/MatchesView';
 import PasswordReset from './components/PasswordReset';
 import ProfileView from './components/ProfileView';
 import RegisterView from './components/RegisterView';
+
+// Display-only starting value for the "N swipes left" counter.
+//
+// It is NOT the rule. `_DAILY_SWIPE_LIMIT` in app/api/swipes.py is the only
+// authority, and the server never lets a swipe through past it regardless of
+// what this says. `UserOut` does not carry the quota today, so the client has
+// nothing to read until the server rejects a swipe with
+// `429 {code: 'daily_limit_reached', limit: N}` — at which point the real
+// value replaces this one for the rest of the session.
+//
+// Follow-up that removes the guess entirely: add `daily_swipe_limit` to
+// UserOut so /api/auth/me reports it up front. See docs/GAPS.md #32.
+const FALLBACK_DAILY_SWIPE_LIMIT = 20;
 
 export default function HowlApp() {
   // Read password-reset token from URL before any state is initialised.
@@ -52,6 +66,12 @@ export default function HowlApp() {
   const [swipeError, setSwipeError] = useState('');
   const [canUndo, setCanUndo] = useState(false);
   const [undoMessage, setUndoMessage] = useState('');
+  // The daily swipe quota is enforced by the backend (app/api/swipes.py) and it
+  // is the only authority on the number. The server does not advertise it until
+  // it rejects a swipe, so this starts as an optimistic display value and is
+  // replaced by `detail.limit` from the 429 the moment the server disagrees.
+  // Never treat it as the rule — it only decides what the counter renders.
+  const [swipeLimit, setSwipeLimit] = useState(FALLBACK_DAILY_SWIPE_LIMIT);
   const [currentMatch, setCurrentMatch] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -115,8 +135,9 @@ export default function HowlApp() {
 
   // WebSocket connection for real-time chat delivery.
   // Replaces the previous 3-second polling approach.
-  // Reconnects automatically after a 3-second backoff whenever the
-  // connection drops (network glitch, server restart, etc.).
+  // Reconnects automatically after WS_RECONNECT_DELAY_MS whenever the
+  // connection drops (network glitch, server restart, etc.). The delay is
+  // shared with the mobile client — see src/shared/constants.js.
   useEffect(() => {
     if (view !== 'chat' || !currentMatch) return;
 
@@ -157,7 +178,7 @@ export default function HowlApp() {
       ws.onclose = () => {
         chatWsRef.current = null;
         if (active) {
-          reconnectTimer = setTimeout(connect, 3000);
+          reconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY_MS);
         }
       };
 
@@ -810,8 +831,6 @@ export default function HowlApp() {
     }
   };
 
-  const DAILY_SWIPE_LIMIT = 20;
-
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
     setUndoMessage('');
@@ -826,8 +845,12 @@ export default function HowlApp() {
       const data = await res.json();
 
       if (res.status === 429 && data.detail?.code === 'daily_limit_reached') {
-        // Update local user state to reflect the exhausted limit without a full refetch
-        setUser(prev => prev ? { ...prev, daily_swipes: DAILY_SWIPE_LIMIT } : prev);
+        // The server just told us the real quota. Adopt it, then mark the
+        // counter exhausted — no full profile refetch needed.
+        const serverLimit = Number(data.detail.limit);
+        const limit = Number.isFinite(serverLimit) && serverLimit > 0 ? serverLimit : swipeLimit;
+        setSwipeLimit(limit);
+        setUser(prev => prev ? { ...prev, daily_swipes: limit } : prev);
         return;
       }
 
@@ -897,8 +920,8 @@ export default function HowlApp() {
   const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
   const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread };
 
-  const swipeLimitReached = !user?.is_premium && (user?.daily_swipes || 0) >= DAILY_SWIPE_LIMIT;
-  const swipesRemaining = user?.is_premium ? null : Math.max(0, DAILY_SWIPE_LIMIT - (user?.daily_swipes || 0));
+  const swipeLimitReached = !user?.is_premium && (user?.daily_swipes || 0) >= swipeLimit;
+  const swipesRemaining = user?.is_premium ? null : Math.max(0, swipeLimit - (user?.daily_swipes || 0));
 
   if (view === 'privacy' || view === 'terms') {
     return <LegalPage view={view} setView={setView} />;
