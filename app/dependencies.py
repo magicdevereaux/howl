@@ -36,3 +36,27 @@ def get_current_user(
             detail="User not found",
         )
     return user
+
+
+def require_verified_email(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Like `get_current_user`, but 403s when the account's email is unverified.
+
+    Authentication succeeded — the caller is who they say they are — so this is
+    403, not 401: re-authenticating will not help, only clicking the link will.
+    Clients should treat it as "go to the verify-email screen" and can call
+    `POST /api/auth/resend-verification` (or the `/api/mobile/auth/` twin) to get
+    a fresh link.
+
+    Deliberately **not** attached to any route yet: turning it on retroactively
+    locks out every account created before verification was enforced, including
+    the 1000 seeded bot users. See docs/GAPS.md #25 — the rollout is a product
+    decision, not a code one.
+    """
+    if not current_user.is_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required. Check your inbox for the verification link.",
+        )
+    return current_user

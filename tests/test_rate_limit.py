@@ -1,4 +1,4 @@
-"""Tests for login rate limiting (IP and email)."""
+"""Tests for auth rate limiting: per-endpoint buckets, and client-IP derivation."""
 
 import pytest
 
@@ -25,7 +25,7 @@ def registered_user(db):
 @pytest.fixture(autouse=True)
 def _allow_by_default(monkeypatch):
     """Default: rate limiter is a no-op so non-rate-limit tests are unaffected."""
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda key, limit, window: (False, 0))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda key, limit, window: (False, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_ip_rate_limit_returns_429(client, registered_user, monkeypatch):
             return True, 840   # 14 minutes remaining
         return False, 0
 
-    monkeypatch.setattr("app.api.auth.check_rate_limit", fake_check)
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", fake_check)
 
     res = _login(client)
     assert res.status_code == 429
@@ -79,7 +79,7 @@ def test_ip_rate_limit_checked_before_email(client, registered_user, monkeypatch
             email_checked.append(key)
         return ("ip" in key, 1)
 
-    monkeypatch.setattr("app.api.auth.check_rate_limit", fake_check)
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", fake_check)
 
     res = _login(client)
     assert res.status_code == 429
@@ -97,7 +97,7 @@ def test_email_rate_limit_returns_429(client, registered_user, monkeypatch):
             return True, 300   # 5 minutes remaining
         return False, 0
 
-    monkeypatch.setattr("app.api.auth.check_rate_limit", fake_check)
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", fake_check)
 
     res = _login(client)
     assert res.status_code == 429
@@ -114,7 +114,7 @@ def test_email_limit_is_case_insensitive(client, registered_user, monkeypatch):
         seen_keys.append(key)
         return False, 0
 
-    monkeypatch.setattr("app.api.auth.check_rate_limit", fake_check)
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", fake_check)
 
     _login(client, email="RateLimit@Howl.App")
 
@@ -129,7 +129,7 @@ def test_email_limit_is_case_insensitive(client, registered_user, monkeypatch):
 
 def test_retry_after_header_on_ip_limit(client, registered_user, monkeypatch):
     monkeypatch.setattr(
-        "app.api.auth.check_rate_limit",
+        "app.services.rate_limit.check_rate_limit",
         lambda key, limit, window: (True, 500) if "ip" in key else (False, 0),
     )
     res = _login(client)
@@ -140,7 +140,7 @@ def test_retry_after_header_on_ip_limit(client, registered_user, monkeypatch):
 
 def test_retry_after_header_on_email_limit(client, registered_user, monkeypatch):
     monkeypatch.setattr(
-        "app.api.auth.check_rate_limit",
+        "app.services.rate_limit.check_rate_limit",
         lambda key, limit, window: (True, 200) if "email" in key else (False, 0),
     )
     res = _login(client)
@@ -156,7 +156,7 @@ def test_retry_after_header_on_email_limit(client, registered_user, monkeypatch)
 def test_redis_failure_allows_login(client, registered_user, monkeypatch):
     """If check_rate_limit returns (False, 0) due to a Redis error, login proceeds."""
     # _allow_by_default autouse fixture already does this, but be explicit:
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *_: (False, 0))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda *_: (False, 0))
     res = _login(client)
     assert res.status_code == 200
 
@@ -178,8 +178,26 @@ def test_check_rate_limit_returns_false_when_redis_unavailable(monkeypatch):
 
 
 def test_login_rate_limit_keys_lowercases_email():
-    from app.services.rate_limit import login_rate_limit_keys
-    ip_key, email_key = login_rate_limit_keys("1.2.3.4", "User@Example.COM")
+    from app.services.rate_limit import rate_limit_keys
+    ip_key, email_key = rate_limit_keys("login", "1.2.3.4", "User@Example.COM")
     assert "user@example.com" in email_key
     assert "1.2.3.4" in ip_key
     assert "User@Example.COM" not in email_key
+
+
+def test_rate_limit_keys_are_namespaced_per_action():
+    """Filling the login bucket must not lock the same user out of password reset."""
+    from app.services.rate_limit import rate_limit_keys
+
+    login_ip, login_email = rate_limit_keys("login", "1.2.3.4", "user@example.com")
+    reset_ip, reset_email = rate_limit_keys("forgot_password", "1.2.3.4", "user@example.com")
+    assert login_ip != reset_ip
+    assert login_email != reset_email
+
+
+def test_rate_limit_keys_omit_email_key_when_no_email():
+    from app.services.rate_limit import rate_limit_keys
+
+    ip_key, email_key = rate_limit_keys("verify_email", "1.2.3.4")
+    assert ip_key
+    assert email_key is None

@@ -1,13 +1,20 @@
 """
-Redis-backed rate limiter for login brute-force protection.
+Redis-backed rate limiter for the auth surface.
 
-Uses INCR + EXPIRE to track attempt counts per key within a sliding window.
+Uses INCR + EXPIRE to track attempt counts per key within a fixed window.
 Falls open (allows the request) if Redis is unavailable so a Redis outage
-does not take down authentication.
+does not take down authentication. That tradeoff is deliberate — see
+``check_rate_limit`` — and every caller inherits it.
+
+Buckets are keyed per *action* so filling the login bucket does not lock a
+user out of password reset, and vice versa. ``enforce_rate_limit`` is the
+single entry point the routers/services use; it raises 429 with a
+``Retry-After`` header.
 """
 
 import logging
 
+from fastapi import HTTPException, Request, status
 from redis import Redis, RedisError
 
 from app.config import settings
@@ -17,8 +24,44 @@ logger = logging.getLogger(__name__)
 _client: Redis | None = None
 
 _WINDOW_SECONDS = 15 * 60   # 15-minute window
-_IP_LIMIT = 10               # attempts per window per IP
-_EMAIL_LIMIT = 5             # attempts per window per email address
+_IP_LIMIT = 10               # login attempts per window per IP
+_EMAIL_LIMIT = 5             # login attempts per window per email address
+
+# Number of reverse proxies in front of the app whose X-Forwarded-For entries
+# can be trusted. Railway/Vercel put exactly one in front, hence the default.
+#
+# Reads an optional `trusted_proxy_count` setting so the value can be tuned per
+# deployment without a code change; `app/config.py` does not declare the field
+# yet, so the getattr fallback is what actually applies today.
+TRUSTED_PROXY_HOPS: int = int(getattr(settings, "trusted_proxy_count", 1))
+
+
+class _ActionLimit:
+    """Per-action bucket sizes. ``None`` disables that bucket for the action."""
+
+    __slots__ = ("label", "ip_limit", "email_limit")
+
+    def __init__(self, label: str, ip_limit: int | None, email_limit: int | None) -> None:
+        self.label = label
+        self.ip_limit = ip_limit
+        self.email_limit = email_limit
+
+
+# All windows are _WINDOW_SECONDS (15 minutes).
+_LIMITS: dict[str, _ActionLimit] = {
+    # Brute-force protection. Unchanged from the original login-only limiter.
+    "login": _ActionLimit("login", _IP_LIMIT, _EMAIL_LIMIT),
+    # Stops one host mass-creating accounts (each of which costs a DALL·E call).
+    "register": _ActionLimit("registration", 5, None),
+    # Stops using a victim's address as a mail bomb, and stops enumeration
+    # sweeps that probe many addresses from one host.
+    "forgot_password": _ActionLimit("password reset", 5, 3),
+    # Reset tokens are 32 random bytes, so this is belt-and-braces against
+    # someone hammering the endpoint hoping for a collision.
+    "reset_password": _ActionLimit("password reset", 10, None),
+    "verify_email": _ActionLimit("verification", 20, None),
+    "resend_verification": _ActionLimit("verification", 5, 3),
+}
 
 
 def _get_client() -> Redis | None:
@@ -62,9 +105,76 @@ def check_rate_limit(key: str, limit: int, window: int = _WINDOW_SECONDS) -> tup
         return False, 0
 
 
-def login_rate_limit_keys(ip: str, email: str) -> tuple[str, str]:
-    """Return the Redis keys for the IP and email rate limit counters."""
+def client_ip(request: Request) -> str:
+    """Best-effort real client IP, resistant to a spoofed ``X-Forwarded-For``.
+
+    ``X-Forwarded-For`` is append-only: each proxy appends the address of the
+    peer it received the request from. With ``TRUSTED_PROXY_HOPS`` proxies in
+    front of us the *last* N entries were written by our own infrastructure and
+    everything to the left of them is attacker-controlled. So we read the Nth
+    entry from the right — never the first, which is exactly what a client
+    trying to defeat the limiter gets to choose.
+
+    Falls back to the socket peer when the header is absent or shorter than the
+    trusted chain (i.e. it cannot have been written by our proxies), and when
+    ``TRUSTED_PROXY_HOPS`` is 0 the header is ignored entirely.
+    """
+    direct = request.client.host if request.client else "unknown"
+
+    hops = TRUSTED_PROXY_HOPS
+    if hops <= 0:
+        return direct
+
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+    if len(parts) < hops:
+        return direct
+    return parts[-hops]
+
+
+def rate_limit_keys(action: str, ip: str, email: str | None = None) -> tuple[str, str | None]:
+    """Return the Redis keys for the IP and (optionally) email counters."""
     return (
-        f"rl:login:ip:{ip}",
-        f"rl:login:email:{email.lower()}",
+        f"rl:{action}:ip:{ip}",
+        f"rl:{action}:email:{email.lower()}" if email else None,
     )
+
+
+def _too_many(detail: str, retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=detail,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def enforce_rate_limit(request: Request, action: str, email: str | None = None) -> None:
+    """Apply the IP (and where configured, per-email) bucket for *action*.
+
+    Raises 429 when either bucket is exhausted. The IP bucket is always checked
+    first so a limited request cannot be used to probe whether an account
+    exists. Shared by the web (``/api/auth/*``) and mobile
+    (``/api/mobile/auth/*``) routers so the two cannot drift apart.
+
+    Note this **fails open** if Redis is unreachable — see ``check_rate_limit``.
+    """
+    limits = _LIMITS[action]
+    ip_key, email_key = rate_limit_keys(action, client_ip(request), email)
+
+    if limits.ip_limit is not None:
+        limited, retry_after = check_rate_limit(ip_key, limits.ip_limit, _WINDOW_SECONDS)
+        if limited:
+            raise _too_many(
+                f"Too many {limits.label} attempts from this IP. "
+                f"Try again in {retry_after} seconds.",
+                retry_after,
+            )
+
+    if limits.email_limit is not None and email_key is not None:
+        limited, retry_after = check_rate_limit(email_key, limits.email_limit, _WINDOW_SECONDS)
+        if limited:
+            raise _too_many(
+                f"Too many {limits.label} attempts for this account. "
+                f"Try again in {retry_after} seconds.",
+                retry_after,
+            )

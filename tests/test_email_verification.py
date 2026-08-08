@@ -12,7 +12,7 @@ from app.models.user import User
 
 @pytest.fixture(autouse=True)
 def _mock_verification_email(monkeypatch):
-    monkeypatch.setattr("app.api.auth.send_verification_email", lambda *_: None)
+    monkeypatch.setattr("app.services.auth_service.send_verification_email", lambda *_: None)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ def test_register_sets_token_expiry_in_future(client, db):
 def test_register_calls_email_service(client, db, monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "app.api.auth.send_verification_email",
+        "app.services.auth_service.send_verification_email",
         lambda email, token: sent.append((email, token)),
     )
     client.post("/api/auth/register", json={"email": "mail@howl.app", "password": "securepass"})

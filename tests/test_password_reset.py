@@ -33,7 +33,7 @@ def _make_token(db, user_id: int, *, used: bool = False, expired: bool = False) 
 
 @pytest.fixture(autouse=True)
 def mock_email(monkeypatch):
-    monkeypatch.setattr("app.api.auth.send_password_reset_email", lambda *_: None)
+    monkeypatch.setattr("app.services.auth_service.send_password_reset_email", lambda *_: None)
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ def test_forgot_password_invalidates_previous_unused_tokens(client, db, test_use
 def test_forgot_password_calls_email_service(client, test_user, monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "app.api.auth.send_password_reset_email",
+        "app.services.auth_service.send_password_reset_email",
         lambda email, token: sent.append((email, token)),
     )
     client.post("/api/auth/forgot-password", json={"email": test_user.email})
@@ -87,7 +87,7 @@ def test_forgot_password_calls_email_service(client, test_user, monkeypatch):
 def test_forgot_password_no_email_service_call_for_unknown(client, monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "app.api.auth.send_password_reset_email",
+        "app.services.auth_service.send_password_reset_email",
         lambda *_: sent.append(True),
     )
     client.post("/api/auth/forgot-password", json={"email": "nobody@howl.app"})

@@ -25,7 +25,7 @@ def mobile_user(db):
 @pytest.fixture(autouse=True)
 def _no_rate_limit(monkeypatch):
     """Default to an open limiter; the rate-limit tests opt back in."""
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (False, 0))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda *a, **kw: (False, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ def _no_rate_limit(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_mobile_register_returns_tokens_in_body(client, monkeypatch):
-    monkeypatch.setattr("app.api.mobile_auth.send_verification_email", lambda *a: None)
+    monkeypatch.setattr("app.services.auth_service.send_verification_email", lambda *a: None)
     res = client.post(
         "/api/mobile/auth/register",
         json={"email": "newbie@howl.app", "password": "hunter2secure"},
@@ -48,7 +48,7 @@ def test_mobile_register_returns_tokens_in_body(client, monkeypatch):
 
 
 def test_mobile_register_duplicate_email_conflicts(client, mobile_user, monkeypatch):
-    monkeypatch.setattr("app.api.mobile_auth.send_verification_email", lambda *a: None)
+    monkeypatch.setattr("app.services.auth_service.send_verification_email", lambda *a: None)
     res = client.post(
         "/api/mobile/auth/register",
         json={"email": mobile_user.email, "password": "riverstone9"},
@@ -58,7 +58,7 @@ def test_mobile_register_duplicate_email_conflicts(client, mobile_user, monkeypa
 
 def test_mobile_register_verification_token_lasts_24h(client, db, monkeypatch):
     """Regression: this used to reuse the 1-hour password-reset constant."""
-    monkeypatch.setattr("app.api.mobile_auth.send_verification_email", lambda *a: None)
+    monkeypatch.setattr("app.services.auth_service.send_verification_email", lambda *a: None)
     res = client.post(
         "/api/mobile/auth/register",
         json={"email": "badger@howl.app", "password": "hunter2secure"},
@@ -97,7 +97,7 @@ def test_mobile_login_wrong_password(client, mobile_user):
 
 def test_mobile_login_is_rate_limited(client, mobile_user, monkeypatch):
     """Regression: this endpoint had no limiter, bypassing the web protection."""
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (True, 42))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda *a, **kw: (True, 42))
     res = client.post(
         "/api/mobile/auth/login",
         json={"email": mobile_user.email, "password": "riverstone9"},
@@ -108,7 +108,7 @@ def test_mobile_login_is_rate_limited(client, mobile_user, monkeypatch):
 
 def test_mobile_login_rate_limit_precedes_credential_check(client, monkeypatch):
     """A limited request must 429 rather than leak whether the account exists."""
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (True, 30))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda *a, **kw: (True, 30))
     res = client.post(
         "/api/mobile/auth/login",
         json={"email": "nobody@howl.app", "password": "whatever123"},

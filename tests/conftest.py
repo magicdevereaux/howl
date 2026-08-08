@@ -149,17 +149,20 @@ def _mock_notify_new_match(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _open_login_rate_limit(monkeypatch):
-    """Keep the login limiter open by default.
+    """Keep the auth limiter open by default.
 
     The limiter counts into a real Redis instance keyed by IP and email. Under
     the test suite every request arrives from the same client IP, so counters
-    leak across tests and unrelated login assertions start failing with 429 once
-    the 10-per-15-minute IP bucket fills up.
+    leak across tests and unrelated login/register assertions start failing with
+    429 once a bucket fills up.
 
-    Tests that exercise the limiter itself re-patch this in their own body,
-    which takes precedence because it runs after this fixture.
+    Patched at the source module (`app.services.rate_limit`) rather than at an
+    importer, so it intercepts every caller — `enforce_rate_limit` looks the name
+    up in its own module at call time. Tests that exercise the limiter itself
+    re-patch this in their own body, which takes precedence because it runs after
+    this fixture.
     """
-    monkeypatch.setattr("app.api.auth.check_rate_limit", lambda *a, **kw: (False, 0))
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", lambda *a, **kw: (False, 0))
 
 
 @pytest.fixture(autouse=True)
