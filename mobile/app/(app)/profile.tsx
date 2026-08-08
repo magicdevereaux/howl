@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -202,9 +202,16 @@ export default function ProfileScreen() {
         {/* ── Profile card ───────────────────────────────────────────────── */}
         <View style={styles.profileCard}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>{isEditing ? 'Edit Profile' : 'Your Profile'}</Text>
+            <Text style={styles.cardTitle} accessibilityRole="header">
+              {isEditing ? 'Edit Profile' : 'Your Profile'}
+            </Text>
             {!isEditing && (
-              <Pressable style={styles.editBtn} onPress={enterEdit}>
+              <Pressable
+                style={styles.editBtn}
+                onPress={enterEdit}
+                accessibilityRole="button"
+                accessibilityLabel="Edit your profile"
+              >
                 <Text style={styles.editBtnText}>Edit</Text>
               </Pressable>
             )}
@@ -213,7 +220,11 @@ export default function ProfileScreen() {
           <Text style={styles.emailChip}>{user.email}</Text>
 
           {saveError && (
-            <View style={styles.errorBox}>
+            <View
+              style={styles.errorBox}
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+            >
               <Text style={styles.errorText}>{saveError}</Text>
             </View>
           )}
@@ -285,6 +296,9 @@ export default function ProfileScreen() {
                   style={[styles.btn, styles.cancelBtn]}
                   onPress={() => setIsEditing(false)}
                   disabled={saving}
+                  accessibilityRole="button"
+                  accessibilityLabel="Discard changes"
+                  accessibilityState={{ disabled: saving }}
                 >
                   <Text style={styles.cancelBtnText}>Cancel</Text>
                 </Pressable>
@@ -292,6 +306,10 @@ export default function ProfileScreen() {
                   style={[styles.btn, styles.saveBtn, saving && styles.btnDisabled]}
                   onPress={handleSave}
                   disabled={saving}
+                  accessibilityRole="button"
+                  accessibilityLabel={saving ? 'Saving changes' : 'Save changes'}
+                  accessibilityHint="Changing your bio may regenerate your spirit animal"
+                  accessibilityState={{ busy: saving, disabled: saving }}
                 >
                   {saving
                     ? <ActivityIndicator color={C.text} size="small" />
@@ -304,7 +322,12 @@ export default function ProfileScreen() {
         </View>
 
         {/* ── Logout ─────────────────────────────────────────────────────── */}
-        <Pressable style={styles.logoutBtn} onPress={logout}>
+        <Pressable
+          style={styles.logoutBtn}
+          onPress={logout}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out of Howl"
+        >
           <Text style={styles.logoutText}>Sign Out</Text>
         </Pressable>
 
@@ -327,10 +350,19 @@ function Field({ label, value, multiline }: { label: string; value: string | nul
 }
 
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  // The label element gets a stable nativeID and each input points at it with
+  // accessibilityLabelledBy, so a screen reader announces "Name, text field"
+  // instead of reading an unlabelled box.
+  const labelId = `profile-field-${label.toLowerCase().replace(/\s+/g, '-')}`;
   return (
     <View style={{ marginBottom: 4 }}>
-      <Text style={styles.formLabel}>{label}</Text>
-      {children}
+      <Text style={styles.formLabel} nativeID={labelId}>{label}</Text>
+      {React.isValidElement(children)
+        ? React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
+            accessibilityLabel: label,
+            accessibilityLabelledBy: labelId,
+          })
+        : children}
     </View>
   );
 }

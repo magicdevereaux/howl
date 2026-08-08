@@ -85,8 +85,17 @@ export default function MatchesScreen() {
   if (error) {
     return (
       <View style={styles.center}>
-        <Text style={styles.errorText}>⚠️ {error}</Text>
-        <Pressable style={styles.retryBtn} onPress={() => fetchMatches()}>
+        <Text
+          style={styles.errorText}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >⚠️ {error}</Text>
+        <Pressable
+          style={styles.retryBtn}
+          onPress={() => fetchMatches()}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading your matches"
+        >
           <Text style={styles.retryBtnText}>Retry</Text>
         </Pressable>
       </View>
@@ -107,8 +116,12 @@ export default function MatchesScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accentHover} />}
           ListEmptyComponent={(
             <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>❤️</Text>
-              <Text style={styles.emptyTitle}>No matches yet</Text>
+              <Text
+                style={styles.emptyEmoji}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              >❤️</Text>
+              <Text style={styles.emptyTitle} accessibilityRole="header">No matches yet</Text>
               <Text style={styles.emptySub}>Go discover some spirit animals!</Text>
             </View>
           )}
@@ -149,6 +162,19 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
     <Pressable
       style={({ pressed }) => [rowStyles.row, hasUnread && rowStyles.rowUnread, pressed && rowStyles.rowPressed]}
       onPress={openChat}
+      accessibilityRole="button"
+      accessible
+      accessibilityLabel={[
+        `Chat with ${m.other_user.name || 'Anonymous'}`,
+        m.other_user.animal ? capitalise(m.other_user.animal) : null,
+        hasUnread
+          ? `${m.unread_count} unread ${m.unread_count === 1 ? 'message' : 'messages'}`
+          : null,
+        m.last_message
+          ? `Last message: ${m.last_message.sender_id === myId ? 'you said ' : ''}${m.last_message.content ?? 'message deleted'}`
+          : 'No messages yet',
+      ].filter(Boolean).join('. ')}
+      accessibilityHint="Opens the conversation"
     >
       {/* Avatar */}
       <View style={rowStyles.avatarWrap}>
@@ -182,7 +208,11 @@ function MatchRow({ match: m, myId }: { match: Match; myId: number }) {
         )}
       </View>
 
-      <Text style={rowStyles.chevron}>›</Text>
+      <Text
+        style={rowStyles.chevron}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      >›</Text>
     </Pressable>
   );
 }

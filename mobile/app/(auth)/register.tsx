@@ -67,16 +67,20 @@ export default function RegisterScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.card}>
-          <Text style={styles.logo}>Join Howl 🐺</Text>
+          <Text style={styles.logo} accessibilityRole="header">Join Howl 🐺</Text>
           <Text style={styles.subtitle}>Create your account</Text>
 
           {error && (
-            <View style={styles.errorBox}>
+            <View
+              style={styles.errorBox}
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+            >
               <Text style={styles.errorText}>{error}</Text>
             </View>
           )}
 
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label} nativeID="register-email-label">Email</Text>
           <TextInput
             style={styles.input}
             value={email}
@@ -88,9 +92,11 @@ export default function RegisterScreen() {
             keyboardType="email-address"
             returnKeyType="next"
             onSubmitEditing={() => passwordRef.current?.focus()}
+            accessibilityLabel="Email address"
+            accessibilityLabelledBy="register-email-label"
           />
 
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label} nativeID="register-password-label">Password</Text>
           <TextInput
             ref={passwordRef}
             style={styles.input}
@@ -99,11 +105,16 @@ export default function RegisterScreen() {
             placeholder="8+ characters"
             placeholderTextColor={C.textDisabled}
             secureTextEntry
+            autoComplete="new-password"
+            textContentType="newPassword"
             returnKeyType="next"
             onSubmitEditing={() => confirmRef.current?.focus()}
+            accessibilityLabel="Password"
+            accessibilityLabelledBy="register-password-label"
+            accessibilityHint="At least 8 characters"
           />
 
-          <Text style={styles.label}>Confirm password</Text>
+          <Text style={styles.label} nativeID="register-confirm-label">Confirm password</Text>
           <TextInput
             ref={confirmRef}
             style={styles.input}
@@ -112,8 +123,12 @@ export default function RegisterScreen() {
             placeholder="••••••••"
             placeholderTextColor={C.textDisabled}
             secureTextEntry
+            autoComplete="new-password"
+            textContentType="newPassword"
             returnKeyType="done"
             onSubmitEditing={handleRegister}
+            accessibilityLabel="Confirm password"
+            accessibilityLabelledBy="register-confirm-label"
           />
 
           <Pressable
@@ -124,6 +139,9 @@ export default function RegisterScreen() {
             ]}
             onPress={handleRegister}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={loading ? 'Creating your account' : 'Create account'}
+            accessibilityState={{ busy: loading, disabled: loading }}
           >
             {loading
               ? <ActivityIndicator color={C.text} />
@@ -133,7 +151,11 @@ export default function RegisterScreen() {
 
           <View style={styles.loginRow}>
             <Text style={styles.hint}>Already have an account? </Text>
-            <Pressable onPress={() => router.replace('/(auth)/login')}>
+            <Pressable
+              onPress={() => router.replace('/(auth)/login')}
+              accessibilityRole="link"
+              accessibilityLabel="Sign in to an existing account"
+            >
               <Text style={styles.link}>Sign in</Text>
             </Pressable>
           </View>
