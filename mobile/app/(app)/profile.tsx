@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 
 import { api } from '../../src/api/client';
-import { useAuth } from '../../src/auth/AuthContext';
+import { useAuth, User } from '../../src/auth/AuthContext';
 import { colors as C } from '../../src/theme';
 import { animalEmoji, capitalise, resolveAvatarUrl } from '../../src/utils/avatar';
 
@@ -60,7 +60,14 @@ export default function ProfileScreen() {
     fetchAvatarStatus();
   }, []);
 
-  // Poll while avatar is generating
+  // Poll while avatar is generating.
+  // Depending on avatarStatus?.avatar_status (rather than avatarStatus
+  // itself) is deliberate: it's the only field that decides whether we
+  // start/stop the interval, and it already captures every transition that
+  // matters, including avatarStatus going from null to a real object.
+  // Depending on the whole object would re-run this effect (clearing and
+  // resetting the interval) on every 3s poll tick even while status is
+  // unchanged, since fetchAvatarStatus produces a new object each time.
   useEffect(() => {
     if (avatarStatus && GENERATING_STATUSES.has(avatarStatus.avatar_status ?? '')) {
       pollRef.current = setInterval(fetchAvatarStatus, 3000);
@@ -68,6 +75,7 @@ export default function ProfileScreen() {
       if (pollRef.current) clearInterval(pollRef.current);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [avatarStatus?.avatar_status]);
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
@@ -95,7 +103,7 @@ export default function ProfileScreen() {
     const age = parseInt(draft.age, 10);
     body.age = isNaN(age) ? null : age;
 
-    const res = await api<typeof user>('/api/profile/me', {
+    const res = await api<User>('/api/profile/me', {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
@@ -107,7 +115,7 @@ export default function ProfileScreen() {
       return;
     }
 
-    if (res.data) updateUser(res.data as any);
+    if (res.data) updateUser(res.data);
     setIsEditing(false);
 
     // Refetch avatar status in case the bio change triggered a regen
