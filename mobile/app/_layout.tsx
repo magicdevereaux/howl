@@ -5,7 +5,9 @@ import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider } from '../src/auth/AuthContext';
+import { EmailVerificationBanner } from '../src/components/EmailVerificationBanner';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { EmailVerificationProvider } from '../src/contexts/EmailVerificationContext';
 import { UnreadProvider } from '../src/contexts/UnreadContext';
 
 type NotificationData = { type?: string; match_id?: number | string };
@@ -49,12 +51,15 @@ export default function RootLayout() {
       <ErrorBoundary>
         <UnreadProvider>
           <AuthProvider>
-            <StatusBar style="light" />
-            {/* Inner boundary: a screen-level render throw is recoverable
-                without tearing down the session. */}
-            <ErrorBoundary>
-              <Stack screenOptions={{ headerShown: false }} />
-            </ErrorBoundary>
+            <EmailVerificationProvider>
+              <StatusBar style="light" />
+              <EmailVerificationBanner />
+              {/* Inner boundary: a screen-level render throw is recoverable
+                  without tearing down the session. */}
+              <ErrorBoundary>
+                <Stack screenOptions={{ headerShown: false }} />
+              </ErrorBoundary>
+            </EmailVerificationProvider>
           </AuthProvider>
         </UnreadProvider>
       </ErrorBoundary>

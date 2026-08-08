@@ -37,6 +37,13 @@ export interface ApiFailure {
   ok: false;
   error: string;
   status: number;
+  /**
+   * Present when the server rejected the request with a structured
+   * `{"detail": {"code": ..., "message": ...}}` body, currently only
+   * `email_verification_required` (see `EMAIL_VERIFICATION_REQUIRED_CODE`).
+   * Absent for plain string `detail` errors and for transport failures.
+   */
+  code?: string;
 }
 
 export type ApiResponse<T> = { data: T; ok: true } | ApiFailure;
@@ -69,6 +76,50 @@ let _onUnauthenticated: (() => void) | null = null;
 /** Register a callback that fires when the session is fully expired (no valid refresh). */
 export function setUnauthenticatedHandler(fn: () => void) {
   _onUnauthenticated = fn;
+}
+
+// ── Email verification required ───────────────────────────────────────────────
+
+/**
+ * The structured error code the backend uses for the 72h post-registration
+ * grace window. Returned as HTTP 403 with
+ * `{"detail": {"code": "email_verification_required", "message": ..., "grace_expired_at": ...}}`
+ * from swipe create/undo, message send, and avatar regenerate — never from
+ * reads or profile edit. The chat WebSocket reports the same condition as a
+ * `{"type": "error", "error": {"code": "email_verification_required", ...}}`
+ * frame followed by a close with code 4403.
+ */
+export const EMAIL_VERIFICATION_REQUIRED_CODE = 'email_verification_required';
+
+export interface EmailVerificationRequiredInfo {
+  message: string;
+  /** ISO 8601, or null if the server didn't include one. */
+  graceExpiredAt: string | null;
+}
+
+let _onEmailVerificationRequired: ((info: EmailVerificationRequiredInfo) => void) | null = null;
+
+/**
+ * Register a callback that fires whenever ANY transport — a REST call via
+ * `api()`, or the chat WebSocket — reports that the account is past its
+ * grace window. One shared path so a banner/screen shows regardless of which
+ * transport tripped it, instead of every call site having to check for it.
+ */
+export function setEmailVerificationRequiredHandler(
+  fn: ((info: EmailVerificationRequiredInfo) => void) | null,
+) {
+  _onEmailVerificationRequired = fn;
+}
+
+/** Called from api() below, and from useMatchWebSocket on the WS error frame / 4403 close. */
+export function notifyEmailVerificationRequired(info: EmailVerificationRequiredInfo): void {
+  _onEmailVerificationRequired?.(info);
+}
+
+/** True for a 403 carrying the email-verification-required code. Convenience
+ * for call sites that want to react locally in addition to the global banner. */
+export function isEmailVerificationRequired(res: ApiFailure): boolean {
+  return res.status === 403 && res.code === EMAIL_VERIFICATION_REQUIRED_CODE;
 }
 
 // ── fetch with timeout, never throws ──────────────────────────────────────────
@@ -261,15 +312,28 @@ export async function api<T = unknown>(
 
   if (!res.ok) {
     let error = `HTTP ${res.status}`;
+    let code: string | undefined;
+    let graceExpiredAt: string | null = null;
     const body = await readJson(res);
     if (body.ok) {
       const detail = (body.value as { detail?: unknown })?.detail;
-      if (typeof detail === 'string') error = detail;
+      if (typeof detail === 'string') {
+        error = detail;
+      } else if (detail && typeof detail === 'object') {
+        // Structured error, e.g. { code, message, grace_expired_at }.
+        const d = detail as { code?: unknown; message?: unknown; grace_expired_at?: unknown };
+        if (typeof d.code === 'string') code = d.code;
+        if (typeof d.message === 'string') error = d.message;
+        if (typeof d.grace_expired_at === 'string') graceExpiredAt = d.grace_expired_at;
+      }
     }
     if (res.status >= 500 && error === `HTTP ${res.status}`) {
       error = 'Howl is having trouble right now. Please try again shortly.';
     }
-    return { ok: false, error, status: res.status };
+    if (res.status === 403 && code === EMAIL_VERIFICATION_REQUIRED_CODE) {
+      notifyEmailVerificationRequired({ message: error, graceExpiredAt });
+    }
+    return { ok: false, error, status: res.status, code };
   }
 
   if (res.status === 204) return { ok: true, data: null as T };
