@@ -88,10 +88,12 @@ def regenerate_avatar(
 
     Gated on email verification (GAPS #25): every regeneration is a paid DALL-E
     call, so an unverified throwaway address must not be able to burn spend past
-    the grace window. Reading `GET /status` stays open. Note the regeneration
-    triggered indirectly by a bio edit on `PATCH /api/profile/me` is *not* gated
-    -- profile editing is deliberately left open so a user can fix a typo'd
-    email, which leaves that as a narrower remaining spend path.
+    the grace window. Reading `GET /status` stays open.
+
+    The other route to a paid call -- a bio edit on `PATCH /api/profile/me` --
+    is gated too, but differently: that endpoint stays open (a user must be able
+    to fix a typo'd email) and withholds only the generation, deferring it via
+    `profile_needs_regen`. Keep the two in step.
     """
     if not current_user.bio:
         raise HTTPException(
