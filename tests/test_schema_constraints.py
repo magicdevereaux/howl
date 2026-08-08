@@ -13,10 +13,11 @@ same way production PostgreSQL does.
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import DateTime, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.match import Match
+from app.models.types import UtcDateTime
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate
 from app.security import hash_password
@@ -283,11 +284,28 @@ def test_shared_device_reassigns_its_push_token(client, db, auth_headers, test_u
     assert rows[0].user_id == test_user.id, "the token still points at the old account"
 
 
-def test_match_timestamp_is_timezone_aware_after_reload(db):
-    """Documents the naive-datetime gotcha rather than pretending it is fixed.
+# ---------------------------------------------------------------------------
+# UtcDateTime  (#22)
+# ---------------------------------------------------------------------------
+#
+# Every timestamp column is app.models.types.UtcDateTime, a TypeDecorator over
+# DateTime(timezone=True) that coerces naive values to UTC-aware on the way out
+# of the database. These tests pin the guarantee the rest of app/ now relies on:
+# a stored timestamp can be compared against datetime.now(UTC) directly, with no
+# replace(tzinfo=utc) at the call site.
+#
+# The DDL is unchanged -- a TypeDecorator is Python-side only -- so there is no
+# migration for this. `alembic revision --autogenerate` against a throwaway
+# PostgreSQL database at head emits an empty migration, which is what
+# test_no_timestamp_column_changed_its_ddl asserts more cheaply.
 
-    Under SQLite a DateTime(timezone=True) column reads back naive, which is why
-    app code normalises with replace(tzinfo=utc). See GAPS #22.
+def test_match_timestamp_is_timezone_aware_after_reload(db):
+    """The ORM round-trip yields an aware datetime, not a naive one.
+
+    This test used to assert the *opposite* -- it documented SQLite returning
+    naive datetimes as a known gotcha. UtcDateTime removes the gotcha, so the
+    assertion is inverted rather than deleted: if this ever goes back to naive,
+    every comparison against datetime.now(UTC) in app/ starts raising TypeError.
     """
     a = _make_user(db, email="tz_a@howl.app")
     b = _make_user(db, email="tz_b@howl.app")
@@ -297,9 +315,154 @@ def test_match_timestamp_is_timezone_aware_after_reload(db):
     db.expire_all()
 
     reloaded = db.get(Match, match.id)
-    assert reloaded.matched_at.tzinfo is None, (
-        "SQLite started returning tz-aware datetimes — the replace(tzinfo=utc) "
-        "normalisation scattered through app/ can be revisited"
+    assert reloaded.matched_at.tzinfo is not None, (
+        "matched_at came back naive — UtcDateTime is not applied, or was "
+        "replaced with a bare DateTime(timezone=True)"
     )
-    normalised = reloaded.matched_at.replace(tzinfo=UTC)
-    assert (datetime.now(UTC) - normalised).total_seconds() < 60
+    # No replace(tzinfo=utc) needed: this is the whole point of the type.
+    assert (datetime.now(UTC) - reloaded.matched_at).total_seconds() < 60
+
+
+def test_every_model_timestamp_column_uses_utcdatetime():
+    """A mechanism applied to some columns teaches the wrong lesson.
+
+    GAPS #22's complaint was not that four specific columns lacked normalisation
+    -- it was that normalisation was a thing you had to remember. Half-applying
+    the type reintroduces exactly that, so this asserts *all* of them.
+    """
+    from app.models.base import Base
+
+    wrong = [
+        f"{table.name}.{col.name}"
+        for table in Base.metadata.sorted_tables
+        for col in table.columns
+        if isinstance(col.type, DateTime) and not isinstance(col.type, UtcDateTime)
+    ]
+    assert not wrong, f"timestamp columns not using UtcDateTime: {wrong}"
+
+
+def test_no_timestamp_column_changed_its_ddl():
+    """UtcDateTime must compile to exactly what the migrations already created.
+
+    This is what makes "no Alembic migration needed" true rather than hopeful.
+    If impl or load_dialect_impl ever drifts, the models silently stop matching
+    the deployed schema and autogenerate starts proposing ALTERs.
+    """
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    for dialect in (postgresql.dialect(), sqlite.dialect()):
+        assert UtcDateTime().compile(dialect=dialect) == (
+            DateTime(timezone=True).compile(dialect=dialect)
+        ), f"UtcDateTime DDL diverged from DateTime(timezone=True) on {dialect.name}"
+
+
+# A naive wall-clock literal, written the way a raw SQL statement, an Alembic
+# backfill or a non-ORM writer would write it. Under SQLite this is what
+# actually sits in the column for *every* timestamp.
+_NAIVE_LITERAL = "2026-01-15 08:30:00"
+_EXPECTED = datetime(2026, 1, 15, 8, 30, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        # The two users columns GAPS #22 named as still lacking normalisation.
+        "regenerations_reset_at",
+        "avatar_status_updated_at",
+        # These two had it, via #14 and #18 — assert the type subsumes them.
+        "swipes_reset_at",
+        "email_verification_token_expires_at",
+    ],
+)
+def test_naive_user_timestamp_written_by_raw_sql_reads_back_aware(db, column):
+    """A value that bypassed the ORM entirely still loads as UTC-aware.
+
+    Bypassing the ORM is the case that matters: app.api.avatar._enforce_regen_limit
+    compares regenerations_reset_at against datetime.now(UTC), and nothing
+    guarantees the row was written by the ORM. A migration backfill, a raw
+    UPDATE, or SQLite's own text storage all produce a naive value.
+    """
+    user = _make_user(db, email=f"naive_{column}@howl.app")
+
+    db.execute(
+        text(f"UPDATE users SET {column} = :value WHERE id = :id"),  # noqa: S608
+        {"value": _NAIVE_LITERAL, "id": user.id},
+    )
+    db.commit()
+    db.expire_all()
+
+    value = getattr(db.get(User, user.id), column)
+    assert value.tzinfo is not None, f"{column} came back naive"
+    assert value == _EXPECTED
+    # The payoff: arithmetic against an aware "now" without normalising first.
+    assert (datetime.now(UTC) - value).total_seconds() > 0
+
+
+@pytest.mark.parametrize("column", ["read_at", "deleted_at"])
+def test_naive_message_timestamp_written_by_raw_sql_reads_back_aware(db, column):
+    """messages.read_at / deleted_at — the other two columns GAPS #22 named.
+
+    Both are nullable and both are compared against an aware now() when marking
+    a conversation read and when filtering soft-deleted messages.
+    """
+    from app.models.message import Message
+
+    a = _make_user(db, email=f"msg_{column}_a@howl.app")
+    b = _make_user(db, email=f"msg_{column}_b@howl.app")
+    match = Match(user1_id=min(a.id, b.id), user2_id=max(a.id, b.id))
+    db.add(match)
+    db.commit()
+
+    message = Message(match_id=match.id, sender_id=a.id, content="howl")
+    db.add(message)
+    db.commit()
+
+    assert getattr(message, column) is None, "NULL must survive as None, not 1970"
+
+    db.execute(
+        text(f"UPDATE messages SET {column} = :value WHERE id = :id"),  # noqa: S608
+        {"value": _NAIVE_LITERAL, "id": message.id},
+    )
+    db.commit()
+    db.expire_all()
+
+    value = getattr(db.get(Message, message.id), column)
+    assert value.tzinfo is not None, f"messages.{column} came back naive"
+    assert value == _EXPECTED
+
+
+def test_null_timestamp_stays_none():
+    """NULL must not be coerced into an epoch — it is a meaningful state here.
+
+    read_at NULL means unread; regenerations_reset_at NULL means "no window has
+    opened yet". A type that turned those into 1970-01-01 would break both.
+    """
+    coerce = UtcDateTime()
+    assert coerce.process_result_value(None, None) is None
+    assert coerce.process_bind_param(None, None) is None
+
+
+def test_naive_inbound_value_is_assumed_utc_not_rejected():
+    """The documented inbound policy: naive means UTC.
+
+    Chosen over raising because a row already stored cannot be un-stored by
+    refusing to load it, and because every writer in this codebase already uses
+    datetime.now(UTC) — the convention is settled, so encoding it is honest.
+    """
+    naive = datetime(2026, 1, 15, 8, 30)
+    assert UtcDateTime().process_bind_param(naive, None) == _EXPECTED
+
+
+def test_aware_non_utc_value_is_converted_not_stripped():
+    """An offset must be honoured, never discarded.
+
+    Stripping tzinfo from 08:30+02:00 would store 08:30 UTC and move the instant
+    two hours. Converting stores 06:30 UTC, which is the same moment.
+    """
+    from datetime import timedelta, timezone
+
+    plus_two = datetime(2026, 1, 15, 10, 30, tzinfo=timezone(timedelta(hours=2)))
+    converted = UtcDateTime().process_bind_param(plus_two, None)
+
+    assert converted == _EXPECTED, "the instant moved — offset was stripped, not converted"
+    assert converted.tzinfo is UTC
