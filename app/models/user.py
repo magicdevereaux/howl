@@ -5,7 +5,6 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
-    DateTime,
     Enum,
     Integer,
     String,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class AvatarStatus(str, enum.Enum):
@@ -60,20 +60,20 @@ class User(Base):
         server_default=AvatarStatus.pending.value,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     avatar_status_updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
     email_notifications: Mapped[bool] = mapped_column(
@@ -90,7 +90,7 @@ class User(Base):
     )
     email_verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     email_verification_token_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UtcDateTime, nullable=True
     )
     is_bot: Mapped[bool] = mapped_column(
         Boolean,
@@ -119,7 +119,7 @@ class User(Base):
         server_default="0",
     )
     regenerations_reset_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
     daily_swipes: Mapped[int] = mapped_column(
@@ -129,7 +129,7 @@ class User(Base):
         server_default="0",
     )
     swipes_reset_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
 

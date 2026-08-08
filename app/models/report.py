@@ -1,10 +1,11 @@
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Text, func
+from sqlalchemy import Enum, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class ReportReason(str, enum.Enum):
@@ -52,7 +53,7 @@ class Report(Base):
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
