@@ -253,6 +253,42 @@ def test_reseed_bots_env_var_restores_the_destructive_path(seed_db, capsys, monk
     assert len(_demo_users(seed_db)) == 1000
 
 
+def test_reseed_bots_does_not_delete_a_real_user_at_a_colliding_demo_email(seed_db, monkeypatch):
+    """GAPS-ROUND-2 #65: the destructive path used to identify rows to delete
+    purely by membership in the owned email list. #15 closed exactly this
+    class of bug elsewhere ("Demo detection by email prefix ... the is_bot
+    column already exists — use it"); this was the last one, and it lived in
+    the script with the most destructive effect. A real person who managed to
+    register demo1@howl.app (is_bot=False) must survive RESEED_BOTS=true —
+    only actual bot rows may be deleted, identity checked by is_bot, not by
+    what their email happens to spell.
+    """
+    real_at_demo_email = User(
+        email="demo1@howl.app",
+        password_hash="not-a-real-hash",
+        is_bot=False,
+    )
+    seed_db.add(real_at_demo_email)
+    seed_db.commit()
+    real_id = real_at_demo_email.id
+
+    monkeypatch.setenv("RESEED_BOTS", "true")
+    seed_mod.seed()  # must not raise, and must not delete the real row
+
+    survivor = seed_db.get(User, real_id)
+    assert survivor is not None
+    assert survivor.is_bot is False
+    assert survivor.email == "demo1@howl.app"
+
+    # The colliding slot is left to the real user rather than double-booked —
+    # every other address seeds normally. (_demo_users matches by email
+    # pattern, which the real user's row also satisfies, so bot identity is
+    # checked directly here instead.)
+    bots = seed_db.query(User).filter(User.is_bot.is_(True)).all()
+    assert len(bots) == 999
+    assert "demo1@howl.app" not in {u.email for u in bots}
+
+
 # ---------------------------------------------------------------------------
 # GAPS #4 — random per-deploy password, must never regress to a literal
 # ---------------------------------------------------------------------------
