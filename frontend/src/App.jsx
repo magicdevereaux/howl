@@ -84,7 +84,6 @@ export default function HowlApp() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [generationStartTime, setGenerationStartTime] = useState(null);
   const [discoverUsers, setDiscoverUsers] = useState([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
@@ -154,16 +153,29 @@ export default function HowlApp() {
     !!user?.bio &&
     !isStale;
 
-  // Declared before the effects that list it as a dependency. A `const` is in
-  // the temporal dead zone until its declaration is *reached*, and a hook's
-  // dependency array is evaluated during render — so a dep declared further
-  // down the component throws "Cannot access '<minified>' before
-  // initialization" in the production bundle. This is the same trap GAPS #12
-  // recorded, and the reason the derived state above sits where it does.
+  // The chat socket keys off this primitive, not off `currentMatch`. See the
+  // WebSocket effect below for why that distinction is load-bearing.
+  const currentMatchId = currentMatch?.id ?? null;
+
+  // ---------------------------------------------------------------------------
+  // Fetchers with stable identities.
   //
-  // Empty dep list because the body closes over nothing but state setters
-  // (stable by contract) and module constants. The stable identity is required:
-  // ChatRoute and the socket's onopen both call it from effects.
+  // Every one of these is called from an effect, so each must keep the same
+  // identity across renders — a fetcher recreated each render either loops the
+  // effect or has to be omitted from its dependency array and lie about it.
+  //
+  // Two rules hold this block together:
+  //
+  //  1. They are declared *here*, above every effect that lists them. A `const`
+  //     is in the temporal dead zone until its declaration is reached, and a
+  //     hook's dependency array is evaluated during render — so naming a
+  //     callback declared further down throws "Cannot access '<minified>'
+  //     before initialization" in the production bundle. That is the GAPS #12
+  //     failure, and it is why the derived state above sits where it does.
+  //  2. Their dep lists are honest, not empty-by-convenience. They close over
+  //     state setters (stable by contract) and module constants only, so `[]`
+  //     is the truth; `fetchProfile` names the two fetchers it calls.
+  // ---------------------------------------------------------------------------
   const loadMessages = useCallback(async (matchId) => {
     setMessagesLoading(true);
     setMessagesError('');
@@ -185,13 +197,104 @@ export default function HowlApp() {
     }
   }, []);
 
+  const fetchAvatarStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/avatar/status`, {});
+      if (res.ok) {
+        setAvatarStatus(await res.json());
+      } else if (res.status === 401) {
+        // Clearing the user is what sends us to /login now — RequireAuth
+        // reacts to it. Previously this only swapped the view, leaving a stale
+        // user object behind that the profile screen would still render from.
+        setUser(null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch avatar status', err);
+    }
+  }, []);
+
+  const fetchDiscoverUsers = useCallback(async () => {
+    setDiscoverLoading(true);
+    setDiscoverError('');
+    try {
+      const res = await apiFetch(`/api/users/discover`, {
+
+      });
+      if (res.ok) {
+        setDiscoverUsers(await res.json());
+      } else if (res.status === 401) {
+        setUser(null);
+        setError('Session expired. Please sign in again.');
+      } else {
+        setDiscoverError('Failed to load users');
+      }
+    } catch {
+      setDiscoverError('Network error');
+    } finally {
+      setDiscoverLoading(false);
+    }
+  }, []);
+
+  const fetchMatches = useCallback(async () => {
+    setMatchesLoading(true);
+    setMatchesError('');
+    try {
+      const res = await apiFetch(`/api/users/matches`, {
+
+      });
+      if (res.ok) {
+        setMatches(await res.json());
+        setMatchesLoaded(true);
+      } else if (res.status === 401) {
+        setUser(null);
+        setError('Session expired. Please sign in again.');
+      } else {
+        setMatchesError("Couldn't load your matches.");
+      }
+    } catch {
+      setMatchesError('Network error — check your connection.');
+    } finally {
+      setMatchesLoading(false);
+    }
+  }, []);
+
+  const fetchProfile = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/profile/me`, {
+        credentials: 'include'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data);
+        setName(data.name || '');
+        setAge(data.age ? String(data.age) : '');
+        setGender(data.gender || '');
+        setSexuality(data.sexuality || '');
+        setLookingFor(data.looking_for || '');
+        setAgePrefMin(data.age_preference_min ? String(data.age_preference_min) : '');
+        setAgePrefMax(data.age_preference_max ? String(data.age_preference_max) : '');
+        setEmailNotifications(data.email_notifications ?? true);
+        setLocation(data.location || '');
+        setBio(data.bio || '');
+        fetchAvatarStatus();
+        fetchMatches();
+      }
+      // 401 means no valid cookie — stay signed out silently
+    } catch { /* network error — stay signed out */ }
+    finally { setBooting(false); }
+  }, [fetchAvatarStatus, fetchMatches]);
+
   // On mount, attempt to restore the session from the cookie. It does not
   // navigate: on a deep link to /discover, forcing /profile after the session
   // check would defeat the whole point of having URLs. The index route and
   // RequireAuth decide where an unrouted visit lands.
+  //
+  // `fetchProfile` is in the dependency list rather than suppressed: its
+  // identity is stable, so naming it honestly still means "run once". There was
+  // never a staleness bug here — the empty array was hiding a lie, not a fix.
   useEffect(() => {
     fetchProfile();
-  }, []);
+  }, [fetchProfile]);
 
   useEffect(() => {
     const shouldPoll =
@@ -202,17 +305,26 @@ export default function HowlApp() {
       const interval = setInterval(fetchAvatarStatus, 3000);
       return () => clearInterval(interval);
     }
-  }, [avatarStatus?.avatar_status, user?.bio, isStale]);
+  }, [avatarStatus?.avatar_status, user?.bio, isStale, fetchAvatarStatus]);
 
   // WebSocket connection for real-time chat delivery.
   // Replaces the previous 3-second polling approach.
   // Reconnects automatically after WS_RECONNECT_DELAY_MS whenever the
   // connection drops (network glitch, server restart, etc.). The delay is
   // shared with the mobile client — see src/shared/constants.js.
+  //
+  // Keyed on the match *id*, never the match object. The linter asked for
+  // `currentMatch` here and it was right that the array was incomplete, but
+  // adding the object would have been the wrong fix: `matches` is refetched on
+  // every entry to /matches and on every unread change, and each refetch mints
+  // new objects. Depending on identity would tear down and rebuild this socket
+  // each time — dropping live delivery mid-conversation and, now that reconnect
+  // refetches history, firing a redundant request with it. The socket's
+  // identity is the conversation, and a conversation is an id.
   useEffect(() => {
-    if (view !== 'chat' || !currentMatch) return;
+    if (view !== 'chat' || !currentMatchId) return;
 
-    const wsUrl = `${WS_URL}/api/matches/${currentMatch.id}/ws`;
+    const wsUrl = `${WS_URL}/api/matches/${currentMatchId}/ws`;
     let ws = null;
     let reconnectTimer = null;
     let active = true; // false after cleanup so reconnect attempts stop
@@ -271,7 +383,7 @@ export default function HowlApp() {
       // Refetching on every *re*connect is that ask (GAPS-ROUND-2 #47).
       ws.onopen = () => {
         if (!active) return;
-        if (hasConnectedRef.current) loadMessages(currentMatch.id);
+        if (hasConnectedRef.current) loadMessages(currentMatchId);
         hasConnectedRef.current = true;
       };
 
@@ -290,7 +402,7 @@ export default function HowlApp() {
       setTypingUser(null);
       if (ws) ws.close();
     };
-  }, [view, currentMatch?.id, loadMessages]);
+  }, [view, currentMatchId, loadMessages]);
 
   // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser
   // history. `urlTokens` is stable (useState initialiser), so this runs once.
@@ -316,54 +428,6 @@ export default function HowlApp() {
       } catch { /* ignore — the banner stays until the next profile fetch */ }
     })();
   }, [urlTokens]);
-
-  const fetchProfile = async () => {
-    try {
-      const res = await apiFetch(`/api/profile/me`, {
-        credentials: 'include'
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data);
-        setName(data.name || '');
-        setAge(data.age ? String(data.age) : '');
-        setGender(data.gender || '');
-        setSexuality(data.sexuality || '');
-        setLookingFor(data.looking_for || '');
-        setAgePrefMin(data.age_preference_min ? String(data.age_preference_min) : '');
-        setAgePrefMax(data.age_preference_max ? String(data.age_preference_max) : '');
-        setEmailNotifications(data.email_notifications ?? true);
-        setLocation(data.location || '');
-        setBio(data.bio || '');
-        fetchAvatarStatus();
-        fetchMatches();
-      }
-      // 401 means no valid cookie — stay signed out silently
-    } catch { /* network error — stay signed out */ }
-    finally { setBooting(false); }
-  };
-
-  const fetchAvatarStatus = async () => {
-    try {
-      const res = await apiFetch(`/api/avatar/status`, {});
-      if (res.ok) {
-        const data = await res.json();
-        setAvatarStatus(prev => {
-          if (data.avatar_status === 'ready' && prev?.avatar_status !== 'ready') {
-            setGenerationStartTime(null);
-          }
-          return data;
-        });
-      } else if (res.status === 401) {
-        // Clearing the user is what sends us to /login now — RequireAuth
-        // reacts to it. Previously this only swapped the view, leaving a stale
-        // user object behind that the profile screen would still render from.
-        setUser(null);
-      }
-    } catch (err) {
-      console.error('Failed to fetch avatar status', err);
-    }
-  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -391,6 +455,10 @@ export default function HowlApp() {
         setError(data.detail || 'Login failed');
       }
     } catch (err) {
+      // Sign-in failing at the network layer is the most expensive failure in
+      // the app to diagnose blind — it is indistinguishable from a wrong
+      // password to the user and from nothing at all to us.
+      console.error('Login request failed', err);
       setError('Network error');
     } finally {
       setLoading(false);
@@ -418,6 +486,7 @@ export default function HowlApp() {
         setError(data.detail || 'Registration failed');
       }
     } catch (err) {
+      console.error('Registration request failed', err);
       setError('Network error');
     } finally {
       setLoading(false);
@@ -446,8 +515,6 @@ export default function HowlApp() {
         setBio(data.bio || '');
         // If the backend queued a regen, start the generation spinner
         if (data.avatar_status === 'pending') {
-          setGenerationStartTime(Date.now());
-
           setAvatarStatus({ avatar_status: 'generating', animal: null });
           setTimeout(fetchAvatarStatus, 2000);
         }
@@ -464,46 +531,12 @@ export default function HowlApp() {
     }
   };
 
-  const handleUpdateBio = async (e) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const res = await apiFetch(`/api/profile/me`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-
-        body: JSON.stringify({
-          name: name || null,
-          age: age ? parseInt(age, 10) : null,
-          location: location || null,
-          bio,
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setUser(data);
-        setName(data.name || '');
-        setAge(data.age ? String(data.age) : '');
-        setGender(data.gender || '');
-        setSexuality(data.sexuality || '');
-        setLookingFor(data.looking_for || '');
-        setAgePrefMin(data.age_preference_min ? String(data.age_preference_min) : '');
-        setAgePrefMax(data.age_preference_max ? String(data.age_preference_max) : '');
-        setEmailNotifications(data.email_notifications ?? true);
-        setLocation(data.location || '');
-        setGenerationStartTime(Date.now());
-        setAvatarStatus({ avatar_status: 'generating', animal: null });
-        setTimeout(fetchAvatarStatus, 2000);
-      } else {
-        setError(data.detail || 'Update failed');
-      }
-    } catch (err) {
-      setError('Network error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // `handleUpdateBio` used to live here: a second, drifted copy of the profile
+  // save that nothing rendered. ProfileView owns its own draft state and calls
+  // handleSaveProfile above; the bio form this served was replaced during the
+  // component extraction and the function was left behind, still referencing
+  // the `generationStartTime` state that GAPS #12 deleted. Removed rather than
+  // underscore-prefixed — there is nothing here to keep.
 
   const handleLogout = () => {
     // Server clears both cookies; fire-and-forget
@@ -793,7 +826,6 @@ export default function HowlApp() {
       });
       const data = await res.json();
       if (res.ok) {
-        setGenerationStartTime(Date.now());
         setAvatarStatus(data);
       } else if (res.status === 429 && data.detail?.code === 'regeneration_limit_reached') {
         const resets = new Date(data.detail.resets_at);
@@ -805,6 +837,11 @@ export default function HowlApp() {
         setError(typeof data.detail === 'string' ? data.detail : 'Regeneration failed');
       }
     } catch (err) {
+      // The user gets the same message either way, but a DNS failure, a CORS
+      // rejection and a TypeError from a bad body all land here and are not the
+      // same problem. Logging the cause is the difference between a bug report
+      // that can be acted on and "it says network error".
+      console.error('Avatar regeneration request failed', err);
       setError('Network error');
     } finally {
       setLoading(false);
@@ -887,53 +924,6 @@ export default function HowlApp() {
       });
     } catch { /* silently revert on network error */ }
   };
-
-  // useCallback so the route-entry effects below can depend on them honestly.
-  // Both close over state setters and module constants only.
-  const fetchDiscoverUsers = useCallback(async () => {
-    setDiscoverLoading(true);
-    setDiscoverError('');
-    try {
-      const res = await apiFetch(`/api/users/discover`, {
-
-      });
-      if (res.ok) {
-        setDiscoverUsers(await res.json());
-      } else if (res.status === 401) {
-        setUser(null);
-        setError('Session expired. Please sign in again.');
-      } else {
-        setDiscoverError('Failed to load users');
-      }
-    } catch {
-      setDiscoverError('Network error');
-    } finally {
-      setDiscoverLoading(false);
-    }
-  }, []);
-
-  const fetchMatches = useCallback(async () => {
-    setMatchesLoading(true);
-    setMatchesError('');
-    try {
-      const res = await apiFetch(`/api/users/matches`, {
-
-      });
-      if (res.ok) {
-        setMatches(await res.json());
-        setMatchesLoaded(true);
-      } else if (res.status === 401) {
-        setUser(null);
-        setError('Session expired. Please sign in again.');
-      } else {
-        setMatchesError("Couldn't load your matches.");
-      }
-    } catch {
-      setMatchesError('Network error — check your connection.');
-    } finally {
-      setMatchesLoading(false);
-    }
-  }, []);
 
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
@@ -1146,7 +1136,6 @@ export default function HowlApp() {
           onOpen={bindChat}
           chatProps={{
             messages,
-            setMessages,
             messagesLoading,
             messagesError,
             messageInput,

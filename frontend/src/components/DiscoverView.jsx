@@ -1,17 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import Nav from './Nav';
+import PreferenceFilters from './PreferenceFilters';
 import { animalEmoji, avatarUrl } from '../utils';
-
-const filterSel = {
-  width: '100%', padding: '8px 10px', border: 'none',
-  borderRadius: '8px', fontSize: '13px', background: 'rgba(255,255,255,0.08)',
-  color: 'var(--text-primary)', cursor: 'pointer', outline: 'none',
-};
-const filterInput = {
-  width: '100%', padding: '8px 10px', border: 'none',
-  borderRadius: '8px', fontSize: '13px', background: 'rgba(255,255,255,0.08)',
-  color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box',
-};
 
 export default function DiscoverView({
   discoverUsers, discoverLoading, discoverError,
@@ -22,108 +12,32 @@ export default function DiscoverView({
   handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
   setView, navProps,
 }) {
-  const [blockConfirm, setBlockConfirm] = React.useState(false);
-  const [localFilters, setLocalFilters] = useState({
-    lookingFor: '', gender: '', sexuality: '', agePrefMin: '', agePrefMax: '',
-  });
+  const [blockConfirm, setBlockConfirm] = useState(false);
 
-  useEffect(() => {
-    if (preferenceFilters) setLocalFilters(preferenceFilters);
-  }, [
+  const currentCard = discoverUsers[0] || null;
+
+  // The saved filter values, as a string. PreferenceFilters seeds its draft
+  // state from `initial`, and this key is how it learns that the saved values
+  // changed underneath it — a remount instead of a sync effect. See that file
+  // for why the effect had to go.
+  const savedFiltersKey = [
     preferenceFilters?.lookingFor,
     preferenceFilters?.gender,
     preferenceFilters?.sexuality,
     preferenceFilters?.agePrefMin,
     preferenceFilters?.agePrefMax,
-  ]);
-
-  const filtersActive = !!(
-    localFilters.lookingFor || localFilters.gender ||
-    localFilters.sexuality || localFilters.agePrefMin || localFilters.agePrefMax
-  );
-
-  const handleApply = () => handleSaveFilters(localFilters);
-  const handleClear = () => {
-    const cleared = { lookingFor: '', gender: '', sexuality: '', agePrefMin: '', agePrefMax: '' };
-    setLocalFilters(cleared);
-    handleSaveFilters(cleared);
-  };
-
-  const set = (key) => (e) => setLocalFilters((f) => ({ ...f, [key]: e.target.value }));
-
-  const currentCard = discoverUsers[0] || null;
+  ].join('|');
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '520px', margin: '0 auto' }}>
         <Nav {...navProps} />
 
-        {/* Preference filters */}
-        <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '14px', padding: '14px 16px', marginBottom: '18px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-            <div>
-              <p style={{ color: 'var(--text-disabled)', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' }}>Looking for</p>
-              <select value={localFilters.lookingFor} onChange={set('lookingFor')} style={filterSel}>
-                <option value="" style={{ background: '#1A1035' }}>Anyone</option>
-                <option value="men" style={{ background: '#1A1035' }}>Men</option>
-                <option value="women" style={{ background: '#1A1035' }}>Women</option>
-                <option value="non-binary" style={{ background: '#1A1035' }}>Non-binary</option>
-                <option value="everyone" style={{ background: '#1A1035' }}>Everyone</option>
-              </select>
-            </div>
-            <div>
-              <p style={{ color: 'var(--text-disabled)', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' }}>Gender</p>
-              <select value={localFilters.gender} onChange={set('gender')} style={filterSel}>
-                <option value="" style={{ background: '#1A1035' }}>Any</option>
-                <option value="man" style={{ background: '#1A1035' }}>Man</option>
-                <option value="woman" style={{ background: '#1A1035' }}>Woman</option>
-                <option value="non-binary" style={{ background: '#1A1035' }}>Non-binary</option>
-                <option value="other" style={{ background: '#1A1035' }}>Other</option>
-              </select>
-            </div>
-            <div>
-              <p style={{ color: 'var(--text-disabled)', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' }}>Sexuality</p>
-              <select value={localFilters.sexuality} onChange={set('sexuality')} style={filterSel}>
-                <option value="" style={{ background: '#1A1035' }}>Any</option>
-                <option value="straight" style={{ background: '#1A1035' }}>Straight</option>
-                <option value="gay" style={{ background: '#1A1035' }}>Gay</option>
-                <option value="lesbian" style={{ background: '#1A1035' }}>Lesbian</option>
-                <option value="bisexual" style={{ background: '#1A1035' }}>Bisexual</option>
-                <option value="pansexual" style={{ background: '#1A1035' }}>Pansexual</option>
-                <option value="other" style={{ background: '#1A1035' }}>Other</option>
-              </select>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-            <div>
-              <p style={{ color: 'var(--text-disabled)', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' }}>Min age</p>
-              <input type="number" value={localFilters.agePrefMin} onChange={set('agePrefMin')} placeholder="18" min={18} max={120} style={filterInput} />
-            </div>
-            <div>
-              <p style={{ color: 'var(--text-disabled)', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' }}>Max age</p>
-              <input type="number" value={localFilters.agePrefMax} onChange={set('agePrefMax')} placeholder="99" min={18} max={120} style={filterInput} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: '6px' }}>
-              <button
-                onClick={handleApply}
-                style={{ padding: '8px 0', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', width: '100%' }}
-              >
-                Apply
-              </button>
-              <button
-                onClick={handleClear}
-                style={{ padding: '4px 0', background: 'none', color: 'var(--text-disabled)', border: 'none', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline', visibility: filtersActive ? 'visible' : 'hidden' }}
-              >
-                Clear all
-              </button>
-            </div>
-          </div>
-          {filtersActive && (
-            <p style={{ color: 'var(--text-disabled)', fontSize: '11px', margin: 0, textAlign: 'center' }}>
-              Filters active — results are narrowed to your preferences
-            </p>
-          )}
-        </div>
+        <PreferenceFilters
+          key={savedFiltersKey}
+          initial={preferenceFilters}
+          onApply={handleSaveFilters}
+        />
 
         {swipeLimitReached ? (
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '48px 24px', background: 'rgba(255,255,255,0.04)', borderRadius: '20px' }}>

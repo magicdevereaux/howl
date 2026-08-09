@@ -12,7 +12,7 @@ const REPORT_REASONS = [
 ];
 
 export default function ChatView({
-  currentMatch, messages, setMessages,
+  currentMatch, messages,
   messagesLoading, messagesError, messageInput, setMessageInput,
   sending, sendError, sendMessage, loadMessages,
   hasMoreMessages, loadingMore, loadMoreMessages,
@@ -376,6 +376,33 @@ export default function ChatView({
         </div>
       )}
 
+      {/* Block confirmation — no report filed. Same shape as the unmatch
+          confirmation above, and as the inline confirm on the discover card. */}
+      {pendingAction === 'block' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: 'var(--bg-card)', borderRadius: '16px', padding: '32px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.5)' }}>
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🚫</div>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Block {other.name || 'this user'}?
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '24px', lineHeight: '1.5' }}>
+              They'll be removed from your matches and won't be able to contact you. No report is sent.
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setPendingAction(null)} style={{ flex: 1, padding: '11px', background: 'var(--bg-hover)', color: 'var(--text-surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => { setPendingAction(null); handleBlock(other.id); }}
+                style={{ flex: 1, padding: '11px', background: '#c53030', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                Block
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Block & Report modal */}
       {pendingAction === 'block-report' && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
@@ -533,8 +560,15 @@ export default function ChatView({
                 >
                   🚩 Report
                 </button>
+                {/* Block without filing a report — the pair "🚩 Report" /
+                    "🚫 Block" here mirrors the two links under the discover
+                    card, and means the same thing in both places. This button
+                    used to open the Block & Report modal, which requires a
+                    reason: the label promised one action and delivered another,
+                    and `handleBlock` sat unused as a result. The reporting path
+                    is still one item up, in the ⋯ menu. */}
                 <button
-                  onClick={() => { setShowProfileModal(false); setBlockReportReason(''); setBlockReportNotes(''); setPendingAction('block-report'); }}
+                  onClick={() => { setShowProfileModal(false); setPendingAction('block'); }}
                   style={{ flex: 1, padding: '10px', background: 'transparent', color: '#c53030', border: '1px solid rgba(197,48,48,0.4)', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
                   onMouseEnter={(e) => e.currentTarget.style.borderColor = '#c53030'}
                   onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(197,48,48,0.4)'}
