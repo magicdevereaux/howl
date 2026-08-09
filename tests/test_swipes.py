@@ -518,3 +518,62 @@ def test_undo_restores_user_to_discover_queue(client, db, auth_headers, test_use
     # Back in discover after undo
     after = [u["id"] for u in client.get("/api/users/discover", headers=auth_headers).json()]
     assert other.id in after
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/swipes/last?swipe_id=  (GAPS #50)
+#
+# A client can arm "Undo" before checking its POST /api/swipes response. If
+# that POST failed, there is no new swipe row, so an id-less undo would delete
+# the *previous*, successful swipe (and cascade away its match) instead. The
+# optional `swipe_id` query param lets the client assert which swipe it means
+# to undo; a mismatch 409s and deletes nothing.
+# ---------------------------------------------------------------------------
+
+def test_undo_without_swipe_id_is_unchanged(client, db, auth_headers, test_user):
+    """Omitting swipe_id keeps the pre-#50 behaviour exactly."""
+    other = _make_user(db, email="undo_no_id@howl.app", animal="fox")
+    swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Swipe).filter(Swipe.id == swipe.id).first() is None
+
+
+def test_undo_with_matching_swipe_id_deletes_as_before(client, db, auth_headers, test_user):
+    other = _make_user(db, email="undo_match_id@howl.app", animal="owl")
+    swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+
+    res = client.delete(f"/api/swipes/last?swipe_id={swipe.id}", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Swipe).filter(Swipe.id == swipe.id).first() is None
+
+
+def test_undo_with_stale_swipe_id_returns_409_and_deletes_nothing(client, db, auth_headers, test_user):
+    """The case #50 exists for: a failed POST armed Undo for a swipe id that
+    never landed, and the user's real most-recent swipe (possibly matched) is
+    a different row. The stale id must not delete it."""
+    other = _make_user(db, email="undo_stale_id@howl.app", animal="bear")
+    real_last = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+    never_landed_id = real_last.id + 9999
+
+    res = client.delete(f"/api/swipes/last?swipe_id={never_landed_id}", headers=auth_headers)
+    assert res.status_code == 409
+    # Nothing was deleted
+    assert db.query(Swipe).filter(Swipe.id == real_last.id).first() is not None
+
+
+def test_undo_stale_swipe_id_does_not_delete_the_match(client, db, auth_headers, test_user):
+    """The scenario from the orchestrator's brief: a stale id must not delete a
+    real match and cascade away its messages."""
+    other = _make_user(db, email="undo_stale_match@howl.app", animal="wolf")
+    real_last = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+    _make_swipe(db, user_id=other.id, target_user_id=test_user.id, direction=SwipeDirection.like)
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+
+    res = client.delete(f"/api/swipes/last?swipe_id={real_last.id + 1}", headers=auth_headers)
+    assert res.status_code == 409
+    assert db.query(Match).filter(Match.id == match.id).first() is not None
+    assert db.query(Swipe).filter(Swipe.id == real_last.id).first() is not None
