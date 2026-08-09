@@ -1,7 +1,7 @@
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import Enum, ForeignKey, Integer, Text, func
+from sqlalchemy import Enum, ForeignKey, Index, Integer, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -32,9 +32,37 @@ class Report(Base):
     agree with the stated intent.  Account deletion still removes all of the
     user's own personal data (users row, swipes, matches, messages); what is
     retained is only the fact that a report was filed and what it said.
+
+    GAPS #53: ``uq_reports_reporter_target_message`` dedups
+    ``(reporter_id, reported_user_id, message_id)`` so a duplicate submission
+    updates the existing row (see ``app/api/reports.py``) instead of inserting
+    a new one -- otherwise the endpoint is an unlimited moderation-queue-filling
+    oracle for probing message authorship one id at a time. It is an
+    *expression* index keyed on ``COALESCE(message_id, -1)`` rather than a
+    plain unique constraint: ordinary SQL treats every NULL as distinct from
+    every other NULL, so a bare ``UNIQUE(reporter_id, reported_user_id,
+    message_id)`` would never catch two profile-level reports (``message_id``
+    NULL) against the same target -- exactly the case that needed catching.
+    ``-1`` is a safe sentinel because message ids are positive autoincrement
+    integers.
+
+    Deliberately does *not* constrain rows where ``reporter_id`` or
+    ``reported_user_id`` is NULL: those are already-anonymised historical
+    evidence (see the FK docstring above), not live submissions, and NULL is
+    still NULL there — two anonymised reports about unrelated incidents must
+    not be forced to collide just because both lost their identifying columns.
     """
 
     __tablename__ = "reports"
+    __table_args__ = (
+        Index(
+            "uq_reports_reporter_target_message",
+            "reporter_id",
+            "reported_user_id",
+            text("COALESCE(message_id, -1)"),
+            unique=True,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     reporter_id: Mapped[int | None] = mapped_column(

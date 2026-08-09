@@ -85,20 +85,22 @@ def test_report_notes_too_long_returns_422(client, db, auth_headers):
 
 
 def test_report_message_not_belonging_to_reported_user_returns_400(client, db, auth_headers, test_user):
-    """If message_id is provided but the message was sent by someone else, reject."""
-    other = _make_user(db, email="other3@howl.app")
-    third = _make_user(db, email="third@howl.app")
-    match = Match(user1_id=min(other.id, third.id), user2_id=max(other.id, third.id))
+    """If message_id is provided but the message was sent by someone else than
+    the reported user, reject -- with the reporter genuinely in the match, so
+    this exercises the sender-mismatch branch rather than the membership one."""
+    sender = _make_user(db, email="sender3@howl.app")
+    unrelated = _make_user(db, email="unrelated3@howl.app")
+    match = Match(user1_id=min(test_user.id, sender.id), user2_id=max(test_user.id, sender.id))
     db.add(match)
     db.commit()
     db.refresh(match)
-    msg = _make_message(db, match_id=match.id, sender_id=third.id)
+    msg = _make_message(db, match_id=match.id, sender_id=sender.id)
 
     res = client.post(
         "/api/reports",
         headers=auth_headers,
-        # reporting `other` but message was sent by `third`
-        json={"reported_user_id": other.id, "reason": "harassment", "message_id": msg.id},
+        # reporting `unrelated`, but the message was sent by `sender`
+        json={"reported_user_id": unrelated.id, "reason": "harassment", "message_id": msg.id},
     )
     assert res.status_code == 400
 
@@ -111,6 +113,79 @@ def test_report_nonexistent_message_returns_404(client, db, auth_headers):
         json={"reported_user_id": other.id, "reason": "harassment", "message_id": 99999},
     )
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Match membership (GAPS #53)
+#
+# The old check only compared msg.sender_id to reported_user_id -- it never
+# checked that the *reporter* is a participant in that message's match. That
+# made 404 (nonexistent id) / 400 (wrong author) / 200 (filed) a three-way
+# oracle for message authorship: any account could walk message_id = 1..N
+# against a victim and learn exactly which messages they wrote. A reporter who
+# isn't in the match must now get the same 404 a nonexistent id gets.
+# ---------------------------------------------------------------------------
+
+def test_report_message_from_a_match_you_are_not_in_returns_404(client, db, auth_headers):
+    """A real message, genuinely sent by the reported user -- but the reporter
+    is a bystander, not a participant. Must not resolve to 200 or 400."""
+    victim = _make_user(db, email="victim@howl.app")
+    other_party = _make_user(db, email="other_party@howl.app")
+    match = Match(user1_id=min(victim.id, other_party.id), user2_id=max(victim.id, other_party.id))
+    db.add(match)
+    db.commit()
+    db.refresh(match)
+    msg = _make_message(db, match_id=match.id, sender_id=victim.id)
+
+    res = client.post(
+        "/api/reports",
+        headers=auth_headers,  # test_user is not in this match at all
+        json={"reported_user_id": victim.id, "reason": "harassment", "message_id": msg.id},
+    )
+    assert res.status_code == 404
+
+
+def test_report_message_oracle_is_not_distinguishable(client, db, auth_headers):
+    """The whole point of #53: 'exists but not yours' and 'does not exist' must
+    be the same response, or the endpoint is still an oracle."""
+    victim = _make_user(db, email="victim2@howl.app")
+    other_party = _make_user(db, email="other_party2@howl.app")
+    match = Match(user1_id=min(victim.id, other_party.id), user2_id=max(victim.id, other_party.id))
+    db.add(match)
+    db.commit()
+    db.refresh(match)
+    real_msg = _make_message(db, match_id=match.id, sender_id=victim.id)
+
+    not_a_member_res = client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": victim.id, "reason": "harassment", "message_id": real_msg.id},
+    )
+    nonexistent_res = client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": victim.id, "reason": "harassment", "message_id": 999999},
+    )
+    assert not_a_member_res.status_code == nonexistent_res.status_code == 404
+    assert not_a_member_res.json() == nonexistent_res.json()
+
+
+def test_report_message_from_your_own_match_still_works(client, db, auth_headers, test_user):
+    """The fix must not break the legitimate case: reporting a message from a
+    match you are actually part of."""
+    other = _make_user(db, email="ownmatch@howl.app")
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+    db.refresh(match)
+    msg = _make_message(db, match_id=match.id, sender_id=other.id)
+
+    res = client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": other.id, "reason": "harassment", "message_id": msg.id},
+    )
+    assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -208,16 +283,143 @@ def test_report_without_notes_stores_null(client, db, auth_headers, test_user):
     assert report.notes is None
 
 
-def test_multiple_reports_allowed(client, db, auth_headers, test_user):
-    """Users can submit multiple reports (e.g. user + individual message)."""
-    other = _make_user(db, email="multi@howl.app")
+def test_reports_against_different_targets_are_not_deduped(client, db, auth_headers, test_user):
+    """Users can still report multiple distinct people."""
+    a = _make_user(db, email="multi_a@howl.app")
+    b = _make_user(db, email="multi_b@howl.app")
+    for target in (a, b):
+        res = client.post(
+            "/api/reports",
+            headers=auth_headers,
+            json={"reported_user_id": target.id, "reason": "harassment"},
+        )
+        assert res.status_code == 200
+    assert db.query(Report).filter(Report.reporter_id == test_user.id).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Dedup / upsert on (reporter_id, reported_user_id, message_id)  (GAPS #53)
+#
+# Repeating a report against the same target (and, if given, the same
+# message) updates the existing row rather than inserting a new one --
+# otherwise every probe attempt, successful or not, permanently grows the
+# moderation queue GAPS #24 made survive account deletion.
+# ---------------------------------------------------------------------------
+
+def test_duplicate_profile_report_updates_existing_row(client, db, auth_headers, test_user):
+    """Repeating a report with no message_id against the same target dedups."""
+    other = _make_user(db, email="dedup_profile@howl.app")
     for reason in ["fake_profile", "harassment"]:
-        client.post(
+        res = client.post(
             "/api/reports",
             headers=auth_headers,
             json={"reported_user_id": other.id, "reason": reason},
         )
-    assert db.query(Report).filter(Report.reporter_id == test_user.id).count() == 2
+        assert res.status_code == 200
+
+    reports = db.query(Report).filter(
+        Report.reporter_id == test_user.id, Report.reported_user_id == other.id
+    ).all()
+    assert len(reports) == 1
+    assert reports[0].reason == ReportReason.harassment  # the second call won
+
+
+def test_duplicate_message_report_updates_existing_row(client, db, auth_headers, test_user):
+    """Repeating a report citing the same message_id against the same target dedups."""
+    other = _make_user(db, email="dedup_message@howl.app")
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+    db.refresh(match)
+    msg = _make_message(db, match_id=match.id, sender_id=other.id)
+
+    for reason, notes in [("harassment", "first"), ("spam_scam", "second")]:
+        res = client.post(
+            "/api/reports",
+            headers=auth_headers,
+            json={
+                "reported_user_id": other.id,
+                "reason": reason,
+                "notes": notes,
+                "message_id": msg.id,
+            },
+        )
+        assert res.status_code == 200
+
+    reports = db.query(Report).filter(Report.message_id == msg.id).all()
+    assert len(reports) == 1
+    assert reports[0].reason == ReportReason.spam_scam
+    assert reports[0].notes == "second"
+
+
+def test_profile_report_and_message_report_against_same_target_are_distinct(
+    client, db, auth_headers, test_user,
+):
+    """message_id is part of the dedup key -- a profile-level report and a
+    message-level report against the same target are different rows."""
+    other = _make_user(db, email="dedup_distinct@howl.app")
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+    db.refresh(match)
+    msg = _make_message(db, match_id=match.id, sender_id=other.id)
+
+    client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": other.id, "reason": "harassment"},
+    )
+    client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": other.id, "reason": "spam_scam", "message_id": msg.id},
+    )
+
+    assert db.query(Report).filter(Report.reported_user_id == other.id).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (GAPS #53)
+#
+# tests/conftest.py keeps the limiter open by default (autouse
+# `_open_login_rate_limit` patches `check_rate_limit` to always allow, since
+# Redis is real and its keys repeat across tests/runs). Exercising the limiter
+# itself means re-patching it here, which the conftest docstring says takes
+# precedence because it runs after the fixture.
+# ---------------------------------------------------------------------------
+
+def test_report_is_rate_limited_per_account(client, db, auth_headers, test_user, monkeypatch):
+    from app.services.rate_limit import _LIMITS
+
+    email_limit = _LIMITS["report"].email_limit
+    assert email_limit is not None
+
+    counters: dict[str, int] = {}
+
+    def fake_check_rate_limit(key: str, limit: int, window: int = 900) -> tuple[bool, int]:
+        counters[key] = counters.get(key, 0) + 1
+        if counters[key] > limit:
+            return True, window
+        return False, 0
+
+    monkeypatch.setattr("app.services.rate_limit.check_rate_limit", fake_check_rate_limit)
+
+    other = _make_user(db, email="ratelimited@howl.app")
+    for _ in range(email_limit):
+        res = client.post(
+            "/api/reports",
+            headers=auth_headers,
+            json={"reported_user_id": other.id, "reason": "other"},
+        )
+        assert res.status_code == 200
+
+    res = client.post(
+        "/api/reports",
+        headers=auth_headers,
+        json={"reported_user_id": other.id, "reason": "other"},
+    )
+    assert res.status_code == 429
+    assert "Retry-After" in res.headers
 
 
 # ---------------------------------------------------------------------------
