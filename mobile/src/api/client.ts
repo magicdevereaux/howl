@@ -63,7 +63,19 @@ export interface ApiFailure {
   code?: string;
 }
 
-export type ApiResponse<T> = { data: T; ok: true } | ApiFailure;
+/**
+ * `headers` carries the response headers on success.
+ *
+ * Added for discover's cursor pagination (GAPS-ROUND-2 #58), which keeps its
+ * page metadata in `X-Has-More` / `X-Next-Cursor` rather than wrapping the
+ * body in an envelope — so an already-installed client still receives the bare
+ * array it expects. Reading that metadata is impossible if the transport layer
+ * throws the headers away.
+ *
+ * Optional, so every existing call site that only destructures `ok`/`data`
+ * keeps compiling untouched.
+ */
+export type ApiResponse<T> = { data: T; ok: true; headers?: Headers } | ApiFailure;
 
 /**
  * Synthetic statuses for failures that never reached an HTTP response. Real
@@ -353,11 +365,11 @@ export async function api<T = unknown>(
     return { ok: false, error, status: res.status, code };
   }
 
-  if (res.status === 204) return { ok: true, data: null as T };
+  if (res.status === 204) return { ok: true, data: null as T, headers: res.headers };
 
   const body = await readJson(res);
   if (!body.ok) {
     return { ok: false, error: BAD_PAYLOAD_MESSAGE, status: STATUS_BAD_PAYLOAD };
   }
-  return { ok: true, data: body.value as T };
+  return { ok: true, data: body.value as T, headers: res.headers };
 }

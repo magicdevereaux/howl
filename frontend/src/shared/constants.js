@@ -68,3 +68,10 @@ export const FALLBACK_ANIMAL_EMOJI = '🐾';
 // mobile 2500ms; unified on the shorter value so the two clients recover from
 // a network glitch at the same speed.
 export const WS_RECONNECT_DELAY_MS = 2500;
+
+// Fetch the next page of discover profiles once the deck is this short.
+// Discover is cursor-paginated (GAPS-ROUND-2 #58, default page 30), so without
+// a top-up the deck simply runs out mid-session and the user has to navigate
+// away and back. Deliberately well above zero: a swipe should never wait on a
+// request, and the request has a whole page of swipes to complete in.
+export const DISCOVER_LOW_WATER_MARK = 8;

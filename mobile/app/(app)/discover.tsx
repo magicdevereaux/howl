@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -21,6 +21,7 @@ import Animated, {
 
 import { api } from '../../src/api/client';
 import { useAuth } from '../../src/auth/AuthContext';
+import { DISCOVER_LOW_WATER_MARK } from '../../src/shared/constants';
 import { colors as C } from '../../src/theme';
 import { animalEmoji, capitalise, resolveAvatarUrl } from '../../src/utils/avatar';
 
@@ -79,13 +80,59 @@ export default function DiscoverScreen() {
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
-  const fetchUsers = useCallback(async () => {
-    setLoading(true);
-    setSwipeError(null);
-    const res = await api<DiscoverUser[]>('/api/users/discover');
-    setLoading(false);
-    if (res.ok) setUsers(res.data);
+  // Discover is cursor-paginated (GAPS-ROUND-2 #58): it used to return every
+  // eligible user in one response, ~1000 objects carrying bio and
+  // avatar_description. The page arrives as a bare array exactly as before and
+  // the metadata rides in headers, so this had to start reading them.
+  //
+  // A cursor rather than an offset because swiping removes rows from the very
+  // set being paged — offset arithmetic would skip profiles the user never saw.
+  const cursorRef = useRef<string | null>(null);
+  const hasMoreRef = useRef(false);
+  const fetchingRef = useRef(false);
+
+  const fetchPage = useCallback(async (append: boolean) => {
+    // One request at a time: the deck tops up on a low-water mark, and a burst
+    // of fast swipes would otherwise fire several identical requests.
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+
+    const cursor = append ? cursorRef.current : null;
+    if (!append) {
+      setLoading(true);
+      setSwipeError(null);
+    }
+
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const res = await api<DiscoverUser[]>(`/api/users/discover${query}`);
+
+    fetchingRef.current = false;
+    if (!append) setLoading(false);
+    if (!res.ok) return;
+
+    hasMoreRef.current = res.headers?.get('X-Has-More') === 'true';
+    cursorRef.current = res.headers?.get('X-Next-Cursor') ?? null;
+    setUsers((prev) => {
+      if (!append) return res.data;
+      // Append by id: a profile already in the deck must not appear twice even
+      // if two pages overlap.
+      const seen = new Set(prev.map((u) => u.id));
+      return [...prev, ...res.data.filter((u) => !seen.has(u.id))];
+    });
   }, []);
+
+  const fetchUsers = useCallback(async () => {
+    cursorRef.current = null;
+    hasMoreRef.current = false;
+    await fetchPage(false);
+  }, [fetchPage]);
+
+  /** Top up before the deck runs dry, so a swipe never waits on a request. */
+  const maybeLoadMore = useCallback((remaining: number) => {
+    if (remaining > DISCOVER_LOW_WATER_MARK) return;
+    if (!hasMoreRef.current) return;
+    void fetchPage(true);
+  }, [fetchPage]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
@@ -101,7 +148,9 @@ export default function DiscoverScreen() {
     let swipedUser: DiscoverUser | null = null;
     setUsers((prev) => {
       swipedUser = prev[0] ?? null;
-      return prev.slice(1);
+      const next = prev.slice(1);
+      maybeLoadMore(next.length);
+      return next;
     });
     translateX.value = 0;
     translateY.value = 0;
@@ -126,8 +175,9 @@ export default function DiscoverScreen() {
     else if (swipedUser) setLastSwiped(swipedUser); // only offer undo when no match
     // translateX/translateY are Reanimated shared values with stable
     // identity — adding them doesn't change when onSwipe is recreated, but
-    // keeps the deps list exhaustive.
-  }, [translateX, translateY]);
+    // keeps the deps list exhaustive. `maybeLoadMore` is stable too (its own
+    // deps are a stable callback), so this stays a one-time creation.
+  }, [translateX, translateY, maybeLoadMore]);
 
   const handleUndo = useCallback(async () => {
     if (!lastSwiped || undoing) return;

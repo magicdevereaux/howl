@@ -8,7 +8,7 @@ import {
   reportVerificationRequired,
   WS_TERMINAL_CLOSE_CODES,
 } from './api/client';
-import { WS_RECONNECT_DELAY_MS } from './shared/constants';
+import { DISCOVER_LOW_WATER_MARK, WS_RECONNECT_DELAY_MS } from './shared/constants';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
 import { ChatProvider } from './contexts/ChatContext';
 import { DiscoverProvider } from './contexts/DiscoverContext';
@@ -242,27 +242,72 @@ export default function HowlApp() {
     }
   }, []);
 
-  const fetchDiscoverUsers = useCallback(async () => {
-    setDiscoverLoading(true);
-    setDiscoverError('');
-    try {
-      const res = await apiFetch(`/api/users/discover`, {
+  // Discover is paginated as of GAPS-ROUND-2 #58. It used to return *every*
+  // eligible user in one response — ~1000 objects carrying bio and
+  // avatar_description, a few hundred KB, re-downloaded on every visit to the
+  // deck and growing with the user table forever.
+  //
+  // The contract: `?limit=&cursor=`, with the page arriving as a bare JSON
+  // array exactly as before and the pagination riding in headers
+  // (`X-Has-More`, `X-Next-Cursor`). A cursor rather than an offset because
+  // swiping removes rows from the very set being paged, which breaks offset
+  // arithmetic — page 2 would skip profiles the user never saw.
+  const discoverCursorRef = useRef(null);
+  const discoverHasMoreRef = useRef(false);
+  const discoverFetchingRef = useRef(false);
 
-      });
+  const fetchDiscoverPage = useCallback(async ({ append }) => {
+    // One request at a time. The deck calls this on a low-water mark, and a
+    // burst of fast swipes would otherwise fire several identical requests.
+    if (discoverFetchingRef.current) return;
+    discoverFetchingRef.current = true;
+
+    const cursor = append ? discoverCursorRef.current : null;
+    if (!append) {
+      setDiscoverLoading(true);
+      setDiscoverError('');
+    }
+
+    try {
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const res = await apiFetch(`/api/users/discover${query}`);
       if (res.ok) {
-        setDiscoverUsers(await res.json());
+        const page = await res.json();
+        discoverHasMoreRef.current = res.headers.get('X-Has-More') === 'true';
+        discoverCursorRef.current = res.headers.get('X-Next-Cursor');
+        setDiscoverUsers((prev) => {
+          if (!append) return page;
+          // Append by id. A profile already in the deck must not appear twice
+          // even if the two pages overlap.
+          const seen = new Set(prev.map((u) => u.id));
+          return [...prev, ...page.filter((u) => !seen.has(u.id))];
+        });
       } else if (res.status === 401) {
         setUser(null);
         setError('Session expired. Please sign in again.');
-      } else {
+      } else if (!append) {
         setDiscoverError('Failed to load users');
       }
     } catch {
-      setDiscoverError('Network error');
+      if (!append) setDiscoverError('Network error');
     } finally {
-      setDiscoverLoading(false);
+      discoverFetchingRef.current = false;
+      if (!append) setDiscoverLoading(false);
     }
   }, []);
+
+  const fetchDiscoverUsers = useCallback(async () => {
+    discoverCursorRef.current = null;
+    discoverHasMoreRef.current = false;
+    await fetchDiscoverPage({ append: false });
+  }, [fetchDiscoverPage]);
+
+  /** Top up the deck before it runs dry, so swiping never stalls on a fetch. */
+  const maybeLoadMoreDiscover = useCallback((remaining) => {
+    if (remaining > DISCOVER_LOW_WATER_MARK) return;
+    if (!discoverHasMoreRef.current) return;
+    void fetchDiscoverPage({ append: true });
+  }, [fetchDiscoverPage]);
 
   const fetchMatches = useCallback(async () => {
     setMatchesLoading(true);
@@ -1018,7 +1063,14 @@ export default function HowlApp() {
       // whichever profile now sits at index 0 rather than the one the user
       // actually swiped on.
       if (res.ok) {
-        setDiscoverUsers(prev => prev.filter(u => u.id !== targetUserId));
+        setDiscoverUsers(prev => {
+          const next = prev.filter(u => u.id !== targetUserId);
+          // Top up before the deck runs dry (GAPS-ROUND-2 #58). Reading the
+          // length here rather than from an effect keeps it in step with the
+          // authoritative post-swipe deck, with no render in between.
+          maybeLoadMoreDiscover(next.length);
+          return next;
+        });
         setCanUndo(true);
         if (data.matched) {
           setMatchPopup(data.match);
