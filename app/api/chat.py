@@ -53,6 +53,11 @@ _TYPING_WINDOW_S = 2.0
 # task. Past this, treat the socket as dead and drop it.
 _SEND_TIMEOUT_S = 5.0
 
+# Close code sent to a socket the server gives up writing to. 1011
+# ("internal error") is a normal close as far as the browser is concerned, so
+# both clients' existing onclose/onerror reconnect paths fire on it.
+_WS_CLOSE_DROPPED = 1011
+
 
 def _message_rate_limit_key(user_id: int, match_id: int) -> str:
     """Redis key for the send limit. Scoped per (sender, match), as the
@@ -105,6 +110,10 @@ class ConnectionManager:
     def __init__(self, pubsub: ChatPubSub | None = None) -> None:
         # match_id → {WebSocket: (user_id, display_name)}
         self._conns: dict[int, dict[WebSocket, tuple[int, str | None]]] = {}
+        # Strong references to in-flight close tasks. asyncio only holds a weak
+        # reference to a running task, so without this the GC is free to cancel
+        # a close mid-handshake and we are back to a socket that never learns.
+        self._close_tasks: set[asyncio.Task] = set()
         self._pubsub = pubsub if pubsub is not None else ChatPubSub()
         self._pubsub.set_handler(self._on_remote_event)
 
@@ -130,6 +139,45 @@ class ConnectionManager:
             await self._pubsub.unsubscribe(match_id)
         if entry is not None:
             logger.debug("ws: user %d disconnected from match %d", entry[0], match_id)
+
+    # ── dropping a socket the server has given up on ────────────────────────
+
+    def _close_soon(self, ws: WebSocket, code: int) -> None:
+        """Close *ws* out of band, without blocking the caller.
+
+        Deliberately not awaited: the reason we are closing is usually that the
+        socket is unresponsive, so awaiting the close handshake would reintroduce
+        exactly the stall that dropping it was meant to avoid. The close is
+        bounded by the same timeout and every failure is swallowed — a socket we
+        have already written off cannot fail any harder.
+        """
+        async def _close() -> None:
+            try:
+                await asyncio.wait_for(ws.close(code=code), timeout=_SEND_TIMEOUT_S)
+            except Exception:
+                pass  # already gone, or gone unresponsive — nothing left to do
+
+        task = asyncio.create_task(_close())
+        self._close_tasks.add(task)
+        task.add_done_callback(self._close_tasks.discard)
+
+    async def _drop(self, match_id: int, ws: WebSocket) -> None:
+        """Evict a socket we could not write to, and tell the client.
+
+        Unregistering alone leaves the TCP connection open, so the client's
+        onclose/onerror never fires, its reconnect logic never runs, and it sits
+        in a chat that looks connected while receiving nothing for the rest of
+        the session. Closing turns a silent black hole into the reconnect the
+        client already knows how to do.
+
+        Pruning goes through disconnect() rather than mutating _conns directly so
+        that pub/sub subscribe/unsubscribe bookkeeping stays owned by one
+        function. Otherwise _conns[match_id] can be left as an empty-but-present
+        dict, and connect()'s `match_id not in self._conns` test then skips the
+        subscribe for the next socket.
+        """
+        self._close_soon(ws, _WS_CLOSE_DROPPED)
+        await self.disconnect(match_id, ws)
 
     # ── outbound: local delivery + cross-replica publish ────────────────────
 
@@ -193,7 +241,7 @@ class ConnectionManager:
             if not await self._send(ws, payload):
                 dead.append(ws)
         for ws in dead:
-            conns.pop(ws, None)
+            await self._drop(match_id, ws)
 
     async def _deliver_typing(self, match_id: int, sender_user_id: int, display: str) -> None:
         conns = self._conns.get(match_id)
@@ -206,7 +254,7 @@ class ConnectionManager:
             if not await self._send(ws, {"type": "typing", "user_name": display}):
                 dead.append(ws)
         for ws in dead:
-            conns.pop(ws, None)
+            await self._drop(match_id, ws)
 
     async def _send(self, ws: WebSocket, payload: dict) -> bool:
         """Write one frame. Returns False if the socket should be dropped."""
