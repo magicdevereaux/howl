@@ -198,6 +198,51 @@ def test_changing_to_the_same_address_is_rejected(client, db, owner, owner_heade
     assert owner.is_email_verified is True
 
 
+def test_a_locked_out_account_can_still_rescue_itself(client, db, _capture_emails):
+    """The scenario this endpoint exists for, end to end.
+
+    An account that typo'd its address at signup, never verified, and is now past
+    the 72h grace window. Every outbound action is 403ing and the link it needs
+    is going to an address that does not exist. If `require_verified_email` were
+    ever attached to this route, that user would be unrecoverable — which is the
+    state the app was in before this endpoint, and the reason to pin it.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    stuck = User(
+        email="wrogn@howl.app",
+        password_hash=hash_password(PASSWORD),
+        avatar_status=AvatarStatus.pending,
+        is_email_verified=False,
+        created_at=datetime.now(UTC) - timedelta(days=30),
+    )
+    db.add(stuck)
+    db.commit()
+    headers = {"Cookie": f"access_token={create_access_token(stuck.id)}"}
+
+    # Precondition: they really are locked out of outbound actions.
+    blocked = client.post("/api/avatar/regenerate", headers=headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "email_verification_required"
+
+    res = client.post(
+        "/api/auth/change-email",
+        json={"new_email": "wrong@howl.app", "current_password": PASSWORD},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+
+    db.refresh(stuck)
+    client.post("/api/auth/verify-email", json={"token": stuck.email_verification_token})
+    db.refresh(stuck)
+    assert stuck.is_email_verified is True
+
+    # And the outbound action they were locked out of now works again.
+    stuck.bio = "Back in business."
+    db.commit()
+    assert client.post("/api/avatar/regenerate", headers=headers).status_code == 200
+
+
 def test_the_password_is_not_disturbed(client, db, owner, owner_headers):
     client.post(
         "/api/auth/change-email",
