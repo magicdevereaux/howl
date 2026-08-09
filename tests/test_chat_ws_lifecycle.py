@@ -386,3 +386,101 @@ def test_typing_budget_survives_one_socket_of_a_pair_closing(client, db, test_us
         assert (match_id, uid) in manager._typing_budgets, "one tab closing reset the window"
     # Last socket gone: the state dies with the user's presence, so nothing leaks.
     assert (match_id, uid) not in manager._typing_budgets
+
+
+# ---------------------------------------------------------------------------
+# #60 — server-side revocation of a live socket
+# ---------------------------------------------------------------------------
+
+
+def test_unmatch_closes_the_other_partys_socket(client, db, test_user, _ws_db):
+    """Unmatching deleted the match and cascaded the messages while broadcasting
+    nothing and closing nothing: the other party's client showed the
+    conversation as normal and got a bare 404 on its next send."""
+    other = _make_user(db, email="ws_unmatch@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, theirs, mine = m.id, _cookie(other), _cookie(test_user)
+
+    with client.websocket_connect(_ws_url(match_id), headers=theirs) as ws:
+        assert client.delete(f"/api/matches/{match_id}", headers=mine).status_code == 204
+        notice = _recv(ws)
+        closed = _recv(ws)
+
+    assert notice == (
+        "frame",
+        {"type": "match_closed", "match_id": match_id, "reason": "unmatched"},
+    )
+    assert closed == ("close", 4003)
+
+
+def test_block_closes_the_blocked_users_socket(client, db, test_user, _ws_db):
+    other = _make_user(db, email="ws_block@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, other_id, theirs, mine = m.id, other.id, _cookie(other), _cookie(test_user)
+
+    with client.websocket_connect(_ws_url(match_id), headers=theirs) as ws:
+        res = client.post("/api/blocks", headers=mine, json={"blocked_id": other_id})
+        assert res.status_code == 201
+        notice = _recv(ws)
+        closed = _recv(ws)
+
+    assert notice == (
+        "frame",
+        {"type": "match_closed", "match_id": match_id, "reason": "blocked"},
+    )
+    assert closed == ("close", 4003)
+    assert match_id not in manager._conns
+
+
+async def test_match_closed_from_another_replica_closes_local_sockets():
+    """A block served by replica A must evict the socket living on replica B."""
+    mgr = ConnectionManager()
+    ws = _RecordingSocket()
+    mgr._conns[77] = {ws: (7, "Wolf")}  # type: ignore[dict-item]
+
+    await mgr._on_remote_event(77, {"kind": "match_closed", "reason": "blocked"})
+
+    assert ws.sent == [{"type": "match_closed", "match_id": 77, "reason": "blocked"}]
+    assert 77 not in mgr._conns
+    # The close is fire-and-forget by design (see _close_soon), so give its task
+    # a turn rather than assuming it ran inline.
+    for _ in range(50):
+        if ws.close_code is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert ws.close_code == 4003
+
+
+def test_expired_token_closes_the_socket_with_4001(client, db, test_user, _ws_db):
+    """A 30-minute access token used to authorise a socket that lived for hours,
+    so a password reset revoked every refresh token while a live socket kept
+    reading the victim's incoming messages."""
+    from datetime import UTC, datetime, timedelta
+
+    from jose import jwt
+
+    from app.config import settings
+
+    other = _make_user(db, email="ws_exp@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id = m.id
+    token = jwt.encode(
+        {"sub": str(test_user.id), "exp": datetime.now(UTC) + timedelta(seconds=1)},
+        settings.secret_key,
+        algorithm="HS256",
+    )
+
+    with client.websocket_connect(f"{_ws_url(match_id)}?token={token}") as ws:
+        got = _recv(ws)  # blocks until the token expires
+
+    assert got == ("close", 4001)
+
+
+def test_a_live_token_is_not_revoked_early(client, db, test_user, _ws_db):
+    """The watchdog must not close sockets whose token is still good."""
+    other = _make_user(db, email="ws_exp_ok@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id = m.id
+
+    with client.websocket_connect(_ws_url(match_id), headers=_cookie(test_user)) as ws:
+        assert _recv(ws, timeout=1.0) == ("timeout", None)

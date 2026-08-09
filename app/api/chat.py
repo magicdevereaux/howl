@@ -15,10 +15,11 @@ from fastapi import (
 )
 
 # Query kept for before_id pagination param
-from jose import JWTError
+from jose import JWTError, jwt
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import SessionLocal, get_db
 from app.dependencies import (
     WS_EMAIL_VERIFICATION_REQUIRED,
@@ -31,7 +32,7 @@ from app.models.message import Message
 from app.models.swipe import Swipe
 from app.models.user import User
 from app.schemas.chat import MessageIn, MessageOut, MessagePageOut, UnreadCountOut
-from app.security import decode_access_token
+from app.security import ALGORITHM, decode_access_token
 from app.services.pubsub import ChatPubSub
 from app.services.rate_limit import check_rate_limit
 from app.services.task_queue import enqueue
@@ -72,6 +73,18 @@ _WS_CLOSE_DROPPED = 1011
 # sockets, so clients should treat it as "this tab lost the seat" and not retry
 # on a tight loop.
 _WS_CLOSE_REPLACED = 4004
+
+# Close code for a socket whose access has been revoked server-side: the match
+# was unmatched or blocked away underneath it. 4003 is what the connect-time
+# authorisation check already sends and what both clients already treat as
+# terminal ("retrying cannot help"), so reusing it lights up handling that
+# already exists rather than asking for new client code.
+_WS_CLOSE_REVOKED = 4003
+
+# Close code for a socket whose access token has expired. 4001 is what the
+# connect path already sends for a bad token, and the mobile hook recovers from
+# it by calling refreshAccessToken and reconnecting.
+_WS_CLOSE_REAUTH = 4001
 
 
 def _message_rate_limit_key(user_id: int, match_id: int) -> str:
@@ -303,6 +316,38 @@ class ConnectionManager:
         await self._deliver_verbatim(match_id, event)
         await self._pubsub.publish(match_id, {"kind": "read", "event": event})
 
+    async def close_match(self, match_id: int, reason: str) -> None:
+        """Evict every socket on *match_id*, on every replica.
+
+        Called when the conversation stops existing — unmatched or blocked. The
+        handler authenticates once at connect and then loops on `receive_text`
+        indefinitely, so without this nothing could evict a live socket: the
+        other party's client kept showing the conversation as normal and learned
+        about it only as a bare 404 on their next send.
+
+        Wire shape — one frame, then a close::
+
+            {"type": "match_closed", "match_id": 12, "reason": "unmatched"}
+
+        followed by close code 4003. `reason` is "unmatched" or "blocked".
+        """
+        await self._close_match_locally(match_id, reason)
+        await self._pubsub.publish(match_id, {"kind": "match_closed", "reason": reason})
+
+    async def _close_match_locally(self, match_id: int, reason: str) -> None:
+        conns = self._conns.get(match_id)
+        if not conns:
+            return
+        event = {"type": "match_closed", "match_id": match_id, "reason": reason}
+        for ws in list(conns):
+            # Best effort: the notice tells the client *why*, the close code is
+            # what actually stops it retrying. A socket too slow for the notice
+            # still gets closed.
+            await self._send(ws, event)
+            self._close_soon(ws, _WS_CLOSE_REVOKED)
+            await self.disconnect(match_id, ws)
+        logger.info("ws: closed every socket on match %d (%s)", match_id, reason)
+
     # ── inbound: events published by another replica ─────────────────────────
 
     async def _on_remote_event(self, match_id: int, payload: dict) -> None:
@@ -323,6 +368,11 @@ class ConnectionManager:
             event = payload.get("event")
             if isinstance(event, dict):
                 await self._deliver_verbatim(match_id, event)
+        elif kind == "match_closed":
+            reason = payload.get("reason")
+            await self._close_match_locally(
+                match_id, reason if isinstance(reason, str) else "closed"
+            )
 
     # ── local socket writes ──────────────────────────────────────────────────
 
@@ -428,6 +478,46 @@ def _mark_conversation_read(
     return int(high_water)
 
 
+def _token_expiry(token: str) -> float | None:
+    """Unix timestamp at which *token* stops being valid, or None if it says nothing."""
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    exp = payload.get("exp")
+    return float(exp) if isinstance(exp, int | float) else None
+
+
+def _revoke_at_token_expiry(ws: WebSocket, token: str) -> asyncio.Task | None:
+    """Close *ws* with 4001 when its access token expires.
+
+    The handler authenticates once and then parks on `receive_text` for as long
+    as the client keeps the socket open — access tokens last 30 minutes, sockets
+    last hours, and nothing re-checked `exp`. A password reset revokes every
+    RefreshToken (#6), but an attacker holding a live socket kept reading the
+    victim's incoming messages in real time regardless.
+
+    One timer rather than a poll, and deliberately *not* wrapped around
+    `receive_text`: cancelling a receive mid-read can lose a frame, whereas a
+    separate task touches only the write direction.
+    """
+    expires_at = _token_expiry(token)
+    if expires_at is None:
+        return None
+
+    async def _revoke() -> None:
+        delay = expires_at - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        logger.info("ws: closing socket whose access token expired")
+        try:
+            await ws.close(code=_WS_CLOSE_REAUTH)
+        except Exception:
+            pass  # the client got there first
+
+    return asyncio.create_task(_revoke())
+
+
 def _require_match_member(match_id: int, user_id: int, db: Session) -> Match:
     """Return the Match or raise 404/403."""
     match = db.get(Match, match_id)
@@ -531,6 +621,7 @@ async def chat_websocket(
 
     # ── Register and handle incoming events ──────────────────────────────────
     await manager.connect(match_id, user_id, user.name, ws)
+    expiry_guard = _revoke_at_token_expiry(ws, token)
     try:
         while True:
             try:
@@ -556,12 +647,15 @@ async def chat_websocket(
             except Exception:
                 pass  # malformed input — keep the connection alive
     finally:
+        if expiry_guard is not None:
+            expiry_guard.cancel()
         await manager.disconnect(match_id, ws)
 
 
 @router.delete("/{match_id}", status_code=204)
 def unmatch(
     match_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
@@ -569,7 +663,9 @@ def unmatch(
     Remove a match and its conversation without blocking either user.
 
     Deletes the match (messages cascade), then removes both swipe records so
-    both parties can rediscover each other organically.
+    both parties can rediscover each other organically, and closes any live
+    WebSocket on the match so the other party's client learns immediately
+    instead of on its next send.
     """
     match = _require_match_member(match_id, current_user.id, db)
     other_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
@@ -584,6 +680,7 @@ def unmatch(
 
     db.commit()
     logger.info("chat: user %d unmatched match %d", current_user.id, match_id)
+    background_tasks.add_task(manager.close_match, match_id, "unmatched")
 
 
 @router.delete("/{match_id}/messages/{message_id}", response_model=MessageOut, status_code=200)
