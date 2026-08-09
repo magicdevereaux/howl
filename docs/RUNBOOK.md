@@ -94,9 +94,12 @@ celery -A app.celery_app beat --loglevel=info
 ## Diagnosing the failures this system produces
 
 **Avatars stuck on `pending`**
-Check the worker is running first — it's the usual answer. Then check `avatar_status_updated_at`; the
-clients treat >2 minutes as stale. `ANTHROPIC_API_KEY` failures retry 3× then mark `failed`; a JSON
-parse failure does **not** retry and fails immediately.
+Check the worker is running first — it's the usual answer. As of GAPS #55, specifically check the
+worker consuming the default `celery` queue (`generate_avatar` no longer shares a queue with
+`process_bot_responses`) — a deploy that only brought up the `bot_response` worker service will show
+this exact symptom. Then check `avatar_status_updated_at`; the clients treat >2 minutes as stale.
+`ANTHROPIC_API_KEY` failures retry 3× then mark `failed`; a JSON parse or shape-validation failure
+(GAPS #38) does **not** retry and fails immediately.
 
 **Avatars are all emoji placeholders**
 Either `OPENAI_API_KEY` is unset (intended degraded mode) or DALL·E failed — the task marks the avatar
@@ -107,26 +110,38 @@ The `R2_*` vars aren't set, so images went to ephemeral `static/avatars/`. There
 affected users must regenerate.
 
 **Real-time chat works for some users, not others**
-More than one web replica is running. `ConnectionManager` is an in-process dict — a sender and
-recipient on different processes never see each other's events. Scale to one replica until Redis
-pub/sub fan-out exists.
+Multiple web replicas are no longer a reason this happens — `ChatPubSub` (`app/services/pubsub.py`)
+fans events out across replicas over Redis now, so this diagnosis is retired. If it recurs, check Redis
+first: pub/sub **fails open to local-only delivery** if Redis is unreachable, which reproduces exactly
+this symptom (sender and recipient on different replicas stop seeing each other's events) as a
+degraded-but-intentional mode, not a bug. `GET /api/matches/{id}/messages` is still the source of truth
+a client can fall back to — the message itself was never lost, only the live push.
 
 **Nobody receives password reset or verification emails**
 There is no email provider. `app/services/email.py` prints to stdout. Reset tokens are in the log
 stream — treat those logs as secrets.
 
 **Bots stopped replying**
-Beat isn't running, or a batch is failing repeatedly: a truncated or malformed Claude response discards
-all 10 conversations in the batch and the same batch is retried on the next tick, forever, at cost.
-Grep the worker log for `warning` from `bot_response`.
+Beat isn't running, or the `bot_response` queue has no worker consuming it (GAPS #55 — check this
+before assuming a Claude-side failure), or a batch is failing repeatedly: a truncated or malformed
+Claude response discards all 10 conversations in the batch and the same batch is retried on the next
+tick, forever, at cost. Grep the `bot_response`-queue worker's log for `warning` from `bot_response`.
 
 **Login brute-force protection isn't working**
-It fails open on any Redis error by design. Also: `/api/mobile/auth/login` has no rate limiting at all,
-and the IP bucket trusts a client-supplied `X-Forwarded-For`.
+It fails open on any Redis error by design — check Redis first. `/api/mobile/auth/login` shares
+`enforce_rate_limit` with the web login route via `app/services/auth_service.py`, so "mobile has no
+rate limiting" is no longer a valid diagnosis. The IP bucket does **not** trust `X-Forwarded-For`
+naively either — `client_ip()` reads the Nth entry from the right, where N is `TRUSTED_PROXY_COUNT`
+(default 1). If it's locking out real users, the likelier cause now is a proxy-count mismatch: check
+how many reverse proxies actually sit in front of Railway against `TRUSTED_PROXY_COUNT` (see above) —
+too low and the parsed "client" IP is a proxy's own shared egress address, too high and it's an
+attacker-controlled `X-Forwarded-For` entry that never should have been trusted.
 
-**A 500 on `POST /api/auth/refresh`**
-The user was deleted but the refresh row survived; `AuthOut` validation fails on `None`. Should be a
-401.
+**A 500 on `POST /api/auth/refresh` — no longer reproduces**
+`rotate_access_token` (`app/services/auth_service.py:133-156`) now explicitly checks for a refresh
+row whose user was deleted and raises the same 401 as a missing/revoked/expired token, rather than
+letting `AuthOut` validation fail on `None`. Kept here in case it regresses: the fix is that
+`user is None` must raise before constructing the response, not after.
 
 ## Database operations
 
