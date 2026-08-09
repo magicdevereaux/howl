@@ -110,6 +110,17 @@ def test_seed_bots_are_flagged_bot_and_email_verified(seed_db):
     assert all(u.is_email_verified is True for u in rows)
 
 
+def test_seed_bots_have_email_notifications_disabled(seed_db):
+    """GAPS-ROUND-2 #44: bots' addresses (demo1@howl.app…demo1000@howl.app)
+    have no mailbox behind them. email_notifications defaults to True on
+    User, so the seed must override it explicitly or wiring an email
+    provider immediately hard-bounces the entire bot population."""
+    seed_mod.seed()
+    rows = _demo_users(seed_db)
+    assert rows
+    assert all(u.email_notifications is False for u in rows)
+
+
 def test_seed_avatar_is_ready_with_no_url(seed_db):
     """Bots ship with pre-written avatar data, never a real generated image —
     the whole point is zero Celery/OpenAI dependency for seeding."""

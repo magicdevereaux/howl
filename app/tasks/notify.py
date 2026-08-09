@@ -205,6 +205,20 @@ def notify_new_message(
             )
             return
 
+        if recipient.is_bot:
+            # Bots are ordinary `users` rows with email_notifications defaulting to
+            # True, and their addresses (demo1@howl.app … demo1000@howl.app, per
+            # scripts/seed_demo_users.py) have no mailbox behind them. A real user
+            # messaging a bot must never turn into a real send to a nonexistent
+            # address at our own sending domain — see docs/GAPS-ROUND-2.md #44.
+            # This also covers push for free, though bots hold no push tokens
+            # anyway so that path was already inert.
+            logger.debug(
+                "notify_new_message: recipient %d is a bot — skipping notification",
+                recipient_id,
+            )
+            return
+
         cutoff = datetime.now(UTC) - timedelta(minutes=_ACTIVITY_WINDOW_MINUTES)
 
         recently_active = (

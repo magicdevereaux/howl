@@ -138,6 +138,33 @@ def test_skips_when_missing_recipient(patched_db, monkeypatch):
     assert sent == []
 
 
+def test_skips_when_recipient_is_bot(patched_db, monkeypatch):
+    """GAPS-ROUND-2 #44: bots are seeded with addresses like demo1@howl.app
+    that have no mailbox behind them. A real user's message to a bot must
+    never trigger a real send to a nonexistent address at our own domain —
+    this must be skipped regardless of email_notifications (which defaults
+    to True and scripts/seed_demo_users.py did not override it before this
+    fix), and regardless of activity, since the check has to happen before
+    any of that machinery runs.
+    """
+    db = patched_db
+    sender = _make_user(db, email="realuser@howl.app", name="Alex", animal="wolf")
+    bot = _make_user(db, email="demo1@howl.app", is_bot=True)
+    m = _make_match(db, sender, bot)
+
+    email_sent = []
+    monkeypatch.setattr(
+        "app.tasks.notify.send_message_notification", lambda **kw: email_sent.append(kw)
+    )
+    pushes = []
+    monkeypatch.setattr("app.tasks.notify.send_push_notifications", _record_push(pushes))
+
+    notify_new_message(m.id, bot.id, sender.id)
+
+    assert email_sent == []
+    assert pushes == []
+
+
 # ---------------------------------------------------------------------------
 # Task: send conditions
 # ---------------------------------------------------------------------------
