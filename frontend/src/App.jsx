@@ -17,11 +17,12 @@ import { ReportProvider } from './contexts/ReportContext';
 import { SessionProvider } from './contexts/SessionContext';
 import DiscoverView from './components/DiscoverView';
 import LegalPage from './components/LegalPage';
+import ForgotPasswordView from './components/ForgotPasswordView';
 import LoginView from './components/LoginView';
 import MatchesView from './components/MatchesView';
-import PasswordReset from './components/PasswordReset';
 import ProfileView from './components/ProfileView';
 import RegisterView from './components/RegisterView';
+import ResetPasswordView from './components/ResetPasswordView';
 import Splash from './components/Splash';
 import ChatRoute from './routes/ChatRoute';
 import RequireAuth from './routes/RequireAuth';
@@ -139,13 +140,11 @@ export default function HowlApp() {
   // opens it.
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotDone, setForgotDone] = useState(false);
-  const [resetToken, setResetToken] = useState(urlTokens.reset);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [resetDone, setResetDone] = useState(false);
-  const [resetError, setResetError] = useState('');
+  // The reset token arrives in the URL and is handed to ResetPasswordView as a
+  // prop. The password fields, the "sent" flags and the per-screen errors that
+  // used to live here are gone: they were three other screens' form contents
+  // being held on the root component so that a fourth could clear them.
+  const resetToken = urlTokens.reset;
 
   // Derived state — must be declared before any useEffect that references them,
   // because const is in the TDZ until its declaration is reached. Rollup's
@@ -539,8 +538,15 @@ export default function HowlApp() {
     })();
   }, [urlTokens]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  /**
+   * Returns an error string, or null on success.
+   *
+   * Takes the credentials as arguments rather than reading `email`/`password`
+   * off App: the login form owns its own fields now. `setError('')` still
+   * clears the *session* error ("Session expired. Please sign in again."),
+   * which is the only error App is still entitled to have an opinion about.
+   */
+  const handleLogin = async (email, password) => {
     setError('');
     setLoading(true);
     try {
@@ -561,15 +567,17 @@ export default function HowlApp() {
         navigate(routerLocation.state?.from || PATHS.profile, { replace: true });
         fetchAvatarStatus();
         fetchMatches();
-      } else {
-        setError(data.detail || 'Login failed');
+        return null;
       }
+      // Returned, not set: this is *this attempt's* error and belongs to the
+      // form, which is what renders and clears it.
+      return data.detail || 'Login failed';
     } catch (err) {
       // Sign-in failing at the network layer is the most expensive failure in
       // the app to diagnose blind — it is indistinguishable from a wrong
       // password to the user and from nothing at all to us.
       console.error('Login request failed', err);
-      setError('Network error');
+      return 'Network error';
     } finally {
       setLoading(false);
     }
@@ -712,52 +720,45 @@ export default function HowlApp() {
     }
   };
 
-  const handleForgotPassword = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+  /**
+   * Returns an error string, or null on success — the screen owns its own
+   * "submitting" and "sent" state now, so this returns a value instead of
+   * setting four pieces of App state.
+   *
+   * The server answers identically whether or not the address is registered,
+   * so there is deliberately nothing here that could distinguish the two.
+   */
+  const handleForgotPassword = useCallback(async (forgotEmail) => {
     try {
       await apiFetch(`/api/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
       });
-      setForgotDone(true);
+      return null;
     } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setLoading(false);
+      return 'Network error — please try again.';
     }
-  };
+  }, []);
 
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    setResetError('');
-    if (newPassword !== confirmPassword) {
-      setResetError('Passwords do not match.');
-      return;
-    }
-    setLoading(true);
+  /** Returns an error string, or null on success. See handleForgotPassword.
+   *
+   * The password/confirmation match check lives in the screen, not here — it is
+   * a property of the form, answerable without a request. */
+  const handleResetPassword = useCallback(async (token, newPassword) => {
     try {
       const res = await apiFetch(`/api/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: resetToken, new_password: newPassword }),
+        body: JSON.stringify({ token, new_password: newPassword }),
       });
-      if (res.ok) {
-        setResetDone(true);
-        setNewPassword('');
-        setConfirmPassword('');
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setResetError(data.detail || 'Reset failed — the link may have expired.');
-      }
+      if (res.ok) return null;
+      const data = await res.json().catch(() => ({}));
+      return data.detail || 'Reset failed — the link may have expired.';
     } catch {
-      setResetError('Network error — please try again.');
-    } finally {
-      setLoading(false);
+      return 'Network error — please try again.';
     }
-  };
+  }, []);
 
   // useCallback because MessageList is memoized and takes this as a prop: a new
   // function identity each render would defeat the memo entirely.
@@ -1212,19 +1213,6 @@ export default function HowlApp() {
   // Route table â€” see src/routes/paths.js
   // ---------------------------------------------------------------------------
 
-  const passwordResetEl = (
-    <PasswordReset
-      view={view} setView={setView}
-      forgotEmail={forgotEmail} setForgotEmail={setForgotEmail}
-      forgotDone={forgotDone} error={error} loading={loading}
-      handleForgotPassword={handleForgotPassword}
-      resetToken={resetToken} setResetToken={setResetToken}
-      newPassword={newPassword} setNewPassword={setNewPassword}
-      confirmPassword={confirmPassword} setConfirmPassword={setConfirmPassword}
-      resetDone={resetDone} setResetDone={setResetDone}
-      resetError={resetError} handleResetPassword={handleResetPassword}
-    />
-  );
 
   const credentialsProps = {
     email, setEmail, password, setPassword, error, loading, setView,
@@ -1265,21 +1253,21 @@ export default function HowlApp() {
               element={user
                 ? <Navigate to={PATHS.profile} replace />
                 : (
-                  <LoginView
-                    {...credentialsProps}
-                    handleLogin={handleLogin}
-                    setForgotEmail={setForgotEmail}
-                    setForgotDone={setForgotDone}
-                    setError={setError}
-                  />
+                  <LoginView onLogin={handleLogin} sessionError={error} />
                 )}
             />
             <Route
               path={PATHS.register}
               element={<RegisterView {...credentialsProps} handleRegister={handleRegister} />}
             />
-            <Route path={PATHS.forgotPassword} element={passwordResetEl} />
-            <Route path={PATHS.resetPassword} element={passwordResetEl} />
+            <Route
+              path={PATHS.forgotPassword}
+              element={<ForgotPasswordView onSubmit={handleForgotPassword} />}
+            />
+            <Route
+              path={PATHS.resetPassword}
+              element={<ResetPasswordView token={resetToken} onSubmit={handleResetPassword} />}
+            />
 
             <Route
               path={PATHS.discover}

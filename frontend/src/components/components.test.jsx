@@ -1,9 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
-import PasswordReset from './PasswordReset';
+import ForgotPasswordView from './ForgotPasswordView';
+import ResetPasswordView from './ResetPasswordView';
 import PreferenceFilters from './PreferenceFilters';
+import { PATHS } from '../routes/paths';
 import {
   aMessage,
   aUser,
@@ -88,33 +91,17 @@ describe('PreferenceFilters', () => {
   });
 });
 
-describe('PasswordReset without a token', () => {
-  // `resetToken` was an unused prop while this screen was reachable only by
-  // following a ?token= link. It has an address now, so the tokenless case is
-  // reachable and has to say something true.
-  const props = {
-    view: 'reset-password',
-    setView: vi.fn(),
-    resetToken: '',
-    setResetToken: vi.fn(),
-    newPassword: '',
-    setNewPassword: vi.fn(),
-    confirmPassword: '',
-    setConfirmPassword: vi.fn(),
-    resetDone: false,
-    setResetDone: vi.fn(),
-    resetError: '',
-    handleResetPassword: vi.fn(),
-    forgotEmail: '',
-    setForgotEmail: vi.fn(),
-    forgotDone: false,
-    error: '',
-    loading: false,
-    handleForgotPassword: vi.fn(),
-  };
-
+describe('ResetPasswordView without a token', () => {
+  // /reset-password has a real address, so the tokenless case is reachable —
+  // by typing the URL, by a refresh after the effect stripped the query, or by
+  // a refresh after the token was spent. This behaviour was carried over from
+  // the PasswordReset component this screen replaced.
   it('explains the link is incomplete instead of offering a form that cannot work', () => {
-    render(<PasswordReset {...props} />);
+    render(
+      <MemoryRouter>
+        <ResetPasswordView token="" onSubmit={vi.fn()} />
+      </MemoryRouter>,
+    );
 
     expect(screen.getByText('This reset link is incomplete')).toBeInTheDocument();
     // Submitting would have POSTed an empty token and blamed the user's link
@@ -122,18 +109,64 @@ describe('PasswordReset without a token', () => {
     expect(screen.queryByLabelText(/New password/)).not.toBeInTheDocument();
   });
 
-  it('offers a route to a fresh link', async () => {
-    const user = userEvent.setup();
-    const setView = vi.fn();
-    render(<PasswordReset {...props} setView={setView} />);
-
-    await user.click(screen.getByRole('button', { name: 'Request a new link' }));
-    expect(setView).toHaveBeenCalledWith('forgot-password');
+  it('offers a route to a fresh link', () => {
+    render(
+      <MemoryRouter>
+        <ResetPasswordView token="" onSubmit={vi.fn()} />
+      </MemoryRouter>,
+    );
+    // A <Link> now, not a setView callback — the screen it points at has an
+    // address of its own.
+    expect(screen.getByRole('link', { name: /new link/i })).toHaveAttribute(
+      'href', PATHS.forgotPassword,
+    );
   });
 
-  it('still renders the form when a token is present', () => {
-    render(<PasswordReset {...props} resetToken="abc123" />);
+  it('renders the form when a token is present', () => {
+    render(
+      <MemoryRouter>
+        <ResetPasswordView token="abc123" onSubmit={vi.fn()} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText('Choose a new password (8+ characters).')).toBeInTheDocument();
+  });
+
+  it('does not submit when the two passwords differ', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <MemoryRouter>
+        <ResetPasswordView token="abc123" onSubmit={onSubmit} />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText(/New password/), 'hunter2secure');
+    await user.type(screen.getByLabelText(/Confirm/), 'hunter2secXre');
+    await user.click(screen.getByRole('button', { name: /reset password/i }));
+
+    // The mismatch is a property of the form, answerable without a request —
+    // so it must not cost one.
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('ForgotPasswordView', () => {
+  it('reports the same thing whether or not the address is registered', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(null);
+    render(
+      <MemoryRouter>
+        <ForgotPasswordView onSubmit={onSubmit} />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText(/email/i), 'wolf@howl.app');
+    await user.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith('wolf@howl.app');
+    // The server deliberately cannot distinguish the two cases; the screen
+    // must not either.
+    await screen.findByText(/if that address has an account/i);
   });
 });
 
