@@ -1,5 +1,6 @@
 """Tests for the bot response system."""
 
+import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -28,7 +29,12 @@ def _mock_generate(monkeypatch):
     monkeypatch.setattr(
         "app.tasks.bot_response._generate_batch",
         lambda batch: [
-            {"match_id": b["match_id"], "bot_id": b["bot_id"], "message": "test reply"}
+            {
+                "match_id": b["match_id"],
+                "bot_id": b["bot_id"],
+                "real_id": b["real_id"],
+                "message": "test reply",
+            }
             for b in batch
         ],
     )
@@ -326,12 +332,12 @@ def test_generate_batch_parses_valid_json(monkeypatch):
 
     monkeypatch.setattr(ant_module, "Anthropic", lambda **kw: _Client())
 
-    batch = [{"match_id": 5, "bot_id": 7, "name": "Luna", "animal": "fox",
+    batch = [{"match_id": 5, "bot_id": 7, "real_id": 42, "name": "Luna", "animal": "fox",
                "traits": ["clever"], "archetype": "flirty",
                "response_type": "reply", "message_received": "How are you?", "history": []}]
     result = _generate_batch(batch)
     assert len(result) == 1
-    assert result[0] == {"match_id": 5, "bot_id": 7, "message": "Hey there!"}
+    assert result[0] == {"match_id": 5, "bot_id": 7, "real_id": 42, "message": "Hey there!"}
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +368,8 @@ def _stub_claude(monkeypatch, payload, *, stop_reason="end_turn", blocks=None):
 
 def _batch(n):
     return [
-        {"match_id": 100 + i, "bot_id": 200 + i, "name": f"Bot{i}", "animal": "wolf",
-         "traits": [], "archetype": "responsive", "response_type": "reply",
+        {"match_id": 100 + i, "bot_id": 200 + i, "real_id": 900 + i, "name": f"Bot{i}",
+         "animal": "wolf", "traits": [], "archetype": "responsive", "response_type": "reply",
          "message_received": "hi", "history": []}
         for i in range(n)
     ]
@@ -709,9 +715,17 @@ def test_save_replies_commits_the_batch_once(db):
     real = _make_real(db, email="sreal@howl.app")
     m    = _make_match(db, bot, real)
 
-    results = [{"match_id": m.id, "bot_id": bot.id, "message": f"r{i}"} for i in range(3)]
-    assert _save_replies(db, results) == 3
+    results = [
+        {"match_id": m.id, "bot_id": bot.id, "real_id": real.id, "message": f"r{i}"}
+        for i in range(3)
+    ]
+    saved = _save_replies(db, results)
+    assert len(saved) == 3
     assert _bot_msg_count(db, m.id, bot.id) == 3
+    # Enough to publish/notify without touching the ORM objects again.
+    assert all(s["real_id"] == real.id for s in saved)
+    assert all(s["message_id"] is not None for s in saved)
+    assert all(s["created_at"] is not None for s in saved)
 
 
 def test_save_replies_falls_back_to_individual_writes(db):
@@ -727,18 +741,139 @@ def test_save_replies_falls_back_to_individual_writes(db):
     m    = _make_match(db, bot, real)
 
     results = [
-        {"match_id": m.id,     "bot_id": bot.id, "message": "good one"},
-        {"match_id": 10_000,   "bot_id": bot.id, "message": "orphan"},
-        {"match_id": m.id,     "bot_id": bot.id, "message": "good two"},
+        {"match_id": m.id,     "bot_id": bot.id, "real_id": real.id, "message": "good one"},
+        {"match_id": 10_000,   "bot_id": bot.id, "real_id": real.id, "message": "orphan"},
+        {"match_id": m.id,     "bot_id": bot.id, "real_id": real.id, "message": "good two"},
     ]
 
-    assert _save_replies(db, results) == 2
+    saved = _save_replies(db, results)
+    assert len(saved) == 2
     assert _bot_msg_count(db, m.id, bot.id) == 2
 
 
 def test_save_replies_handles_an_empty_batch(db):
     from app.tasks.bot_response import _save_replies
-    assert _save_replies(db, []) == 0
+    assert _save_replies(db, []) == []
+
+
+# ---------------------------------------------------------------------------
+# Cross-replica publish + notification fan-out (GAPS-ROUND-2 #45)
+#
+# Before this, a bot reply was written to Postgres and nothing else: no
+# WebSocket event on any replica, no push, no email. These tests cover the
+# publish and the enqueue that close that gap.
+# ---------------------------------------------------------------------------
+
+def test_bot_reply_publish_envelope_matches_chatpubsub(patched_session, db, monkeypatch):
+    """The worker has no WebSocket of its own, so this sync publish is the
+    *only* way another replica learns a bot reply exists — it must be
+    byte-identical to what ChatPubSub.publish sends and
+    ConnectionManager._on_remote_event decodes.
+
+    Verified two ways: the channel name comes from the same channel_for()
+    helper pubsub.py itself uses, and the "event" payload is compared field
+    for field against app.api.chat._msg_event("new_message", msg) — the exact
+    function the REST send path uses to build the event ChatPubSub wraps —
+    called against the very row this task wrote.
+    """
+    from app.api.chat import _msg_event
+    from app.services.pubsub import channel_for
+    from app.tasks import bot_response as br
+
+    published: dict = {}
+
+    class _FakeRedis:
+        def publish(self, channel, data):
+            published["channel"] = channel
+            published["data"] = data
+
+    monkeypatch.setattr(br, "_get_redis_client", lambda: _FakeRedis())
+
+    bot  = _make_bot(db, email="pubbot@bot.app", archetype="responsive")
+    real = _make_real(db, email="pubreal@howl.app")
+    m    = _make_match(db, bot, real)
+    bot_id, match_id = bot.id, m.id   # capture before the task closes the session
+    _make_msg(db, match_id=match_id, sender_id=real.id, content="hi", ago_seconds=400)
+
+    process_bot_responses()
+
+    assert published, "expected the worker to publish a chat event"
+    assert published["channel"] == channel_for(match_id)
+
+    envelope = json.loads(published["data"])
+    assert set(envelope.keys()) == {"origin", "payload"}
+    assert isinstance(envelope["origin"], str) and envelope["origin"]
+    assert envelope["payload"]["kind"] == "message"
+
+    saved_msg = (
+        db.query(Message)
+        .filter(Message.match_id == match_id, Message.sender_id == bot_id)
+        .one()
+    )
+    assert envelope["payload"]["event"] == _msg_event("new_message", saved_msg)
+
+
+def test_bot_reply_publish_fails_open_on_redis_error(patched_session, db, monkeypatch):
+    """A Redis outage must not stop the reply from being saved."""
+    from app.tasks import bot_response as br
+
+    calls = []
+
+    class _BrokenRedis:
+        def publish(self, channel, data):
+            calls.append((channel, data))
+            raise br.RedisError("boom")
+
+    monkeypatch.setattr(br, "_get_redis_client", lambda: _BrokenRedis())
+
+    bot  = _make_bot(db, email="brokenpub@bot.app", archetype="responsive")
+    real = _make_real(db, email="brokenpubreal@howl.app")
+    m    = _make_match(db, bot, real)
+    bot_id, match_id = bot.id, m.id   # capture before the task closes the session
+    _make_msg(db, match_id=match_id, sender_id=real.id, content="hi", ago_seconds=400)
+
+    process_bot_responses()  # must not raise, despite the publish above always raising
+
+    # Proves the broken path was actually exercised, not just skipped.
+    assert len(calls) == 1
+    assert _bot_msg_count(db, match_id, bot_id) == 1
+
+
+def test_bot_reply_enqueues_notify_new_message(patched_session, db, celery_enqueues):
+    """Each saved reply must enqueue exactly one notify_new_message call,
+    addressed to the real user with the bot as sender — the same shape
+    app/api/chat.py's send path uses."""
+    bot  = _make_bot(db, email="notifybot@bot.app", archetype="responsive")
+    real = _make_real(db, email="notifyreal@howl.app")
+    m    = _make_match(db, bot, real)
+    bot_id, real_id, match_id = bot.id, real.id, m.id   # capture before the task closes the session
+    _make_msg(db, match_id=match_id, sender_id=real_id, content="hi", ago_seconds=400)
+
+    process_bot_responses()
+
+    notify_calls = [c for c in celery_enqueues if c[0] == "app.tasks.notify.notify_new_message"]
+    assert len(notify_calls) == 1
+    _, args, _kwargs = notify_calls[0]
+    assert args == (match_id, real_id, bot_id)
+
+
+def test_bot_reply_enqueues_one_notification_per_saved_reply(patched_session, db, celery_enqueues):
+    """A run answering several conversations must not cross-wire recipients."""
+    bot = _make_bot(db, email="multinotifybot@bot.app", archetype="responsive")
+    reals = [_make_real(db, email=f"multinotify{i}@howl.app") for i in range(3)]
+    matches = [_make_match(db, bot, r) for r in reals]
+    bot_id = bot.id   # capture before the task closes the session
+    triples = [(m.id, r.id) for r, m in zip(reals, matches, strict=True)]
+    for match_id, real_id in triples:
+        _make_msg(db, match_id=match_id, sender_id=real_id, content="hi", ago_seconds=400)
+
+    process_bot_responses()
+
+    notify_calls = [c for c in celery_enqueues if c[0] == "app.tasks.notify.notify_new_message"]
+    assert len(notify_calls) == 3
+    got = {(args[0], args[1], args[2]) for _, args, _ in notify_calls}
+    expected = {(match_id, real_id, bot_id) for match_id, real_id in triples}
+    assert got == expected
 
 
 # ---------------------------------------------------------------------------
