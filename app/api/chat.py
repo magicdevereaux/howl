@@ -154,7 +154,7 @@ class ConnectionManager:
         # Strong references to in-flight close tasks. asyncio only holds a weak
         # reference to a running task, so without this the GC is free to cancel
         # a close mid-handshake and we are back to a socket that never learns.
-        self._close_tasks: set[asyncio.Task] = set()
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._pubsub = pubsub if pubsub is not None else ChatPubSub()
         self._pubsub.set_handler(self._on_remote_event)
 
@@ -488,7 +488,7 @@ def _token_expiry(token: str) -> float | None:
     return float(exp) if isinstance(exp, int | float) else None
 
 
-def _revoke_at_token_expiry(ws: WebSocket, token: str) -> asyncio.Task | None:
+def _revoke_at_token_expiry(ws: WebSocket, token: str) -> asyncio.Task[None] | None:
     """Close *ws* with 4001 when its access token expires.
 
     The handler authenticates once and then parks on `receive_text` for as long
