@@ -123,6 +123,12 @@ export default function HowlApp() {
   // Whether this conversation's socket has opened before. Distinguishes the
   // first connect (history was just loaded) from a reconnect (it may be stale).
   const hasConnectedRef = useRef(false);
+  // The match id `loadMessages` currently has in flight, or null. A flapping
+  // connection reconnects (and therefore refetches) on every brief open, and
+  // without this a slow response plus a fast flap queues up a second request
+  // for the same match before the first has answered — a reconnect storm
+  // turning into a refetch storm (GAPS-ROUND-2 #47).
+  const loadingMatchIdRef = useRef(null);
   const [emailNotifications, setEmailNotifications] = useState(true);
   // Reporting moved out entirely — three useStates and two handlers now live in
   // ReportProvider, which also renders the dialog. The delete-account modal's
@@ -177,6 +183,9 @@ export default function HowlApp() {
   //     is the truth; `fetchProfile` names the two fetchers it calls.
   // ---------------------------------------------------------------------------
   const loadMessages = useCallback(async (matchId) => {
+    // Skip a re-entrant call for the same match: see loadingMatchIdRef above.
+    if (loadingMatchIdRef.current === matchId) return;
+    loadingMatchIdRef.current = matchId;
     setMessagesLoading(true);
     setMessagesError('');
     try {
@@ -185,7 +194,19 @@ export default function HowlApp() {
       });
       if (res.ok) {
         const data = await res.json();
-        setMessages(data.messages);
+        // Merge by id rather than replace (GAPS-ROUND-2 #47). This is called
+        // both to open a conversation (messages was just cleared, so a merge
+        // is a no-op difference from a replace) and to refetch on WS
+        // reconnect — where a replace would silently discard whatever
+        // `loadMoreMessages` had already paged in, since this endpoint only
+        // ever returns the latest page, and would drop a message delivered
+        // over the socket a moment after this request was sent but before it
+        // resolved.
+        setMessages((prev) => {
+          const byId = new Map(prev.map((m) => [m.id, m]));
+          for (const m of data.messages) byId.set(m.id, m);
+          return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+        });
         setHasMoreMessages(data.has_more);
       } else {
         setMessagesError("Couldn't load messages.");
@@ -194,6 +215,11 @@ export default function HowlApp() {
       setMessagesError('Network error — check your connection.');
     } finally {
       setMessagesLoading(false);
+      // Only clear our own claim: if the user switched matches while this
+      // call was in flight, a newer call for the new match id already holds
+      // the ref, and clearing it here would let a stray reconnect for that
+      // match slip past the guard.
+      if (loadingMatchIdRef.current === matchId) loadingMatchIdRef.current = null;
     }
   }, []);
 
