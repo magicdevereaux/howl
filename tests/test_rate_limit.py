@@ -201,3 +201,51 @@ def test_rate_limit_keys_omit_email_key_when_no_email():
     ip_key, email_key = rate_limit_keys("verify_email", "1.2.3.4")
     assert ip_key
     assert email_key is None
+
+
+# ---------------------------------------------------------------------------
+# trusted_proxy_count is now a real, declared setting (GAPS #66)
+#
+# Before this, app/services/rate_limit.py read
+# `getattr(settings, "trusted_proxy_count", 1)` — a field app/config.py never
+# declared. Setting TRUSTED_PROXY_COUNT in the environment therefore reached
+# `Settings()` and was silently dropped: pydantic-settings' default `extra`
+# behaviour (inherited from pydantic, "ignore") means an unrecognised
+# env/.env key does not raise at import, it just never becomes an attribute
+# on the instance — so the getattr fallback of 1 always won regardless of
+# what an operator set. That is the finding GAPS #66 asked to be verified.
+# ---------------------------------------------------------------------------
+
+def test_trusted_proxy_count_defaults_to_one():
+    from app.config import Settings
+
+    assert Settings().trusted_proxy_count == 1
+
+
+def test_trusted_proxy_count_is_actually_settable_via_env(monkeypatch):
+    """This is the regression test: before the field was declared, this
+    would still read back as 1 no matter what the environment said."""
+    from app.config import Settings
+
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "3")
+    assert Settings().trusted_proxy_count == 3
+
+
+def test_undeclared_env_key_is_silently_ignored_not_rejected(monkeypatch):
+    """Documents the actual pydantic-settings behaviour this gap relied on:
+    an unrecognised environment key does not fail Settings() construction.
+    This is what made the old getattr-fallback bug silent instead of loud."""
+    from app.config import Settings
+
+    monkeypatch.setenv("SOME_ENTIRELY_UNKNOWN_SETTING_XYZ", "whatever")
+    # Must not raise.
+    Settings()
+
+
+def test_rate_limit_module_reads_trusted_proxy_count_from_settings():
+    """Guards against reintroducing the getattr-fallback pattern: the
+    module-level constant must come from the real settings field."""
+    import app.services.rate_limit as rl_module
+    from app.config import settings
+
+    assert rl_module.TRUSTED_PROXY_HOPS == settings.trusted_proxy_count

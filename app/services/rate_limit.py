@@ -30,10 +30,12 @@ _EMAIL_LIMIT = 5             # login attempts per window per email address
 # Number of reverse proxies in front of the app whose X-Forwarded-For entries
 # can be trusted. Railway/Vercel put exactly one in front, hence the default.
 #
-# Reads an optional `trusted_proxy_count` setting so the value can be tuned per
-# deployment without a code change; `app/config.py` does not declare the field
-# yet, so the getattr fallback is what actually applies today.
-TRUSTED_PROXY_HOPS: int = int(getattr(settings, "trusted_proxy_count", 1))
+# Reads `settings.trusted_proxy_count` (GAPS #66) so the value can be tuned
+# per deployment without a code change. This used to be a `getattr` fallback
+# because `app/config.py` didn't declare the field — which meant setting
+# TRUSTED_PROXY_COUNT in the environment silently did nothing. It's a real
+# field now.
+TRUSTED_PROXY_HOPS: int = settings.trusted_proxy_count
 
 
 class _ActionLimit:

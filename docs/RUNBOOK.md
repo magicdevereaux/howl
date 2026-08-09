@@ -56,6 +56,7 @@ replies. In production the two queues are split across separate services instead
 | `ENVIRONMENT` | — | Sentry tag, echoed by `/health`. Default `production`. |
 | `DEBUG` | — | Enables `/docs` + `/redoc`, adds localhost CORS, makes cookies insecure. Never true in prod. |
 | `SKIP_SEED` | — | Set `true` to skip the 1000-bot seed on deploy |
+| `TRUSTED_PROXY_COUNT` | — | Number of trusted reverse proxies in front of the app for `X-Forwarded-For` parsing (default `1`, Railway's own edge). Increment if you put another proxy — e.g. Cloudflare — in front of Railway, or the login rate limiter's IP bucket will key on that proxy's shared egress address and can lock out the whole app. |
 | `PORT` | injected | Used by `startup.sh:12` |
 
 ## Deploy (Railway)
