@@ -23,12 +23,14 @@ import importlib
 
 import bcrypt
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import scripts.seed_demo_users as seed_mod
 from app.models.base import Base
+from app.models.match import Match
+from app.models.message import Message
 from app.models.user import AvatarStatus, User
 
 # ---------------------------------------------------------------------------
@@ -50,6 +52,18 @@ def seed_db(monkeypatch):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    # SQLite ignores FK constraints unless asked, exactly as tests/conftest.py
+    # does for the main suite. Without this the ON DELETE CASCADE from users ->
+    # matches -> messages does not fire, so a test asserting that a reseed
+    # preserves conversations would pass even against a destructive seed. The
+    # whole point of GAPS-ROUND-2 #39 is that cascade, so it has to be live here.
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _record):  # pragma: no cover - engine plumbing
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
     Base.metadata.create_all(engine)
     TestSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(seed_mod, "SessionLocal", TestSessionLocal)
@@ -120,13 +134,16 @@ def test_seed_is_idempotent_on_row_count(seed_db):
     assert len(_demo_users(seed_db)) == 1000
 
 
-def test_seed_second_run_reports_and_removes_prior_rows(seed_db, capsys):
+def test_seed_second_run_is_additive_and_says_so(seed_db, capsys):
+    """GAPS-ROUND-2 #39: a second deploy must leave existing bots alone."""
     seed_mod.seed()
     capsys.readouterr()  # discard first run's output
 
     seed_mod.seed()
     captured = capsys.readouterr()
-    assert "Removed 1000 existing demo user(s)." in captured.out
+    assert "already present; leaving them" in captured.out
+    assert "Seeded 0 new demo user(s)" in captured.out
+    assert "Removed" not in captured.out
 
 
 def test_seed_does_not_touch_non_demo_users(seed_db):
@@ -148,13 +165,11 @@ def test_seed_does_not_touch_non_demo_users(seed_db):
     assert len(_demo_users(seed_db)) == 1000
 
 
-def test_seed_delete_filter_also_matches_lookalike_demo_prefixed_emails(seed_db):
-    """Documenting real scope, not fixing it: `LIKE 'demo%@howl.app'` matches
-    ANY email starting with the literal "demo", not only the `demo{n}@howl.app`
-    the script itself generates. A hypothetical real account registered as
-    e.g. "demolition@howl.app" would be silently deleted on the next deploy.
-    This is a pre-existing behavior of the shipped script; not something this
-    test suite should paper over."""
+def test_seed_leaves_lookalike_demo_prefixed_emails_alone(seed_db):
+    """GAPS-ROUND-2 #39, second half. The old filter was
+    `LIKE 'demo%@howl.app'`, which matched ANY address merely *starting* with
+    "demo" -- a real `demolition@howl.app` account was deleted on every deploy.
+    The script now works from the exact address set it owns."""
     lookalike = User(
         email="demolition@howl.app",
         password_hash="not-a-real-hash",
@@ -164,11 +179,67 @@ def test_seed_delete_filter_also_matches_lookalike_demo_prefixed_emails(seed_db)
     seed_db.commit()
 
     seed_mod.seed()
+    seed_mod.seed()
 
     assert (
         seed_db.query(User).filter(User.email == "demolition@howl.app").one_or_none()
-        is None
+        is not None
     )
+
+
+def test_redeploy_preserves_a_real_users_match_and_chat_history_with_a_bot(seed_db):
+    """GAPS-ROUND-2 #39, the harm itself, not a proxy for it.
+
+    `matches.user1_id`/`user2_id` are ON DELETE CASCADE and `messages.match_id`
+    cascades from `matches`, so bulk-deleting the bots took every match they were
+    in and every message in those matches with them. At a 90% auto-like-back rate
+    against a 1000-bot population, that is most of a new user's conversations --
+    destroyed by shipping a copy change. The seed_db fixture enables
+    PRAGMA foreign_keys=ON, so this test genuinely exercises the cascade.
+    """
+    seed_mod.seed()
+
+    real = User(email="wolf@howl.app", password_hash="not-a-real-hash", is_bot=False)
+    seed_db.add(real)
+    seed_db.commit()
+
+    bot = _demo_users(seed_db)[0]
+    bot_id_before = bot.id
+    low, high = sorted((real.id, bot.id))  # ck_matches_user_order requires user1 < user2
+    match = Match(user1_id=low, user2_id=high)
+    seed_db.add(match)
+    seed_db.commit()
+
+    seed_db.add_all(
+        [
+            Message(match_id=match.id, sender_id=real.id, content="hey"),
+            Message(match_id=match.id, sender_id=bot.id, content="hey yourself"),
+        ]
+    )
+    seed_db.commit()
+    match_id = match.id
+
+    seed_mod.seed()  # ship a copy change
+
+    assert seed_db.query(Match).filter(Match.id == match_id).one_or_none() is not None
+    assert seed_db.query(Message).filter(Message.match_id == match_id).count() == 2
+    # The bot keeps its identity too -- the old path reinserted it under a new id,
+    # so even a surviving match would have pointed at a different row.
+    assert seed_db.get(User, bot_id_before) is not None
+
+
+def test_reseed_bots_env_var_restores_the_destructive_path(seed_db, capsys, monkeypatch):
+    """The destructive refresh still exists, but only when asked for explicitly.
+    A deploy must never set this."""
+    seed_mod.seed()
+    capsys.readouterr()
+
+    monkeypatch.setenv("RESEED_BOTS", "true")
+    seed_mod.seed()
+    captured = capsys.readouterr()
+
+    assert "RESEED_BOTS=true: removed 1000 existing demo user(s)" in captured.out
+    assert len(_demo_users(seed_db)) == 1000
 
 
 # ---------------------------------------------------------------------------
