@@ -124,7 +124,15 @@ export default function LegalScreen() {
 
   const title = isPrivacy ? 'Privacy Policy' : 'Terms of Service';
   const sections = isPrivacy ? PRIVACY : TERMS;
-  const fullUrl = `${WEB_URL}`;
+  // Another agent is giving the web client a real `/privacy` route this same
+  // session (the web client currently addresses legal by a `view` string, not
+  // a URL — GAPS #33/#35), so this deep-links there instead of the bare
+  // origin. `/terms` follows the same naming guess and is NOT confirmed to
+  // exist yet; if the web route lands under a different path, this is a
+  // one-token fix (just the string below). A stale or 404 outbound link
+  // degrades gracefully either way, since the ScrollView above already
+  // carries the substantive text.
+  const fullUrl = `${WEB_URL}/${isPrivacy ? 'privacy' : 'terms'}`;
 
   return (
     <View style={styles.shell}>

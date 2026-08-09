@@ -9,11 +9,18 @@ each entry records how.
   Every one says what and why, and none of them is left because it was hard.
 - No marker — still open. There are two: **#3** and **#33**.
 
+> **A second audit exists: [GAPS-ROUND-2.md](GAPS-ROUND-2.md), findings #38–#67.** It was run on
+> 2026-08-08 against `c56f9f1` and deliberately does not repeat anything below. It contains **two new
+> P0s** — the first since #3 — and flags **#7, #8, #15 and #23 as incompletely closed**, each with
+> proof. Read it before picking up work from this file. Its headline, #38, is that nothing in the
+> codebase validates the *shape* of a Claude response before persisting it.
+
 File and line references in unstruck text describe the code *as it was when the gap was found*. Some
 have moved; the struck entries note where. Two claims turned out to be **wrong on inspection** and are
 withdrawn rather than "fixed" — see #23's push-token bullet.
 
-**Status: 30 of 37 fully closed, 5 partial, 2 open.**
+**Status: 32 of 37 fully closed, 3 partial, 1 open** (#25 and #30 closed 2026-08-08). The one open item
+is **#3**. See [GAPS-ROUND-2.md](GAPS-ROUND-2.md) for 30 further findings, including two new P0s.
 
 **Every P0 and P1 is closed except #3** — no email provider, so password-reset tokens go to stdout. That
 one is blocked on choosing a provider, not on effort.
@@ -248,7 +255,53 @@ them.
 deletion" — but `reporter_id` and `reported_user_id` are `CASCADE` (`:24, 27`). Deleting the reported
 user deletes the report. The stated intent and the constraints contradict each other.
 
-### 25. ~~`is_email_verified` is never enforced~~ 🟡 HALF DONE (5583de5) — **needs Nathan's decision**
+### 25. ~~`is_email_verified` is never enforced~~ ✅ FIXED — enforcement is live, graduated
+
+**Decided and shipped on 2026-08-08.** Nathan's call was "do the right thing / whatever is typical
+industry practice". That is a **grace window**, not a hard gate at registration:
+
+- An unverified account keeps full access for `settings.email_verification_grace_period_hours`
+  (default **72**), measured from `users.created_at`. No new column — derived, so no migration.
+- After that window the **outbound** actions close: `POST /api/swipes`, `DELETE /api/swipes/last`,
+  `POST /api/matches/{id}/messages`, `POST /api/avatar/regenerate`, and the chat WebSocket (rejected at
+  connect with an error frame then close **4403**, fitting the existing 4001/4003 scheme; placed *after*
+  the match-authorisation check so a non-member still gets 4003 and learns nothing).
+- Reads stay open throughout — discover, matches, message history, unread count, avatar status — plus
+  profile read/edit, resend-verification, logout, push-token registration and account deletion. The user
+  can see what they are about to lose, which is the point.
+- `settings.enforce_email_verification` (default **True**) is the operator kill switch, read at call
+  time so flipping it needs no code change.
+- **403 contract**, asserted by an exact-key-set test so a rename fails loudly:
+  `{"detail": {"code": "email_verification_required", "message": …, "grace_expired_at": <ISO8601>}}`
+- `scripts/backfill_email_verification.py` grandfathers pre-enforcement accounts. **Dry-run is the
+  default**; `--apply` is required, `--cutoff` accepts an ISO datetime (naive read as UTC, not
+  server-local, or the cutoff silently shifts by the host offset).
+- Seeded bots were already `is_email_verified=True`; that is now pinned by a test so a future seed edit
+  fails loudly.
+- The bio-edit walk-around is closed: `PATCH /api/profile/me` still saves, but withholds the paid DALL·E
+  call when unverified past grace and leaves `profile_needs_regen=True` so it runs once verified — and
+  the check happens *before* a regen slot is consumed, so a withheld image doesn't bill the quota.
+
+**Two corrections to what this entry used to claim:**
+
+1. **The old rationale was not literally true.** This entry said enforcement would "empty the discover
+   queue" by locking out the 1000 bots. Discover filters on `avatar_status`, not verification, and bots
+   act through Celery tasks that write directly, bypassing the HTTP gate entirely. The real invariant
+   (no seeded bot is ever refused) is what got pinned.
+2. **`test_require_verified_email_is_not_wired_to_any_route` is gone**, replaced by its inverse: a
+   tripwire asserting the dependency IS wired to exactly the intended route set, so a refactor that
+   silently drops it fails.
+
+**The known weak point, and it is real:** email is **not editable anywhere** — `ProfileUpdate` has no
+`email` field. So resend-verification re-sends to the same wrong address, and combined with **#3** (no
+provider; tokens print to stdout) a typo'd signup is permanently stuck once grace expires. The kill
+switch is the only remedy. Making email editable, or an admin repair route, is the natural follow-up.
+
+`DELETE /api/matches/{id}` (unmatch) was left **ungated** on purpose and deliberately not pinned: it is
+arguably remediation — getting away from someone — rather than an outbound action. That one is still a
+product call.
+
+<details><summary>Original entry (for history)</summary>
 
 **Done:** the missing resend-verification endpoint now exists on both routers, rate-limited, with a
 generic response that does not reveal whether an address has an account or is already verified. A
@@ -268,6 +321,8 @@ the moment someone enables it — at which point delete the test and decide:
 
 Blocked in practice by **#3** anyway: with no email provider wired, a user who is locked out cannot
 receive the link that would unlock them.
+
+</details>
 
 ### 26. ~~Rate limiting is login-only and defeatable~~ ✅ FIXED (5583de5, b2a36f8)
 
@@ -301,7 +356,7 @@ can't start. Pick one source of truth.
 23 backend test files, and **no test script in either `package.json`**. No jest, vitest, RTL, Detox, or
 Playwright. No ESLint or Prettier config in either client either.
 
-### 30. ~~Untested backend surfaces~~ 🟡 MOSTLY FIXED (cf5f690, 9933488, 5583de5)
+### 30. ~~Untested backend surfaces~~ ✅ FIXED (cf5f690, 9933488, 5583de5, + 2026-08-08)
 
 **Now covered:**
 - `app/api/mobile_auth.py` — was **zero tests** while being the entire auth surface the shipped mobile
@@ -312,13 +367,33 @@ Playwright. No ESLint or Prettier config in either client either.
 - `app/services/rate_limit.py` — now exercised directly, including the client-IP derivation and the
   fail-open-on-Redis-error path.
 
-**Still untested:**
-- The **R2 upload path** (`app/services/image_generation.py:53-113`) — the *production* avatar
-  persistence path. Tests only cover the local-filesystem fallback, and `boto3`/`openai` are not even
-  installed in the local venv (both are lazily imported behind `None` guards, which is why nothing
-  fails). Testing it properly means either `moto` or a fake S3 client injected at the boundary.
-- `scripts/seed_demo_users.py` — 375 lines that run on every production deploy. Partly covered
-  indirectly by `test_bot_response.py`'s seed assertions, but the script itself is not driven.
+**Now covered too (2026-08-08), closing this entry:**
+- The **R2 upload path** — driven against a real `boto3` S3 client backed by `moto`, injected at the
+  existing `_get_r2_client()` seam (no production code changed). Key naming, `ContentType`, URL
+  construction, `delete_avatar()`, and the credential/network failure paths all verified.
+  `moto[s3]` was added to `[project.optional-dependencies].dev` in `pyproject.toml` only —
+  `requirements.txt` stays the runtime source of truth per #28.
+  **One honest limitation:** `moto`'s `@mock_aws` only intercepts `*.amazonaws.com` hostnames, so a
+  client pointed at R2's `*.r2.cloudflarestorage.com` `endpoint_url` is *not* intercepted. Everything
+  downstream of client construction is now proven; the actual dial-out to a real R2 endpoint still has
+  never executed and cannot be tested without live credentials.
+- `scripts/seed_demo_users.py` — driven end to end against a private in-memory SQLite engine
+  (`SessionLocal` monkeypatched, never the shared dev Postgres). Covers idempotency across simulated
+  repeat deploys, the #4 random per-deploy password (pinned against regressing to the old committed
+  literal), `is_bot`/`is_email_verified`, `avatar_status=ready` with `avatar_url=None`, the #23 age
+  CHECK, and the archetype distribution.
+
+**Two real bugs found by writing these tests, documented as tests rather than fixed** (both are behaviour
+calls, not test gaps):
+- `delete_avatar()` extracts the S3 key by string-stripping the *current* `_r2_public_base()` off the
+  stored `avatar_url`. Rotate `R2_PUBLIC_URL` (a custom-domain migration) and the prefix stops matching
+  for already-stored avatars: `key` becomes the whole old URL, `delete_object` is called with the wrong
+  Key, and the object leaks forever with no exception and no distinguishing log. Defeats #10's goal.
+  Pinned by `test_delete_avatar_key_extraction_breaks_if_public_url_base_has_rotated`.
+- The seed's delete filter `email LIKE 'demo%@howl.app'` matches any address merely *starting* with
+  "demo" — a real `demolition@howl.app` account would be wiped on every deploy. Pinned by
+  `test_seed_delete_filter_also_matches_lookalike_demo_prefixed_emails`. See **GAPS-ROUND-2 #39**, which
+  is the far more serious version of this same delete.
 
 ### 31. ~~No coverage gate~~ ✅ FIXED (658cf2b)
 

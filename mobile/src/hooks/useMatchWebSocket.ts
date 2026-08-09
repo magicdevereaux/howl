@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 
-import { API_URL, IS_API_CONFIGURED, endSession, refreshAccessToken } from '../api/client';
+import {
+  API_URL,
+  EMAIL_VERIFICATION_REQUIRED_CODE,
+  IS_API_CONFIGURED,
+  endSession,
+  notifyEmailVerificationRequired,
+  refreshAccessToken,
+} from '../api/client';
 import { getAccessToken } from '../auth/storage';
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -19,7 +26,8 @@ export interface WsMessage {
 export type WsEvent =
   | { type: 'new_message';    message: WsMessage }
   | { type: 'message_deleted'; message: WsMessage }
-  | { type: 'typing';         user_name: string };
+  | { type: 'typing';         user_name: string }
+  | { type: 'error';          error: { code: string; message: string; grace_expired_at?: string } };
 
 /** Connection state, so the UI can tell the user why messages aren't arriving. */
 export type WsStatus =
@@ -33,8 +41,9 @@ export type WsStatus =
 
 // ── Close codes (see app/api/chat.py:171-197) ──────────────────────────────────
 
-const CLOSE_UNAUTHENTICATED = 4001; // missing/expired/invalid token
-const CLOSE_FORBIDDEN       = 4003; // not a participant in this match
+const CLOSE_UNAUTHENTICATED           = 4001; // missing/expired/invalid token
+const CLOSE_FORBIDDEN                 = 4003; // not a participant in this match
+const CLOSE_EMAIL_VERIFICATION_REQUIRED = 4403; // grace window over — terminal, see app/api/chat.py
 
 const RECONNECT_BASE_MS = 2_500;
 const RECONNECT_MAX_MS  = 30_000;
@@ -121,7 +130,17 @@ export function useMatchWebSocket(
 
     ws.onmessage = (e) => {
       try {
-        onEventRef.current(JSON.parse(e.data) as WsEvent);
+        const parsed = JSON.parse(e.data) as WsEvent;
+        // The server sends this frame right before closing with 4403. Route
+        // it through the same shared handler api() uses for the REST 403, so
+        // the banner/screen shows regardless of which transport caught it.
+        if (parsed.type === 'error' && parsed.error?.code === EMAIL_VERIFICATION_REQUIRED_CODE) {
+          notifyEmailVerificationRequired({
+            message: parsed.error.message,
+            graceExpiredAt: parsed.error.grace_expired_at ?? null,
+          });
+        }
+        onEventRef.current(parsed);
       } catch { /* ignore malformed frames */ }
     };
 
@@ -139,6 +158,14 @@ export function useMatchWebSocket(
 
       if (code === CLOSE_FORBIDDEN) {
         // Blocked, unmatched, or never a participant — retrying cannot help.
+        setStatus('closed');
+        return;
+      }
+
+      if (code === CLOSE_EMAIL_VERIFICATION_REQUIRED) {
+        // Terminal until the user verifies: reconnecting would just get the
+        // same rejection every ~2.5s and hammer the server for nothing. The
+        // error frame handled in onmessage above already raised the banner.
         setStatus('closed');
         return;
       }

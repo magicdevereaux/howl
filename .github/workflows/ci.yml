@@ -78,10 +78,17 @@ jobs:
         working-directory: mobile
         run: npm install --legacy-peer-deps
 
-      # NOTE: expo-router generates .expo/types/router.d.ts from the filesystem
-      # and it is gitignored, so it does not exist here. tsc therefore checks
-      # against the permissive Href fallback and will NOT catch a bad route path
-      # — see docs/GAPS.md #29. Everything else is checked normally.
+      # expo-router generates .expo/types/router.d.ts from the filesystem, and
+      # it's gitignored, so without this step tsc checks route strings against
+      # the permissive `Href` fallback and would NOT catch a bad route path
+      # (e.g. router.push('/discvoer')) — see docs/GAPS.md #29. `expo customize`
+      # is the non-interactive way to force generation without a dev server;
+      # it also (re)writes tsconfig.json, which is a committed no-op here since
+      # the checked-in file already matches Expo's template.
+      - name: Generate route types
+        working-directory: mobile
+        run: npx expo customize tsconfig.json
+
       - name: Typecheck
         working-directory: mobile
         run: npx tsc --noEmit

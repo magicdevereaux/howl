@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_current_user
+from app.dependencies import email_verification_error, get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, PublicProfileOut, UserOut
 from app.services.image_generation import delete_avatar
@@ -88,7 +88,27 @@ def update_my_profile(
 
     if payload.bio is not None and payload.bio != current_user.bio:
         current_user.bio = payload.bio
-        can_regen = _try_consume_regen_slot(current_user, db)
+        # Editing the bio is the other way to trigger a paid DALL-E call, so it
+        # needs the same email-verification gate as POST /api/avatar/regenerate
+        # (GAPS #25) — otherwise a throwaway account walks around that gate.
+        #
+        # But this endpoint stays *open*: a user past their grace window has to
+        # be able to edit their profile, not least because it is how they'd fix a
+        # typo'd email. So the bio still saves and only the spend is withheld;
+        # `profile_needs_regen` below defers the generation instead of losing it,
+        # and the clients already surface that as an "avatar out of date" prompt
+        # the user can act on once verified.
+        #
+        # Checked *before* consuming a slot, so a withheld regeneration does not
+        # burn the user's monthly quota for an image they never received.
+        if email_verification_error(current_user) is not None:
+            can_regen = False
+            logger.info(
+                "profile: withholding avatar regen for unverified user %d (grace expired)",
+                current_user.id,
+            )
+        else:
+            can_regen = _try_consume_regen_slot(current_user, db)
         if can_regen:
             # Slot available — reset the avatar and queue generation.
             # Delete the old image first so it doesn't orphan in R2.

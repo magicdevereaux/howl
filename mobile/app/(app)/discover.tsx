@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -72,7 +72,10 @@ export default function DiscoverScreen() {
 
   useEffect(() => {
     topUserIdShared.value = users[0]?.id ?? 0;
-  }, [users]);
+    // topUserIdShared is a Reanimated shared value — its identity never
+    // changes across renders, so including it is a no-op for reactivity.
+    // Added anyway to keep the deps list exhaustive and lint clean.
+  }, [users, topUserIdShared]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -121,7 +124,10 @@ export default function DiscoverScreen() {
 
     if (res.data?.match) setMatchPopup(res.data.match);
     else if (swipedUser) setLastSwiped(swipedUser); // only offer undo when no match
-  }, []);
+    // translateX/translateY are Reanimated shared values with stable
+    // identity — adding them doesn't change when onSwipe is recreated, but
+    // keeps the deps list exhaustive.
+  }, [translateX, translateY]);
 
   const handleUndo = useCallback(async () => {
     if (!lastSwiped || undoing) return;
@@ -156,6 +162,13 @@ export default function DiscoverScreen() {
             translateY.value = withSpring(0, SPRING_BACK);
           }
         }),
+    // translateX/translateY are stable-identity shared values (safe to omit).
+    // topUserIdShared.value is read inside the .onEnd() worklet at gesture-end
+    // time, not captured when this memo runs — it always sees the live value,
+    // so it isn't a real dependency of the memo's *creation*. Adding it here
+    // would instead recreate (and reattach) the Gesture object on every swipe,
+    // which is the actual bug to avoid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [onSwipe],
   );
 

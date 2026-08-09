@@ -15,14 +15,13 @@ import {
 } from 'react-native';
 
 import { api } from '../../../src/api/client';
-import { useAuth } from '../../../src/auth/AuthContext';
 import { useMatchWebSocket, WsMessage } from '../../../src/hooks/useMatchWebSocket';
 import { colors as C } from '../../../src/theme';
 import { animalEmoji, capitalise } from '../../../src/utils/avatar';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface ChatMessage extends WsMessage {}
+type ChatMessage = WsMessage;
 
 interface PageResponse {
   messages: ChatMessage[];
@@ -38,7 +37,6 @@ function formatTime(iso: string): string {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
-  const { user } = useAuth();
   const { matchId, name, animal, otherUserId } = useLocalSearchParams<{
     matchId: string;
     name: string;

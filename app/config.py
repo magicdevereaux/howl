@@ -45,5 +45,24 @@ class Settings(BaseSettings):
     # Sentry — optional; omitting disables error/performance monitoring
     sentry_dsn: str | None = None
 
+    # ---------------------------------------------------------------------
+    # Email verification enforcement (GAPS #25)
+    #
+    # Enforcement is graduated, not a hard gate at registration: an unverified
+    # account keeps full access for `email_verification_grace_period_hours`
+    # measured from `users.created_at`, and only then loses the *outbound*
+    # actions (swiping, sending messages, avatar generation). Reads stay open
+    # throughout so a user can see what they are about to lose.
+    #
+    # `enforce_email_verification` is the operator kill switch. It defaults to
+    # True because that is the correct posture and the grace window is what
+    # makes it survivable — but GAPS #3 is still open (no email provider is
+    # wired, verification links are printed to stdout), so an operator who
+    # discovers users cannot actually receive their link needs a way to turn
+    # enforcement off without a code change.
+    # ---------------------------------------------------------------------
+    enforce_email_verification: bool = True
+    email_verification_grace_period_hours: int = 72
+
 
 settings = Settings()
