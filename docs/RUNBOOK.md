@@ -29,11 +29,14 @@ REDIS_URL=redis://localhost:6379/0
 | Process | Command | Breaks if missing |
 |---|---|---|
 | API | `python -m uvicorn app.main:app --port 8001 --reload` | everything |
-| Celery worker | `python -m celery -A app.celery_app worker --loglevel=info --pool=solo` | avatars stuck `pending`, no notifications, no auto-match |
+| Celery worker | `python -m celery -A app.celery_app worker --loglevel=info --pool=solo -Q celery,bot_response` | avatars stuck `pending`, no notifications, no auto-match, bots never reply |
 | Celery **beat** | `python -m celery -A app.celery_app beat --loglevel=info` | bots never reply |
 | Web client | `cd frontend && npm run dev` | — |
 
-`--pool=solo` is required on Windows.
+`--pool=solo` is required on Windows. The worker must list both queues explicitly (`-Q
+celery,bot_response`) — since GAPS #55 routed `process_bot_responses` onto a `bot_response` queue, a
+worker started without `-Q` only consumes the default `celery` queue and will silently never run bot
+replies. In production the two queues are split across separate services instead; see below.
 
 ## Environment variables
 
@@ -53,7 +56,7 @@ REDIS_URL=redis://localhost:6379/0
 | `ENVIRONMENT` | — | Sentry tag, echoed by `/health`. Default `production`. |
 | `DEBUG` | — | Enables `/docs` + `/redoc`, adds localhost CORS, makes cookies insecure. Never true in prod. |
 | `SKIP_SEED` | — | Set `true` to skip the 1000-bot seed on deploy |
-| `PORT` | injected | Used unquoted by `startup.sh:16` |
+| `PORT` | injected | Used by `startup.sh:12` |
 
 ## Deploy (Railway)
 
