@@ -8,6 +8,7 @@ from app.db import get_db
 from app.dependencies import email_verification_error, get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, PublicProfileOut, UserOut
+from app.services.avatar_status import set_avatar_status
 from app.services.image_generation import delete_avatar
 from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
@@ -127,8 +128,7 @@ def update_my_profile(
             current_user.personality_traits = None
             current_user.avatar_description = None
             current_user.avatar_url = None
-            current_user.avatar_status = AvatarStatus.pending
-            current_user.avatar_status_updated_at = datetime.now(UTC)
+            set_avatar_status(current_user, AvatarStatus.pending)
             current_user.profile_needs_regen = False
         else:
             # No slots left — flag that the avatar no longer matches the profile

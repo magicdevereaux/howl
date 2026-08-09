@@ -7,6 +7,7 @@ from app.db import get_db
 from app.dependencies import get_current_user, require_verified_email
 from app.models.user import AvatarStatus, User
 from app.schemas.avatar import AvatarStatusOut
+from app.services.avatar_status import set_avatar_status
 from app.services.image_generation import delete_avatar
 from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
@@ -167,8 +168,7 @@ def regenerate_avatar(
     current_user.personality_traits = None
     current_user.avatar_description = None
     current_user.avatar_url = None
-    current_user.avatar_status = AvatarStatus.pending
-    current_user.avatar_status_updated_at = datetime.now(UTC)
+    set_avatar_status(current_user, AvatarStatus.pending)
     current_user.profile_needs_regen = False  # avatar now reflects current profile
 
     current_user.avatar_regenerations_this_month += 1

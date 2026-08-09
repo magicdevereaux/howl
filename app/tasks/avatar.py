@@ -10,6 +10,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models.user import AvatarStatus, User
 from app.services import task_lock
+from app.services.avatar_status import set_avatar_status
 from app.services.image_generation import generate_avatar_image
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ def _mark_failed(db: object, user: User | None) -> None:
     if user is None:
         return
     try:
-        user.avatar_status = AvatarStatus.failed
+        set_avatar_status(user, AvatarStatus.failed)
         _refund_regen_slot(user)
         user.updated_at = datetime.now(UTC)
         db.commit()
@@ -159,6 +160,23 @@ def generate_avatar(self, user_id: int) -> None:
                 "generate_avatar: user %d already being generated elsewhere — skipping", user_id
             )
             return
+
+        # ── Heartbeat ────────────────────────────────────────────────────────
+        # Re-stamp `pending` now that this attempt is genuinely starting.
+        #
+        # Without this the timestamp records when the task was *enqueued*, and
+        # the two-minute staleness rule then measures broker latency plus work
+        # rather than work. A generation that is legitimately slower than two
+        # minutes -- three `anthropic.APIError` retries are 60s apart by
+        # construction, so that path alone is 3+ minutes -- looks dead while it
+        # is still running, and `frontend/src/App.jsx` stops polling and offers
+        # "Try Again". Since each retry re-enters the task body, each one
+        # refreshes the heartbeat, so a retrying generation never looks stale.
+        #
+        # Safe to commit here: the CHECK-constrained ready transition below has
+        # to be one statement batch, and this is before it, not inside it.
+        set_avatar_status(user, AvatarStatus.pending)
+        db.commit()
 
         # ── Claude call ──────────────────────────────────────────────────────
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -222,7 +240,7 @@ def generate_avatar(self, user_id: int) -> None:
         user.personality_traits = personality_traits
         user.avatar_description = avatar_description
         user.avatar_url = avatar_url
-        user.avatar_status = AvatarStatus.ready
+        set_avatar_status(user, AvatarStatus.ready)
         user.updated_at = datetime.now(UTC)
         db.commit()
         logger.info(
