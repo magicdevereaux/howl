@@ -19,8 +19,14 @@ File and line references in unstruck text describe the code *as it was when the 
 have moved; the struck entries note where. Two claims turned out to be **wrong on inspection** and are
 withdrawn rather than "fixed" — see #23's push-token bullet.
 
-**Status: 32 of 37 fully closed, 3 partial, 1 open** (#25 and #30 closed 2026-08-08). The one open item
-is **#3**. See [GAPS-ROUND-2.md](GAPS-ROUND-2.md) for 30 further findings, including two new P0s.
+**Status: 34 of 37 fully closed, 2 partial, 1 open** (#22, #25, #30 closed and part of #23 closed on
+2026-08-08). The one open item is **#3** (email provider). **#33** is in flight. The 2 partials are #23
+(`users.age` nullable / the 18+ gate remains a product call) and #35 (needs an EAS account).
+
+Suite: **727 backend tests**, up from 539 at the start of 2026-08-08.
+
+See [GAPS-ROUND-2.md](GAPS-ROUND-2.md) for 30 further findings; its two P0s are both fixed, and
+everything from #40 down is open.
 
 **Every P0 and P1 is closed except #3** — no email provider, so password-reset tokens go to stdout. That
 one is blocked on choosing a provider, not on effort.
@@ -201,7 +207,7 @@ Also: `downgrade base` → `upgrade head` **fails on Postgres** because migratio
 drops the `avatar_status` enum type on downgrade, and `m4g5h6i7j8k9:20-22` is an irreversible no-op
 downgrade (contradicting ADR-005's "each reversible" claim).
 
-### 22. ~~Timezone handling is ad hoc~~ 🟡 PARTLY FIXED (026ef4b)
+### 22. ~~Timezone handling is ad hoc~~ ✅ FIXED (026ef4b, 97029f7)
 
 **Done:** every *creation* timestamp now carries `server_default=func.now()`, so raw-SQL and bulk
 inserts no longer violate NOT NULL and history records DB time rather than app-host clock skew.
@@ -216,8 +222,35 @@ timestamp is compared against `datetime.now(UTC)`. Sites still lacking it: `rege
 helper used everywhere rather than fixing them one at a time — a `TypeDecorator` on the column would
 also work and would remove the need to remember.
 
+**Both halves are now closed (2026-08-08, 97029f7)**, and one of them was closed by discovering the
+claim was false:
+
+- The scattered normalisation is replaced by **one mechanism**: `app/models/types.py`'s `UtcDateTime`
+  `TypeDecorator`, applied to **all 18** timestamp columns across all nine models — not just the four
+  that were missing it, since a mechanism applied to half the columns teaches the wrong lesson. Inbound
+  naive is assumed UTC (the convention every writer already follows); an aware non-UTC value is
+  *converted*, not stripped, so the instant never moves. No migration: the DDL is identical, proven by
+  autogenerate emitting a bare `pass` against a throwaway Postgres at head, plus a standing assertion
+  that `UtcDateTime().compile()` is byte-equal to `DateTime(timezone=True)` on both dialects.
+- **The `updated_at` claim below was WRONG and is withdrawn.** Measured, not assumed: Core `update()`,
+  `Query.update()` and `bulk_update_mappings` **all fire** the Python-side `onupdate` — SQLAlchemy's
+  compiler adds the column to the SET clause whenever it compiles a Column-aware statement. Only raw
+  `text()` does not, and `app/` contains no raw SQL writes. So `app/api/swipes.py` was already correct
+  and `app/tasks/notify.py` no longer bulk-updates at all (its bulk statement is a `.delete()`). No fix
+  was landed, deliberately, and the behaviour is pinned by tests so nobody adds a Postgres trigger for a
+  non-problem. A column-level server-side `onupdate` was not available anyway: Postgres has no
+  `ON UPDATE` column clause, and on SQLite `CURRENT_TIMESTAMP` drops to whole-second precision.
+
+Six `replace(tzinfo=utc)` sites are now redundant no-ops, left in place to avoid cross-branch conflicts
+and safe to delete in a follow-up: `app/api/avatar.py:43`, `app/api/profile.py:43`, `app/api/swipes.py:56`,
+`app/dependencies.py:85`, `app/services/auth_service.py:102`, `app/tasks/bot_response.py:79`.
+
+<details><summary>The withdrawn claim, for history</summary>
+
 `updated_at`'s Python `onupdate` being skipped by bulk `.update()` is unchanged and is still a real
 trap: `app/api/swipes.py` and `app/tasks/notify.py` both use bulk updates now.
+
+</details>
 
 ### 23. ~~Missing constraints~~ 🟡 MOSTLY FIXED (026ef4b)
 
@@ -491,8 +524,12 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 4. **Leftovers inside otherwise-closed entries**, each documented in place:
    - **#22** — the `replace(tzinfo=utc)` sites still scattered across four columns. Wants one helper or a
      `TypeDecorator`, not four more one-off fixes.
-   - **#23** — `users.age` nullable (the 18+ gate), and no CHECK tying `avatar_status='ready'` to
-     `avatar_url`/`animal`.
+   - **#23** — `users.age` nullable (the 18+ gate) is still a product call. The CHECK is **done**:
+     migration `t1n2o3p4q5r6` adds `ck_users_ready_avatar_has_animal`
+     (`avatar_status <> 'ready' OR animal IS NOT NULL`). Deliberately about `animal`, **not**
+     `avatar_url` — two legitimate states hold `ready` with a null url (the 1000 seeded bots, and a
+     best-effort DALL·E failure falling back to an emoji), so a url-based CHECK would have aborted the
+     seed step of every production deploy.
    - **#30** — the R2 upload path, i.e. the production avatar persistence path, still never exercised.
    - **#35** — `eas login && eas init` for `extra.eas.projectId`, plus the real deploy hostnames.
    - **#29** — 21 real findings the new linters surface in existing client code (dead code, four

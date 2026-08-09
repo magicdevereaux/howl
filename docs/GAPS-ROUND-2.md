@@ -1,5 +1,13 @@
 # Gaps & Improvements — round two
 
+> **Status, 2026-08-08:** both P0s (**#38**, **#39**) are **fixed** — see the entries. Everything from
+> **#40** down is still open. The highest-value remaining items are **#43** (Celery `.delay()` is the one
+> Redis dependency that fails *closed* — a measured 108.8s block, a 500 on an already-committed message,
+> and threadpool exhaustion that takes down every sync route while `/health` still reports `ok`), **#42**
+> (the #7 lock turns a killed worker's duplicate work into *silently dropped* work), **#45** (bot replies
+> are never broadcast or notified, so the re-engagement loop is dead) and **#50** (a failed swipe arms
+> Undo, which then deletes the *previous* match). `main` is at 727 passing tests.
+
 A second pass over `main` at `c56f9f1`, aimed at what round one under-covered: the avatar pipeline end to
 end, WebSocket concurrency and lifecycle, **authorization** as distinct from authentication, operational
 reality, undocumented fail-open (and fail-*closed*) behaviour, data lifecycle, the clients as products,
@@ -37,7 +45,27 @@ architecture/scale, **P3** hygiene.
 
 ## P0 — Fix before any real user touches this
 
-### 38. Unvalidated Claude output in `personality_traits` 500s one user's login and everyone's discover
+### 38. ~~Unvalidated Claude output in `personality_traits` 500s one user's login and everyone's discover~~ ✅ FIXED (01e1ea4)
+
+Fixed in two halves, because prevention alone leaves already-written rows broken:
+
+- **Prevention** — `_ClaudeAvatarPayload` in `app/tasks/avatar.py` validates the parsed reply before
+  anything is persisted. `ValidationError` subclasses `ValueError`, so a bad shape lands in the existing
+  `(json.JSONDecodeError, KeyError, ValueError)` handler, marks the avatar `failed` (a state
+  `POST /api/avatar/regenerate` already recovers from), and never reaches the paid DALL·E call.
+- **Containment** — `app/schemas/ai_fields.py` coerces on read for rows written before that existed:
+  `TraitList` and `DescriptionText`, applied to **all five** affected classes including
+  `MatchedProfileOut`, which this entry did not list. Coercion drops what cannot be a string rather than
+  inventing content or `str()`-ing a dict into a user-facing profile. That is what restores the repair
+  path — the owner can log in again and press Regenerate.
+
+Both halves were verified by neutralising them: pass-through coercion breaks the two reproduction tests,
+and `model_construct` in place of `model_validate` breaks the seven task tests. `tests/test_ai_payload_validation.py`
+records one trap worth knowing — you **cannot** test the schema coercion by re-validating a constructed
+schema instance, because pydantic's `revalidate_instances` defaults to `'never'` and silently skips every
+validator, so such a test passes whether or not the coercion exists.
+
+<details><summary>Original finding</summary>
 
 `app/tasks/avatar.py:122` persists whatever Claude put in `personality_traits` with no type check:
 
@@ -85,7 +113,26 @@ for free — `ValidationError` subclasses `ValueError`, so a bad shape marks the
 reaches the database. Then, to defuse rows that already exist, add a `mode="before"` field validator on
 the four schemas that drops non-string elements. Pin all five bad shapes with a test.
 
-### 39. Every production deploy deletes all 1000 bots, cascading away real users' matches and chat history
+</details>
+
+### 39. ~~Every production deploy deletes all 1000 bots, cascading away real users' matches and chat history~~ ✅ FIXED (7d8bbce)
+
+The seed is now **additive**: it inserts only the addresses that are missing and deletes nothing. Bots
+hold no state worth refreshing, so a deploy has no reason to recreate them. A destructive refresh still
+exists behind an explicit `RESEED_BOTS=true` that a deploy must never set, and the docstring no longer
+claims "idempotent" without qualification.
+
+Also narrowed the match from `LIKE 'demo%@howl.app'` to the exact address set the script owns, built from
+`DEMO_USERS`. The old pattern matched any address merely *starting* with "demo", so a real
+`demolition@howl.app` was deleted on every deploy too — the smaller sibling of this bug.
+
+The regression test pins the harm itself rather than a proxy: it builds a real user, a match with a bot
+and two messages, reseeds, and asserts all three survive with the bot's row id intact. That required
+adding `PRAGMA foreign_keys=ON` to `tests/test_seed_demo_users.py`'s fixture, which builds its own engine
+and so never inherited it from `conftest.py` — without it SQLite ignores the cascade and the test would
+have passed against the destructive code. Confirmed it fails when forced down the destructive path.
+
+<details><summary>Original finding</summary>
 
 `scripts/seed_demo_users.py:321-325`, the first thing `seed()` does:
 
@@ -123,6 +170,8 @@ Bots have no state worth refreshing — their avatars, bios and archetypes are a
 reason to recreate them. If a refresh is ever genuinely wanted, gate it behind an explicit
 `RESEED_BOTS=true` that a deploy never sets. Also see #56: with more than one API replica this same
 delete/insert runs concurrently from each of them.
+
+</details>
 
 ---
 
