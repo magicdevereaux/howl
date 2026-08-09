@@ -46,6 +46,28 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = None
 
     # ---------------------------------------------------------------------
+    # Rate limiting / client IP resolution (GAPS #66)
+    #
+    # Number of trusted reverse proxies in front of the app. `client_ip()` in
+    # app/services/rate_limit.py reads the Nth `X-Forwarded-For` entry from
+    # the *right* using this value — Railway/Vercel put exactly one proxy in
+    # front, hence the default of 1. Get this wrong in the direction of "too
+    # low" (e.g. a second proxy such as Cloudflare added in front of Railway,
+    # with this left at 1) and the parsed "client" IP becomes a proxy's own
+    # egress address, which every user shares — the IP bucket then locks the
+    # entire application out of login after 10 attempts in 15 minutes.
+    #
+    # This field used to not exist: rate_limit.py read it via
+    # `getattr(settings, "trusted_proxy_count", 1)`, so setting
+    # TRUSTED_PROXY_COUNT in the environment did nothing (verified: with
+    # pydantic-settings 2.x and this class's default `extra` behavior,
+    # an undeclared env/.env key is silently ignored, not rejected — no
+    # exception at import, the value just never reaches the object). It's
+    # declared for real now so it's actually settable.
+    # ---------------------------------------------------------------------
+    trusted_proxy_count: int = 1
+
+    # ---------------------------------------------------------------------
     # Email verification enforcement (GAPS #25)
     #
     # Enforcement is graduated, not a hard gate at registration: an unverified
