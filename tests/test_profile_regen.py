@@ -146,6 +146,54 @@ def test_flag_not_set_when_regen_available(client, db):
 
 
 # ---------------------------------------------------------------------------
+# Stale-pending refund on the shared counter (GAPS-ROUND-2 #40)
+#
+# The bio-edit path shares avatar_regenerations_this_month with
+# POST /api/avatar/regenerate, so it has to share the refund. A user whose
+# first avatar is stuck behind a dead worker must not be told their profile is
+# permanently out of date.
+# ---------------------------------------------------------------------------
+
+def test_bio_edit_refunds_a_stale_pending_slot(client, db):
+    from app.api.avatar import _MONTHLY_REGEN_LIMIT
+
+    user = _make_user(db, email="bio_stuck@howl.app", bio="Old bio.")
+    user.avatar_status = AvatarStatus.pending
+    user.animal = None
+    user.avatar_status_updated_at = datetime.now(UTC) - timedelta(minutes=10)
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=1)
+    db.commit()
+
+    called = []
+    with patch("app.api.profile.generate_avatar.delay", lambda uid: called.append(uid)):
+        res = _patch_bio(client, user, "A brand new bio, quite unlike the previous one.")
+
+    assert res.status_code == 200
+    db.refresh(user)
+    assert user.profile_needs_regen is False, "the stuck attempt was never refunded"
+    assert user.avatar_regenerations_this_month == _MONTHLY_REGEN_LIMIT
+
+
+def test_bio_edit_does_not_refund_a_fresh_pending_slot(client, db):
+    from app.api.avatar import _MONTHLY_REGEN_LIMIT
+
+    user = _make_user(db, email="bio_running@howl.app", bio="Old bio.")
+    user.avatar_status = AvatarStatus.pending
+    user.animal = None
+    user.avatar_status_updated_at = datetime.now(UTC)
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=1)
+    db.commit()
+
+    res = _patch_bio(client, user, "Another different bio for the running case.")
+
+    assert res.status_code == 200
+    db.refresh(user)
+    assert user.profile_needs_regen is True
+
+
+# ---------------------------------------------------------------------------
 # Premium bypass
 # ---------------------------------------------------------------------------
 

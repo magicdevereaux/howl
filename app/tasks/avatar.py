@@ -69,12 +69,42 @@ class _ClaudeAvatarPayload(BaseModel):
         return normalised
 
 
+def _refund_regen_slot(user: User) -> None:
+    """Give back the monthly regeneration slot this attempt consumed.
+
+    GAPS-ROUND-2 #40. Both paths that can queue a generation --
+    ``POST /api/avatar/regenerate`` and a bio edit on ``PATCH /api/profile/me``
+    -- charge ``avatar_regenerations_this_month`` at *enqueue* time, and
+    ``_MONTHLY_REGEN_LIMIT`` is 1. Without a refund, a generation that
+    permanently fails leaves a free user 429'd for thirty days over an avatar
+    they never received, and the 429 copy tells them to upgrade to premium.
+    The users most likely to hit that are new ones whose first impression of
+    the product's differentiating feature is a broken image and a paywall.
+
+    Floored at 0 rather than asserted, because the counter is also reset by the
+    30-day window: a failure that lands after the window rolled over must not
+    push it negative and hand out a free extra slot next month.
+    """
+    charged = user.avatar_regenerations_this_month or 0
+    user.avatar_regenerations_this_month = max(0, charged - 1)
+
+
 def _mark_failed(db: object, user: User | None) -> None:
-    """Set avatar_status to failed and commit. Safe to call with user=None."""
+    """Mark the avatar failed, refund the regeneration slot, and commit.
+
+    Safe to call with user=None. This is the single choke point for every
+    *permanent* failure -- parse/validation errors, generic exceptions, and
+    Claude retry exhaustion -- which is why the refund belongs here and not at
+    the individual call sites: one of them would eventually be forgotten.
+
+    The refund is written in the same transaction as the status, so the user is
+    never observable as "failed but still charged".
+    """
     if user is None:
         return
     try:
         user.avatar_status = AvatarStatus.failed
+        _refund_regen_slot(user)
         user.updated_at = datetime.now(UTC)
         db.commit()
     except Exception:

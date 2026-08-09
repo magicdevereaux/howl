@@ -192,6 +192,88 @@ def test_blocked_within_active_window(client, db):
     assert res.status_code == 429
 
 
+# ---------------------------------------------------------------------------
+# Stale-pending refund (GAPS-ROUND-2 #40)
+#
+# The documented production failure is that the Celery worker is not running --
+# startup.sh does not start it and it has to be a separate Railway service. The
+# row then sits `pending` forever, nothing ever marks it `failed`, and the slot
+# charged at enqueue is never returned. The clients detect exactly this (a
+# `pending` older than two minutes) and render "Try Again"; pressing it used to
+# return 429 with copy telling the user to upgrade to premium.
+# ---------------------------------------------------------------------------
+
+def _stuck_pending(db, user, *, age_seconds: int, charged: int = _MONTHLY_REGEN_LIMIT):
+    user.avatar_status = AvatarStatus.pending
+    user.animal = None
+    user.avatar_status_updated_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    user.avatar_regenerations_this_month = charged
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=1)
+    db.commit()
+
+
+def test_stale_pending_avatar_refunds_the_slot(client, db):
+    """The worker-never-ran case: the retry the UI offers must actually work."""
+    user = _make_user(db, email="stuckworker@howl.app")
+    _stuck_pending(db, user, age_seconds=10 * 60)
+
+    res = _regen(client, user)
+
+    assert res.status_code == 200
+    db.refresh(user)
+    # Refunded to 0, then charged again for the attempt just accepted.
+    assert user.avatar_regenerations_this_month == 1
+
+
+def test_fresh_pending_avatar_is_not_refunded(client, db):
+    """A generation that may still be in flight is not evidence of failure."""
+    user = _make_user(db, email="stillrunning@howl.app")
+    _stuck_pending(db, user, age_seconds=5)
+
+    res = _regen(client, user)
+
+    assert res.status_code == 429
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == _MONTHLY_REGEN_LIMIT
+
+
+def test_ready_avatar_is_never_refunded(client, db):
+    """A slot spent on an avatar the user actually received stays spent."""
+    user = _make_user(db, email="gotmyavatar@howl.app")
+    user.avatar_status = AvatarStatus.ready
+    user.avatar_status_updated_at = datetime.now(UTC) - timedelta(days=3)
+    user.avatar_regenerations_this_month = _MONTHLY_REGEN_LIMIT
+    user.regenerations_reset_at = datetime.now(UTC) - timedelta(days=1)
+    db.commit()
+
+    assert _regen(client, user).status_code == 429
+
+
+def test_pending_with_no_timestamp_is_refunded(client, db):
+    """Charged, pending, and no record of when it started -- nothing to wait for."""
+    user = _make_user(db, email="notimestamp@howl.app")
+    _stuck_pending(db, user, age_seconds=0)
+    user.avatar_status_updated_at = None
+    db.commit()
+
+    assert _regen(client, user).status_code == 200
+
+
+def test_stale_refund_does_not_grant_unlimited_retries(client, db):
+    """The refund is bounded: re-enqueuing re-stamps the row, so it is fresh again.
+
+    Otherwise a dead worker would turn into an unmetered paid-DALL-E faucet the
+    moment the worker came back up.
+    """
+    user = _make_user(db, email="onceper2min@howl.app")
+    _stuck_pending(db, user, age_seconds=10 * 60)
+
+    assert _regen(client, user).status_code == 200
+    # The row is `pending` again but freshly stamped, so the second press is
+    # indistinguishable from interrupting a live generation.
+    assert _regen(client, user).status_code == 429
+
+
 def test_first_regeneration_sets_reset_timestamp(client, db):
     """regenerations_reset_at is null for new users; the first regeneration sets it."""
     user = _make_user(db, email="first@howl.app")

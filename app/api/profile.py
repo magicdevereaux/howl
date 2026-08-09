@@ -22,6 +22,7 @@ from app.api.avatar import (  # noqa: E402
     _MONTHLY_REGEN_LIMIT,
     _PREMIUM_REGEN_LIMIT,
     _REGEN_WINDOW_SECONDS,
+    refund_stale_pending_attempt,
 )
 
 
@@ -48,6 +49,14 @@ def _try_consume_regen_slot(user: User, db: Session) -> bool:
         user.avatar_regenerations_this_month = 0
         user.regenerations_reset_at = now
         db.flush()
+
+    if user.avatar_regenerations_this_month >= limit:
+        # This path shares the counter with POST /api/avatar/regenerate, so it
+        # has to share the refund too (GAPS-ROUND-2 #40) -- otherwise a user
+        # whose *first* avatar is stuck pending behind a dead worker cannot get
+        # a new one by editing their bio either, and the clients' "avatar out of
+        # date" prompt becomes a dead end.
+        refund_stale_pending_attempt(user, db)
 
     if user.avatar_regenerations_this_month >= limit:
         return False
