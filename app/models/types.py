@@ -63,18 +63,25 @@ class UtcDateTime(TypeDecorator[datetime]):
     impl = DateTime(timezone=True)
     cache_ok = True
 
-    def process_bind_param(self, value: Any, dialect: Dialect) -> datetime | None:
+    # Both hooks are annotated `-> Any` rather than `-> datetime | None` because
+    # of the non-datetime pass-through below: narrowing the return type would be
+    # a lie about a branch that deliberately forwards whatever it was handed.
+    # `Any` is also what TypeDecorator itself declares.
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
         """On the way in: naive is assumed UTC; aware is converted to UTC."""
         if value is None:
             return None
         if not isinstance(value, datetime):
-            # Let SQLAlchemy/the driver raise its own, clearer error.
+            # Not our job to validate — forward it and let SQLAlchemy or the
+            # driver raise the error it would have raised anyway, which names
+            # the offending type far more clearly than anything we could.
             return value
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-    def process_result_value(self, value: Any, dialect: Dialect) -> datetime | None:
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
         """On the way out: the whole point -- never hand back a naive value.
 
         SQLite returns naive datetimes for a ``timezone=True`` column, and even
