@@ -1,16 +1,22 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
+
 import Nav from './Nav';
+import { useReport } from '../contexts/ReportContext';
+import { useSession } from '../contexts/SessionContext';
+import { PATHS } from '../routes/paths';
 import { animalEmoji, avatarUrl } from '../utils';
 
-export default function MatchesView({
-  matches, matchesLoading, matchesError,
-  fetchMatches, openChat, user,
-  setView, fetchDiscoverUsers, handleOpenReport, navProps,
-}) {
+// Zero props, down from nine. See contexts/SessionContext.jsx.
+export default function MatchesView() {
+  const navigate = useNavigate();
+  const { openReport } = useReport();
+  const { user, matches, matchesLoading, matchesError, fetchMatches, openChat } = useSession();
+
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-        <Nav {...navProps} />
+        <Nav />
 
         <h2 style={{ color: 'var(--text-primary)', fontSize: '22px', fontWeight: '600', marginBottom: '8px' }}>Your Matches</h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '28px' }}>Spirit animals that connected with yours</p>
@@ -38,7 +44,7 @@ export default function MatchesView({
             <p style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)' }}>No matches yet</p>
             <p style={{ fontSize: '14px', marginTop: '8px' }}>Go discover some spirit animals!</p>
             <button
-              onClick={() => { setView('discover'); fetchDiscoverUsers(); }}
+              onClick={() => navigate(PATHS.discover)}
               style={{ marginTop: '20px', padding: '12px 28px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '10px', fontWeight: '600', cursor: 'pointer', fontSize: '15px' }}
             >
               Discover People
@@ -91,7 +97,7 @@ export default function MatchesView({
                     )}
                   </div>
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleOpenReport(m.other_user.id, m.other_user.name); }}
+                    onClick={(e) => { e.stopPropagation(); openReport(m.other_user.id, m.other_user.name); }}
                     title="Report this user"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', opacity: 0.35, flexShrink: 0, padding: '2px 4px' }}
                   >

@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { API_URL, animalEmoji, avatarUrl, fetchApi } from '../utils';
+import { useNavigate } from 'react-router-dom';
+
+import { animalEmoji, avatarUrl } from '../utils';
+import { apiFetch } from '../api/client';
+import { useChat } from '../contexts/ChatContext';
+import { useReport } from '../contexts/ReportContext';
+import { PATHS } from '../routes/paths';
+import MessageComposer from './MessageComposer';
+import MessageList from './MessageList';
 
 const REPORT_REASONS = [
   { value: 'spam_scam',             label: 'Spam or scam' },
@@ -10,26 +18,22 @@ const REPORT_REASONS = [
   { value: 'other',                 label: 'Other' },
 ];
 
-export default function ChatView({
-  currentMatch, messages, setMessages,
-  messagesLoading, messagesError, messageInput, setMessageInput,
-  sending, sendError, sendMessage, loadMessages,
-  hasMoreMessages, loadingMore, loadMoreMessages,
-  handleDeleteMessage,
-  typingUser, sendTypingEvent,
-  handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
-  setView, fetchMatches,
-}) {
+// Zero props, down from twenty-one. See contexts/SessionContext.jsx.
+export default function ChatView() {
+  const navigate = useNavigate();
+  const { openReport } = useReport();
+  const {
+    currentMatch, messages, messagesLoading, messagesError, loadMessages,
+    sending, sendError, sendMessage, sendTypingEvent,
+    hasMoreMessages, loadingMore, loadMoreMessages, handleDeleteMessage,
+    typingUser, handleUnmatch, handleBlock, handleBlockAndReport,
+  } = useChat();
+
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const prevScrollHeightRef = useRef(null);
-  const inputRef = useRef(null);
-  const wasSending = useRef(false);
   const [pendingAction, setPendingAction] = useState(null);
-  const typingDebounceRef = useRef(null);
-
-  useEffect(() => () => { if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current); }, []);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -41,14 +45,13 @@ export default function ChatView({
     if (profileData) return;
     setProfileLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/profile/${other.id}`);
+      const res = await apiFetch(`/api/profile/${other.id}`);
       if (res.ok) setProfileData(await res.json());
     } catch { /* show what we already have from other */ }
     finally { setProfileLoading(false); }
   };
   const [blockReportReason, setBlockReportReason] = useState('');
   const [blockReportNotes, setBlockReportNotes] = useState('');
-  const [clickedMsgId, setClickedMsgId] = useState(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -56,13 +59,6 @@ export default function ChatView({
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [menuOpen]);
-
-  useEffect(() => {
-    if (!clickedMsgId) return;
-    const close = () => setClickedMsgId(null);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [clickedMsgId]);
 
   useEffect(() => {
     if (prevScrollHeightRef.current !== null && scrollContainerRef.current) {
@@ -79,38 +75,13 @@ export default function ChatView({
     loadMoreMessages();
   };
 
-  useEffect(() => {
-    if (wasSending.current && !sending) {
-      inputRef.current?.focus();
-    }
-    wasSending.current = sending;
-  }, [sending]);
-
-  const formatTime = (iso) =>
-    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-  const formatDate = (iso) => {
-    const d = new Date(iso);
-    const today = new Date();
-    const yesterday = new Date(today - 86400000);
-    if (d.toDateString() === today.toDateString()) return 'Today';
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  const grouped = messages.reduce((acc, msg) => {
-    const label = formatDate(msg.created_at);
-    (acc[label] = acc[label] || []).push(msg);
-    return acc;
-  }, {});
-
   return (
     <div style={{ height: '100vh', overflow: 'hidden', background: 'var(--gradient-main)', display: 'flex', flexDirection: 'column' }}>
 
       {/* Chat header */}
       <div style={{ background: 'rgba(0,0,0,0.4)', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
         <button
-          onClick={() => { setView('matches'); fetchMatches(); }}
+          onClick={() => navigate(PATHS.matches)}
           style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
         >
           ← Matches
@@ -212,82 +183,13 @@ export default function ChatView({
             </p>
           </div>
         ) : (
-          Object.entries(grouped).map(([dateLabel, msgs]) => (
-            <div key={dateLabel}>
-              <div style={{ textAlign: 'center', margin: '16px 0 10px' }}>
-                <span style={{ background: 'rgba(0,0,0,0.45)', color: 'var(--text-secondary)', fontSize: '11px', padding: '3px 12px', borderRadius: '10px' }}>
-                  {dateLabel}
-                </span>
-              </div>
-              {msgs.map((msg) => (
-                <div key={msg.id} style={{ display: 'flex', justifyContent: msg.is_mine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '6px', marginBottom: '8px' }}>
-                  {!msg.is_mine && !msg.deleted_at && (
-                    <button
-                      onClick={() => handleOpenReport(other.id, other.name, msg.id)}
-                      title="Report message"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', opacity: 0.25, padding: '2px', flexShrink: 0, lineHeight: 1 }}
-                    >
-                      🚩
-                    </button>
-                  )}
-
-                  <div style={{
-                    maxWidth: '70%',
-                    padding: msg.deleted_at ? '8px 14px' : '10px 14px',
-                    borderRadius: msg.is_mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                    background: msg.deleted_at
-                      ? 'var(--border-subtle)'
-                      : (msg.is_mine ? 'var(--accent)' : 'rgba(255,255,255,0.1)'),
-                    color: 'var(--text-primary)',
-                    boxShadow: msg.deleted_at ? 'none' : '0 1px 4px rgba(0,0,0,0.2)',
-                    border: msg.deleted_at ? '1px dashed var(--border)' : 'none',
-                  }}>
-                    {msg.deleted_at ? (
-                      <p style={{ margin: 0, fontSize: '13px', fontStyle: 'italic', opacity: 0.45 }}>
-                        🗑 Message deleted
-                      </p>
-                    ) : (
-                      <>
-                        <p style={{ margin: 0, fontSize: '15px', lineHeight: '1.45', wordBreak: 'break-word' }}>{msg.content}</p>
-                        <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
-                          {formatTime(msg.created_at)}
-                          {msg.is_mine && (
-                            <span style={{ marginLeft: '5px', color: msg.read_at ? 'var(--accent-hover)' : 'var(--text-disabled)' }}>
-                              {msg.read_at ? '✓✓' : '✓'}
-                            </span>
-                          )}
-                        </p>
-                      </>
-                    )}
-                  </div>
-
-                  {msg.is_mine && !msg.deleted_at && (
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setClickedMsgId(clickedMsgId === msg.id ? null : msg.id); }}
-                        title="Message options"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-disabled)', fontSize: '16px', lineHeight: 1, padding: '2px 4px' }}
-                      >
-                        ⋮
-                      </button>
-                      {clickedMsgId === msg.id && (
-                        <div style={{ position: 'absolute', bottom: '100%', right: 0, background: 'var(--bg-card)', borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)', overflow: 'hidden', minWidth: '160px', zIndex: 100, marginBottom: '4px' }}>
-                          <button
-                            onClick={() => { setClickedMsgId(null); handleDeleteMessage(msg.id); }}
-                            style={{ display: 'block', width: '100%', padding: '11px 16px', background: 'none', border: 'none', textAlign: 'left', fontSize: '14px', color: '#c53030', cursor: 'pointer', fontWeight: '500' }}
-                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(197,48,48,0.1)'}
-                            onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-                          >
-                            🗑 Delete message
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))
+          <MessageList
+            messages={messages}
+            otherName={other.name}
+            otherId={other.id}
+            onDelete={handleDeleteMessage}
+            onReport={openReport}
+          />
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -301,48 +203,13 @@ export default function ChatView({
         </div>
       )}
 
-      {/* Send error */}
-      {sendError && (
-        <div style={{ background: 'rgba(197,48,48,0.15)', borderTop: '1px solid rgba(197,48,48,0.3)', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <p style={{ color: '#fc8181', fontSize: '13px', margin: 0 }}>⚠️ {sendError}</p>
-          <button onClick={sendMessage} style={{ padding: '4px 12px', background: '#c53030', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Message input */}
-      <div style={{ background: 'var(--bg-card)', padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, borderTop: sendError ? 'none' : '1px solid var(--border)' }}>
-        <input
-          type="text"
-          value={messageInput}
-          ref={inputRef}
-          onChange={(e) => {
-            setMessageInput(e.target.value.slice(0, 2000));
-            if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current);
-            typingDebounceRef.current = setTimeout(() => sendTypingEvent?.(), 500);
-          }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder={`Message ${other.name || 'them'}…`}
-          disabled={sending}
-          style={{ flex: 1, padding: '11px 16px', border: '2px solid var(--border)', borderRadius: '24px', fontSize: '15px', outline: 'none', boxSizing: 'border-box', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
-          onFocus={(e) => e.target.style.borderColor = '#6B3FA0'}
-          onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
-        />
-        <button
-          onClick={sendMessage}
-          disabled={!messageInput.trim() || sending}
-          style={{
-            width: '44px', height: '44px', borderRadius: '50%', border: 'none', flexShrink: 0,
-            background: (!messageInput.trim() || sending) ? 'var(--bg-hover)' : 'var(--gradient-brand)',
-            cursor: (!messageInput.trim() || sending) ? 'not-allowed' : 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px',
-            transition: 'background 0.15s',
-          }}
-        >
-          ➤
-        </button>
-      </div>
+      <MessageComposer
+        otherName={other.name}
+        sending={sending}
+        sendError={sendError}
+        onSend={sendMessage}
+        onTyping={sendTypingEvent}
+      />
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -369,6 +236,33 @@ export default function ChatView({
                 style={{ flex: 1, padding: '11px', background: 'var(--bg-nav)', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
               >
                 Unmatch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block confirmation — no report filed. Same shape as the unmatch
+          confirmation above, and as the inline confirm on the discover card. */}
+      {pendingAction === 'block' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <div style={{ background: 'var(--bg-card)', borderRadius: '16px', padding: '32px', maxWidth: '360px', width: '100%', textAlign: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.5)' }}>
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🚫</div>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Block {other.name || 'this user'}?
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '24px', lineHeight: '1.5' }}>
+              They'll be removed from your matches and won't be able to contact you. No report is sent.
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setPendingAction(null)} style={{ flex: 1, padding: '11px', background: 'var(--bg-hover)', color: 'var(--text-surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => { setPendingAction(null); handleBlock(other.id); }}
+                style={{ flex: 1, padding: '11px', background: '#c53030', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                Block
               </button>
             </div>
           </div>
@@ -525,15 +419,22 @@ export default function ChatView({
 
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                  onClick={() => { setShowProfileModal(false); handleOpenReport(other.id, other.name); }}
+                  onClick={() => { setShowProfileModal(false); openReport(other.id, other.name); }}
                   style={{ flex: 1, padding: '10px', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
                   onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
                   onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'}
                 >
                   🚩 Report
                 </button>
+                {/* Block without filing a report — the pair "🚩 Report" /
+                    "🚫 Block" here mirrors the two links under the discover
+                    card, and means the same thing in both places. This button
+                    used to open the Block & Report modal, which requires a
+                    reason: the label promised one action and delivered another,
+                    and `handleBlock` sat unused as a result. The reporting path
+                    is still one item up, in the ⋯ menu. */}
                 <button
-                  onClick={() => { setShowProfileModal(false); setBlockReportReason(''); setBlockReportNotes(''); setPendingAction('block-report'); }}
+                  onClick={() => { setShowProfileModal(false); setPendingAction('block'); }}
                   style={{ flex: 1, padding: '10px', background: 'transparent', color: '#c53030', border: '1px solid rgba(197,48,48,0.4)', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
                   onMouseEnter={(e) => e.currentTarget.style.borderColor = '#c53030'}
                   onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(197,48,48,0.4)'}

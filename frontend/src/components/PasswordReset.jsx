@@ -59,7 +59,33 @@ export default function PasswordReset({
       <div style={{ background: 'var(--bg-card)', borderRadius: '16px', padding: '40px', maxWidth: '400px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
         <h1 style={{ fontSize: '26px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px', textAlign: 'center' }}>Set new password</h1>
 
-        {resetDone ? (
+        {/* No token: say so instead of offering a form that cannot work.
+            `resetToken` was an unused prop until now, because this screen was
+            only ever reachable by following a `?token=` link. /reset-password is
+            a real URL now, so it can also be reached by typing it, by a link
+            whose query got stripped by an email client, or by a refresh after
+            the token was consumed — and the form would have POSTed an empty
+            token and blamed the user's link for expiring. */}
+        {!resetToken && !resetDone ? (
+          <div style={{ textAlign: 'center', marginTop: '16px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔗</div>
+            <p style={{ color: 'var(--text-primary)', fontWeight: '600', marginBottom: '8px' }}>This reset link is incomplete</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '24px', lineHeight: '1.5' }}>
+              Open the link from your email directly, or request a new one.
+            </p>
+            <button
+              onClick={() => setView('forgot-password')}
+              style={{ padding: '12px 28px', background: 'var(--gradient-brand)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
+            >
+              Request a new link
+            </button>
+            <p style={{ marginTop: '20px', textAlign: 'center', fontSize: '14px' }}>
+              <button onClick={() => setView('login')} style={{ color: 'var(--text-secondary)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '14px' }}>
+                Back to Sign In
+              </button>
+            </p>
+          </div>
+        ) : resetDone ? (
           <div style={{ textAlign: 'center', marginTop: '16px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
             <p style={{ color: 'var(--text-primary)', fontWeight: '600', marginBottom: '8px' }}>Password updated!</p>

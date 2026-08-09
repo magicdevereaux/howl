@@ -1,21 +1,30 @@
 import React, { useEffect, useState } from 'react';
 import Nav from './Nav';
+import { useSession } from '../contexts/SessionContext';
 import { animalEmoji, avatarUrl } from '../utils';
 
-export default function ProfileView({
-  user, avatarStatus, isStale, isGenerating,
-  name, age, location, bio,
-  error, loading, copied,
-  handleSaveProfile, handleRegenerate, handleCopyAnimal,
-  deleteModalOpen, setDeleteModalOpen,
-  deleteConfirmText, setDeleteConfirmText,
-  deleteLoading, deleteError, setDeleteError,
-  handleDeleteAccount,
-  emailNotifications, handleToggleNotifications,
-  blocks, blocksLoading, fetchBlocks, handleUnblock,
-  navProps,
-}) {
-  useEffect(() => { fetchBlocks(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+// Zero props, down from twenty-four — the worst case GAPS #33 called out.
+// See contexts/SessionContext.jsx.
+export default function ProfileView() {
+  const {
+    user, avatarStatus, isStale, isGenerating,
+    name, age, location, bio,
+    error, loading, copied,
+    handleSaveProfile, handleRegenerate, handleCopyAnimal,
+    handleDeleteAccount, deleteLoading, deleteError, setDeleteError,
+    emailNotifications, handleToggleNotifications,
+    blocks, blocksLoading, fetchBlocks, handleUnblock,
+  } = useSession();
+
+  // The delete-account dialog's own state. It was three fields on App
+  // (deleteModalOpen, deleteConfirmText and their setters) threaded down here,
+  // for a modal that only this screen opens — nothing above needs to know it is
+  // on screen or what has been typed into it. `deleteLoading`/`deleteError`
+  // stay in the session, because the request that sets them lives there.
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+
+  useEffect(() => { fetchBlocks(); }, [fetchBlocks]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState({});
@@ -78,7 +87,7 @@ export default function ProfileView({
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-        <Nav {...navProps} />
+        <Nav />
 
         {/* Unverified email banner */}
         {user && !user.is_email_verified && (
