@@ -67,7 +67,9 @@ The downside is that Redis is not a durable message queue. In the default config
 
 ## ADR-003: JWT for authentication instead of sessions
 
-**Status:** Accepted
+**Status:** Superseded by ADR-008. The web client now receives its JWT as an `httpOnly` cookie rather than
+storing it in `localStorage`; the `Authorization: Bearer` path described below survives, but only as the
+mobile client's mechanism. Kept for historical context — see ADR-008 for what replaced it and why.
 
 ### Context
 
@@ -101,7 +103,11 @@ Password reset tokens are separate single-use database records with a 1-hour exp
 
 ## ADR-004: HTTP polling for chat instead of WebSockets
 
-**Status:** Accepted (v1), expected to change
+**Status:** Superseded by ADR-009. This record's own status line said "expected to change" — it did. Chat
+is WebSockets now, with a Redis pub/sub layer carrying events between replicas, which is exactly the layer
+this record cites as the reason not to build it. The read-receipt consequence below no longer holds
+either: there is no poll to double as a read-receipt mechanism, and read receipts are not currently
+broadcast at all (see GAPS-ROUND-2 #49). Kept for historical context.
 
 ### Context
 
@@ -225,3 +231,125 @@ Use Cloudflare R2 as the primary avatar store with a transparent local filesyste
 - Existing avatars stored as local paths continue to work via the `StaticFiles` mount; there is no forced migration.
 - Account deletion calls `delete_avatar(url)` which handles both URL formats — boto3 `delete_object` for R2, `Path.unlink` for local.
 - The `R2_PUBLIC_URL` env var allows a custom domain or Cloudflare's `pub-*.r2.dev` dev URL to be used as the public base; if omitted, the endpoint URL + bucket name is used as the default.
+
+---
+
+## ADR-008: Cookie-or-bearer unified authentication
+
+**Status:** Accepted
+
+### Context
+
+ADR-003 chose `localStorage` + `Authorization: Bearer` for every client, specifically to avoid the
+complexity of cross-origin cookies between the Vercel-hosted web client and the Railway API. That decision
+carried a real cost: a JWT sitting in `localStorage` is readable by any script running on the page, so a
+single XSS bug anywhere in the frontend is a full account-takeover primitive, not just a data leak. Once
+the web and mobile clients diverged — mobile has no browser, no XSS surface, and no way to receive a
+`Set-Cookie` the way a fetch-based web app can act on one — a single token-delivery mechanism for both
+stopped being the simplification it was chosen for.
+
+### Decision
+
+Web and mobile use different token *delivery* mechanisms, unified behind one server-side check:
+
+- **Web** (`app/api/auth.py`): login/register/refresh set `access_token` and `refresh_token` as `httpOnly`,
+  `Secure`, `SameSite=None` cookies (`SameSite=Lax` in debug, where cross-origin isn't in play). The token
+  itself never reaches JavaScript.
+- **Mobile** (`app/api/mobile_auth.py`): the same endpoints return `access_token` / `refresh_token` in the
+  JSON body, and the Expo client stores them and sends `Authorization: Bearer <token>` — there is no
+  browser DOM for a cookie to protect against, and no cross-origin cookie problem to have in the first
+  place on a native client.
+- **Server-side, one dependency**: `get_current_user` (`app/dependencies.py:14-19`) checks the
+  `access_token` cookie first and falls back to the `Authorization: Bearer` header. Every protected route
+  goes through this one function, so a route cannot accidentally support only one client's auth style.
+
+### Reasoning
+
+This is not "we picked cookies instead of bearer tokens" — it's picking the delivery mechanism that
+closes each client's actual attack surface, without forcing a second implementation of login, refresh, or
+route protection. `app/services/auth_service.py` issues the tokens themselves identically either way;
+`app/api/auth.py` and `app/api/mobile_auth.py` differ only in how they hand the result to the client. That
+split (CLAUDE.md calls it "deliberate and correct") is what lets `get_current_user` stay one small
+function instead of two auth systems that can drift — which is exactly what happened before this
+consolidation (see the #18 drift bugs the auth-hardening test suite pins down).
+
+Cookies for web still need the cross-origin ceremony ADR-003 was written to avoid: `SameSite=None;
+Secure` and an explicit CORS allowlist with `allow_credentials=True`. That cost didn't go away; it was
+judged worth paying once XSS-exposed `localStorage` was the alternative.
+
+### Consequences
+
+- `get_current_user` checking the cookie first means a request that (incorrectly) sends both a stale
+  cookie and a fresh bearer header will use the cookie. This has not come up in practice because a client
+  only ever sends the mechanism it was issued.
+- Logout must clear cookies server-side (`response.delete_cookie(...)`) for the web client; the mobile
+  client's logout is just discarding the local copy, since there's no server-visible artifact to revoke.
+- Neither mechanism supports server-side revocation before expiry — deleting a user's account still relies
+  on `get_current_user` 401ing on the next request because the row is gone, same as ADR-003 described.
+  That gap is unaffected by which side carries the token.
+- CORS configuration (`app/main.py`) must keep `allow_credentials=True` and an explicit origin allowlist —
+  `allow_origins=["*"]` is incompatible with credentialed cookies by spec, so this is not a knob that can
+  be loosened casually.
+
+---
+
+## ADR-009: WebSockets with Redis pub/sub fan-out for chat
+
+**Status:** Accepted
+
+### Context
+
+ADR-004 chose 3-second HTTP polling specifically to avoid building "a pub/sub layer (Redis Pub/Sub or a
+dedicated WebSocket server)" — its own words for the cost it wasn't ready to pay. That record's status
+line already flagged it as provisional ("Accepted (v1), expected to change"). The cost of *not* paying it
+turned out to be linear request load per open chat tab (~20 req/min each) and latency bounded by the poll
+interval rather than by anything closer to real time.
+
+### Decision
+
+Real-time delivery is a WebSocket per open chat (`GET /api/matches/{id}/ws` — `app/api/chat.py`), fanned
+out across replicas by a Redis pub/sub layer (`app/services/pubsub.py`, `ChatPubSub`) — i.e., exactly the
+layer ADR-004 named as the reason not to do this.
+
+### Reasoning
+
+**Why pub/sub, not just WebSockets:** a WebSocket connection lives in the process that accepted it. With
+more than one web replica, a message sent by a user whose request landed on replica A has to reach a
+recipient socket that may be open on replica B. `ConnectionManager` (`app/api/chat.py`) owns local sockets
+per process; `ChatPubSub` is the transport that carries the event between replicas over one Redis channel
+per match (`howl:chat:match:<match_id>`), subscribed to only while a replica has at least one local socket
+for that match.
+
+**Why committed-before-broadcast:** a chat message is written to Postgres and committed *before* it is
+broadcast (`db.commit()` precedes `background_tasks.add_task(manager.broadcast, ...)` in the send path).
+The socket is deliberately the optimistic, best-effort layer; `GET /api/matches/{id}/messages` reading from
+Postgres is the source of truth a client falls back to. This is what makes the next tradeoff acceptable.
+
+**Why fail open to local-only, not fail closed:** Redis pub/sub is fire-and-forget with no replay. If
+Redis is unreachable, `ChatPubSub.publish` logs and returns `False` and `subscribe` records the desired
+channel without raising — delivery degrades to local-only, which is exactly the single-replica behavior
+this replaces. A Redis outage costs cross-replica fan-out, not chat correctness, because the message row
+already exists in Postgres regardless of whether the broadcast reached anyone. This deliberately matches
+the fail-open precedent in `app/services/rate_limit.py`: an infrastructure outage degrades a feature, it
+does not take down the request path.
+
+**Why one reader task per process, not one per subscription:** a single supervised task owns the pub/sub
+connection, reconciles its live subscription set against the desired set every loop iteration (so a
+subscribe issued while Redis was down self-heals within one read timeout), and uses `health_check_interval`
+so a half-open TCP connection surfaces as an error instead of silently going deaf.
+
+### Consequences
+
+- `ARCHITECTURE.md`'s and `RUNBOOK.md`'s previous "scale to one replica" guidance is retired — that was
+  true only while the connection registry was a bare in-process dict with no cross-replica transport.
+- The origin-stamping scheme (a uuid4 per process, filtered by the reader) means a replica never delivers
+  its own publish twice to its own sockets, but it also means ordering between two independent publishers
+  (e.g., two concurrent `POST /messages` requests, or a future second publisher like a Celery worker) is
+  not guaranteed — see GAPS-ROUND-2 #67, which is about exactly this gap in the mobile client's message
+  ordering.
+- Read receipts do not currently ride this transport — GAPS-ROUND-2 #49 tracks that neither the old
+  poll-doubles-as-read-receipt mechanism ADR-004 relied on, nor an equivalent over WebSockets, exists
+  today.
+- Reconnect handling is the client's responsibility; GAPS-ROUND-2 #47 notes neither client currently
+  refetches on reconnect, so a message published while a client's socket was down and not yet replaced is
+  invisible until the next manual fetch.
