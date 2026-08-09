@@ -352,15 +352,28 @@ def seed() -> None:
         # account merely *starting* with "demo" (`demolition@howl.app`) and
         # deleted it on every deploy.
         owned_emails = [data["email"] for data in DEMO_USERS]
+        reseed = _reseed_requested()
 
-        if _reseed_requested():
+        if reseed:
             # Destructive refresh, opt-in only — see the module docstring for why
             # this must never be a deploy default.
+            #
+            # Filtered on is_bot too, not just the owned email list. #15 closed
+            # this exact class of bug elsewhere in the codebase ("Demo detection
+            # by email prefix ... the is_bot column already exists — use it"):
+            # an address is something a real person can register, and a real
+            # user who signed up as demo42@howl.app would otherwise have their
+            # account, matches and messages deleted on every deploy that sets
+            # RESEED_BOTS=true, purely because their email string happened to
+            # match. is_bot is the actual identity check; the email list is
+            # additionally kept so this can never touch a row outside the set
+            # this script owns even if is_bot were ever set incorrectly
+            # elsewhere. See docs/GAPS-ROUND-2.md #65.
             deleted = 0
             for chunk in _chunked(owned_emails, 500):
                 deleted += (
                     db.query(User)
-                    .filter(User.email.in_(chunk))
+                    .filter(User.email.in_(chunk), User.is_bot.is_(True))
                     .delete(synchronize_session=False)
                 )
             db.commit()
@@ -368,18 +381,23 @@ def seed() -> None:
                 f"RESEED_BOTS=true: removed {deleted} existing demo user(s), "
                 "along with their matches and messages."
             )
-            existing: set[str] = set()
-        else:
-            existing = {
-                email
-                for chunk in _chunked(owned_emails, 500)
-                for (email,) in db.query(User.email).filter(User.email.in_(chunk)).all()
-            }
-            if existing:
-                print(
-                    f"{len(existing)} demo user(s) already present; leaving them "
-                    "and their conversations untouched."
-                )
+
+        # Recomputed after any deletion above (a no-op query if reseed left
+        # nothing owned behind) rather than assumed empty. Now that the delete
+        # is guarded by is_bot, a real user occupying one of these addresses
+        # can survive a reseed — assuming `existing` empty would then try to
+        # INSERT a second row at their exact email and raise a duplicate-key
+        # error instead of quietly seeding around them.
+        existing = {
+            email
+            for chunk in _chunked(owned_emails, 500)
+            for (email,) in db.query(User.email).filter(User.email.in_(chunk)).all()
+        }
+        if existing and not reseed:
+            print(
+                f"{len(existing)} demo user(s) already present; leaving them "
+                "and their conversations untouched."
+            )
 
         base_time = datetime.now(UTC) - timedelta(days=30)
 
