@@ -29,11 +29,14 @@ REDIS_URL=redis://localhost:6379/0
 | Process | Command | Breaks if missing |
 |---|---|---|
 | API | `python -m uvicorn app.main:app --port 8001 --reload` | everything |
-| Celery worker | `python -m celery -A app.celery_app worker --loglevel=info --pool=solo` | avatars stuck `pending`, no notifications, no auto-match |
+| Celery worker | `python -m celery -A app.celery_app worker --loglevel=info --pool=solo -Q celery,bot_response` | avatars stuck `pending`, no notifications, no auto-match, bots never reply |
 | Celery **beat** | `python -m celery -A app.celery_app beat --loglevel=info` | bots never reply |
 | Web client | `cd frontend && npm run dev` | — |
 
-`--pool=solo` is required on Windows.
+`--pool=solo` is required on Windows. The worker must list both queues explicitly (`-Q
+celery,bot_response`) — since GAPS #55 routed `process_bot_responses` onto a `bot_response` queue, a
+worker started without `-Q` only consumes the default `celery` queue and will silently never run bot
+replies. In production the two queues are split across separate services instead; see below.
 
 ## Environment variables
 
@@ -53,15 +56,39 @@ REDIS_URL=redis://localhost:6379/0
 | `ENVIRONMENT` | — | Sentry tag, echoed by `/health`. Default `production`. |
 | `DEBUG` | — | Enables `/docs` + `/redoc`, adds localhost CORS, makes cookies insecure. Never true in prod. |
 | `SKIP_SEED` | — | Set `true` to skip the 1000-bot seed on deploy |
-| `PORT` | injected | Used unquoted by `startup.sh:16` |
+| `PORT` | injected | Used by `startup.sh:12` |
 
 ## Deploy (Railway)
 
-`railpack.json` pins Python 3.11 and runs `bash scripts/startup.sh`, which does
-`alembic upgrade head` → seed → `exec uvicorn`. Migrations run on every boot.
+`railpack.json` pins Python 3.11 and its `deploy.startCommand` runs `bash scripts/startup.sh`, which
+now only execs uvicorn. Migrations and the demo-user seed used to run there too, once per replica — with
+more than one replica that raced (Alembic takes no advisory lock; the seed can collide on `users.email`)
+— so they moved to `scripts/predeploy.sh`, wired up as Railway's **pre-deploy command** in `railway.json`
+(`deploy.preDeployCommand`). Railway runs that in its own ephemeral container, once per deploy, between
+the build finishing and any replica starting — so it is unaffected by `numReplicas`. `railway.json` also
+sets `deploy.healthcheckPath` to `/health` (GAPS #54): Railway won't route traffic to a replica, or will
+roll a bad deploy back, based on the dependency-aware status that endpoint now reports. Set
+`SKIP_SEED=true` to skip the seed step; a seed failure is logged as a warning but does not fail the
+pre-deploy step, since it's an additive, cosmetic dataset (GAPS #39).
 
 **The worker and Beat must be separate Railway services** pointed at the same repo with the celery
-commands above. Nothing in the repo creates them.
+commands below. Nothing in the repo creates them. As of GAPS #55, `app/celery_app.py` routes
+`process_bot_responses` onto its own `bot_response` queue so it can no longer queue behind
+`generate_avatar`/notify tasks — but that only takes effect once a worker actually consumes that queue.
+**A third Railway service is now required**: a worker started with `-Q bot_response`, alongside the
+existing worker (narrow it to `-Q celery` so it stops competing for bot-response work) and Beat.
+
+```bash
+# Worker A — everything except bot replies (avatar generation is the critical path)
+celery -A app.celery_app worker --loglevel=info --pool=solo -Q celery
+
+# Worker B — bot replies only, on its own queue so a 15-minute batch can't
+# starve avatar generation or push notifications
+celery -A app.celery_app worker --loglevel=info --pool=solo -Q bot_response
+
+# Beat — ticks process_bot_responses onto the bot_response queue every 15 minutes
+celery -A app.celery_app beat --loglevel=info
+```
 
 ## Diagnosing the failures this system produces
 

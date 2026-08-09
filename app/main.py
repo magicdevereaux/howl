@@ -1,13 +1,17 @@
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import sentry_sdk
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from redis import Redis, RedisError
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
+from sqlalchemy import text
 
 from app.api.auth import router as auth_router
 from app.api.avatar import router as avatar_router
@@ -20,6 +24,9 @@ from app.api.reports import router as reports_router
 from app.api.swipes import router as swipes_router
 from app.api.users import router as users_router
 from app.config import settings
+from app.db import engine
+
+logger = logging.getLogger(__name__)
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -74,6 +81,98 @@ _avatar_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/avatars", StaticFiles(directory=str(_avatar_dir)), name="avatars")
 
 
+_HEALTH_TIMEOUT_SECONDS = 1.0
+
+
+def _check_database(timeout: float = _HEALTH_TIMEOUT_SECONDS) -> bool:
+    """``SELECT 1`` against Postgres with a short timeout.
+
+    A bounded thread — rather than a driver-level statement timeout — is what
+    lets this stay correct across both the production Postgres engine and the
+    SQLite engine the test suite runs against, without depending on a specific
+    DBAPI's timeout knobs.
+    """
+
+    def _probe() -> bool:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_probe).result(timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - any failure means "unreachable"
+        logger.warning("health: database check failed: %s", exc)
+        return False
+
+
+def _check_redis(timeout: float = _HEALTH_TIMEOUT_SECONDS) -> bool:
+    """``PING`` Redis with a short timeout. A fresh client avoids sharing
+    connection state with the rate limiter's client."""
+    try:
+        client = Redis.from_url(
+            settings.redis_url,
+            socket_timeout=timeout,
+            socket_connect_timeout=timeout,
+        )
+        return bool(client.ping())
+    except (RedisError, OSError) as exc:
+        logger.warning("health: redis check failed: %s", exc)
+        return False
+
+
+def _r2_configured() -> bool:
+    """Whether R2 env vars are present — cheap, no network call.
+
+    This is deliberately *configured*, not *reachable*: a HeadBucket call
+    would tell us more (see GAPS #62) but needs boto3, which is lazily
+    imported in app/services/image_generation.py and not even installed in
+    this environment (CLAUDE.md). Doing that probe on every health check
+    would add a network round trip and a hard dependency this endpoint
+    doesn't otherwise need, so it's left to #62 rather than folded in here.
+    """
+    return bool(
+        settings.r2_endpoint_url
+        and settings.r2_access_key_id
+        and settings.r2_secret_access_key
+        and settings.r2_bucket_name
+    )
+
+
 @app.get("/health", tags=["system"])
-async def health_check() -> dict[str, str]:
-    return {"status": "ok", "environment": settings.environment}
+def health_check(response: Response) -> dict[str, object]:
+    """Deploy healthcheck / liveness signal used by Railway.
+
+    Actually touches Postgres and Redis (both with a ~1s timeout) so a
+    replica that cannot reach either is reported unhealthy and returns 503
+    instead of a routing-worthy 200. See ``/health/live`` for a dependency-free
+    liveness path.
+    """
+    db_ok = _check_database()
+    redis_ok = _check_redis()
+    overall_ok = db_ok and redis_ok
+
+    if not overall_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return {
+        "status": "ok" if overall_ok else "unhealthy",
+        "environment": settings.environment,
+        "checks": {
+            "database": "ok" if db_ok else "unreachable",
+            "redis": "ok" if redis_ok else "unreachable",
+            "r2": "configured" if _r2_configured() else "unconfigured",
+        },
+    }
+
+
+@app.get("/health/live", tags=["system"])
+async def liveness_check() -> dict[str, str]:
+    """Always-200 liveness path.
+
+    Deliberately does not touch Postgres or Redis: this is what Railway
+    should point at if it needs a signal that must not restart the container
+    on a transient dependency blip. ``/health`` is the readiness/deploy gate;
+    this is "is the process alive at all".
+    """
+    return {"status": "ok"}

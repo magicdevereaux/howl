@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-set -e  # exit immediately if migrations fail
+set -e
 
-echo "==> Running database migrations..."
-alembic upgrade head
-
-if [ "${SKIP_SEED}" = "true" ]; then
-    echo "==> SKIP_SEED=true — skipping demo user seeding."
-else
-    echo "==> Seeding demo users..."
-    # Soft failure: seed errors must not prevent the server from starting.
-    python -m scripts.seed_demo_users || echo "WARNING: seed script failed — continuing anyway."
-fi
+# Migrations and the demo-user seed used to run here, once per replica — see
+# GAPS-ROUND-2 #56 for why that's unsafe with more than one replica (a race
+# on Alembic's DDL, and on the seed's `users.email` unique constraint). They
+# now run exactly once per deploy in scripts/predeploy.sh, wired up as
+# Railway's preDeployCommand in railway.json. This script's only job is to
+# start the server.
 
 echo "==> Starting server..."
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT}"
