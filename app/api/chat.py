@@ -211,6 +211,38 @@ class ConnectionManager:
             {"kind": "typing", "sender_id": sender_user_id, "user_name": display},
         )
 
+    async def broadcast_read_receipt(
+        self, match_id: int, reader_id: int, last_read_message_id: int, read_at: str
+    ) -> None:
+        """Tell the match that *reader_id* has read up to *last_read_message_id*.
+
+        Wire shape, identical locally and across replicas::
+
+            {"type": "messages_read",
+             "match_id": 12,
+             "reader_id": 7,
+             "last_read_message_id": 345,
+             "read_at": "2026-08-09T10:11:12.131415+00:00"}
+
+        Meaning: every message in the match with ``id <= last_read_message_id``
+        that was *not* sent by ``reader_id`` now has that ``read_at``. It is a
+        high-water mark, not a list, so a client that misses one receipt is
+        repaired by the next.
+
+        Delivered to every socket in the match including the reader's own, which
+        is what keeps a second tab's badge honest; the reader's client can tell
+        it is the origin from ``reader_id``.
+        """
+        event = {
+            "type": "messages_read",
+            "match_id": match_id,
+            "reader_id": reader_id,
+            "last_read_message_id": last_read_message_id,
+            "read_at": read_at,
+        }
+        await self._deliver_verbatim(match_id, event)
+        await self._pubsub.publish(match_id, {"kind": "read", "event": event})
+
     # ── inbound: events published by another replica ─────────────────────────
 
     async def _on_remote_event(self, match_id: int, payload: dict) -> None:
@@ -227,6 +259,10 @@ class ConnectionManager:
                 await self._deliver_typing(
                     match_id, sender_id, payload.get("user_name") or "Someone"
                 )
+        elif kind == "read":
+            event = payload.get("event")
+            if isinstance(event, dict):
+                await self._deliver_verbatim(match_id, event)
 
     # ── local socket writes ──────────────────────────────────────────────────
 
@@ -240,6 +276,23 @@ class ConnectionManager:
         for ws, (uid, _name) in list(conns.items()):
             payload = {**event, "message": {**msg, "is_mine": uid == sender_id}}
             if not await self._send(ws, payload):
+                dead.append(ws)
+        for ws in dead:
+            await self._drop(match_id, ws)
+
+    async def _deliver_verbatim(self, match_id: int, event: dict) -> None:
+        """Write one already-complete event to every local socket in the match.
+
+        Unlike `_deliver_message` this rewrites nothing per recipient: the event
+        carries no `message` body, so there is no `is_mine` to compute and every
+        socket gets byte-identical JSON.
+        """
+        conns = self._conns.get(match_id)
+        if not conns:
+            return
+        dead: list[WebSocket] = []
+        for ws in list(conns):
+            if not await self._send(ws, event):
                 dead.append(ws)
         for ws in dead:
             await self._drop(match_id, ws)
@@ -505,6 +558,7 @@ def delete_message(
 @router.get("/{match_id}/messages", response_model=MessagePageOut)
 def get_messages(
     match_id: int,
+    background_tasks: BackgroundTasks,
     before_id: int | None = Query(default=None, description="Cursor: return messages with id < before_id"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -515,6 +569,10 @@ def get_messages(
     Returns the _PAGE_SIZE most recent messages by default.  Pass
     ``before_id`` to page backward (load older messages).  The response
     includes ``has_more`` so the client knows whether a previous page exists.
+
+    Marking messages read also broadcasts a ``messages_read`` event over the
+    match's WebSocket channel, so the sender's ✓ becomes ✓✓ without waiting for
+    their client to happen to refetch.
     """
     _require_match_member(match_id, current_user.id, db)
 
@@ -534,8 +592,9 @@ def get_messages(
     # Ordered before the page fetch so the returned rows carry the new `read_at`
     # without a second round trip.
     now = datetime.now(UTC)
+    read_up_to: int | None = None
     if before_id is None:
-        _mark_conversation_read(match_id, current_user.id, now, db)
+        read_up_to = _mark_conversation_read(match_id, current_user.id, now, db)
 
     q = db.query(Message).filter(Message.match_id == match_id)
     if before_id is not None:
@@ -550,13 +609,27 @@ def get_messages(
     messages = list(reversed(raw))
 
     if before_id is not None:
-        marked = False
+        marked: list[int] = []
         for msg in messages:
             if msg.sender_id != current_user.id and msg.read_at is None:
                 msg.read_at = now
-                marked = True
+                marked.append(msg.id)
         if marked:
             db.commit()
+            read_up_to = max(marked)
+
+    # Broadcast only when something actually changed, so a client polling this
+    # endpoint does not fan out a receipt per poll. Same background_tasks +
+    # manager.broadcast* path new_message and message_deleted use, so it is
+    # queued after the response and cannot delay it.
+    if read_up_to is not None:
+        background_tasks.add_task(
+            manager.broadcast_read_receipt,
+            match_id,
+            current_user.id,
+            read_up_to,
+            now.isoformat(),
+        )
 
     return MessagePageOut(
         messages=[_to_out(msg, current_user.id) for msg in messages],

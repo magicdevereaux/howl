@@ -1,10 +1,12 @@
-"""WebSocket lifecycle: dropped sockets, per-user connection caps, revocation.
+"""WebSocket lifecycle and out-of-band events: drops, caps, receipts, revocation.
 
-These cover the three chat-socket defects in GAPS round two that are about the
-*connection* rather than the message:
+These cover the chat-socket defects in GAPS round two that are about the
+*connection* and the events carried over it rather than the message rows:
 
   * #46 — a send timeout unregistered a socket without closing it, so the client
     kept a connection that looked healthy and received nothing ever again.
+  * #49 — read receipts were written to the database and broadcast nowhere, so
+    the sender's ✓ never became ✓✓ until their client happened to refetch.
   * #59 — nothing capped how many sockets one user could open to one match,
     which multiplied the per-connection typing budget by the socket count.
   * #60 — nothing could evict a live socket, so unmatching or blocking left the
@@ -22,8 +24,9 @@ import pytest
 import starlette.websockets
 from starlette.websockets import WebSocketDisconnect
 
-from app.api.chat import manager
+from app.api.chat import ConnectionManager, manager
 from app.models.match import Match
+from app.models.message import Message
 from app.models.user import AvatarStatus, User
 from app.security import create_access_token, hash_password
 
@@ -172,3 +175,130 @@ def test_send_timeout_unsubscribes_the_match(client, db, test_user, auth_headers
         )
         _recv(ws)
         assert m.id not in manager._conns, "empty-but-present match left in the registry"
+
+
+# ---------------------------------------------------------------------------
+# #49 — read receipts must reach the sender
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSocket:
+    """Minimal stand-in for a starlette WebSocket in manager-level unit tests."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self.close_code: int | None = None
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+
+    async def close(self, code: int = 1000) -> None:
+        self.close_code = code
+
+
+def test_reading_a_chat_broadcasts_a_receipt_to_the_sender(client, db, test_user, auth_headers, _ws_db):
+    """`get_messages` wrote read_at, committed, and broadcast nothing.
+
+    Both clients already render sent-vs-read; they were waiting on data the
+    server never sent. `MessageOut.read_at` exists and `_msg_event` even carries
+    it — only the event was missing.
+    """
+    other = _make_user(db, email="ws_receipt@howl.app")
+    m = _make_match(db, test_user, other)
+    # Read ids out before the first commit inside a request expires these
+    # instances; `_ws_db` hands the handler the test session and it closes it.
+    match_id, other_id, reader_cookie = m.id, other.id, _cookie(other)
+
+    with client.websocket_connect(_ws_url(match_id), headers=_cookie(test_user)) as sender_ws:
+        sent = client.post(
+            f"/api/matches/{match_id}/messages", headers=auth_headers, json={"content": "seen?"}
+        ).json()
+        assert _recv(sender_ws)[0] == "frame"  # the sender's own new_message echo
+
+        client.get(f"/api/matches/{match_id}/messages", headers=reader_cookie)
+        kind, event = _recv(sender_ws)
+
+    assert kind == "frame", "the reader marked messages read and told nobody"
+    assert isinstance(event, dict)
+    assert isinstance(event.get("read_at"), str) and event["read_at"]
+    assert event == {
+        "type": "messages_read",
+        "match_id": match_id,
+        "reader_id": other_id,
+        "last_read_message_id": sent["id"],
+        "read_at": event["read_at"],
+    }
+
+
+def test_receipt_is_not_broadcast_when_nothing_was_unread(client, db, test_user, auth_headers, _ws_db):
+    """Clients poll this endpoint; a receipt per poll would be pure noise."""
+    other = _make_user(db, email="ws_receipt_noop@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, reader_cookie, sender_cookie = m.id, _cookie(other), _cookie(test_user)
+    client.post(f"/api/matches/{match_id}/messages", headers=auth_headers, json={"content": "hi"})
+    # First read consumes the only unread message.
+    client.get(f"/api/matches/{match_id}/messages", headers=reader_cookie)
+
+    with client.websocket_connect(_ws_url(match_id), headers=sender_cookie) as sender_ws:
+        client.get(f"/api/matches/{match_id}/messages", headers=reader_cookie)
+        assert _recv(sender_ws) == ("timeout", None)
+
+
+def test_receipt_high_water_mark_covers_the_whole_conversation(client, db, test_user, auth_headers, _ws_db):
+    """The receipt must agree with #48: reading clears everything, not a page."""
+    other = _make_user(db, email="ws_receipt_hw@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, sender_id = m.id, test_user.id
+    reader_cookie, sender_cookie = _cookie(other), _cookie(test_user)
+    ids = []
+    for i in range(60):
+        msg = Message(match_id=match_id, sender_id=sender_id, content=str(i))
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        ids.append(msg.id)
+    newest = max(ids)
+
+    with client.websocket_connect(_ws_url(match_id), headers=sender_cookie) as sender_ws:
+        client.get(f"/api/matches/{match_id}/messages", headers=reader_cookie)
+        kind, event = _recv(sender_ws)
+
+    assert kind == "frame"
+    assert isinstance(event, dict)
+    assert event["last_read_message_id"] == newest, (
+        "the receipt stopped at the page boundary while the DB marked everything"
+    )
+
+
+async def test_read_receipt_from_another_replica_reaches_local_sockets():
+    """The cross-replica leg: `kind: "read"` must route to local delivery.
+
+    Without this branch in `_on_remote_event`, a receipt would work only when
+    reader and sender happened to land on the same web replica.
+    """
+    mgr = ConnectionManager()
+    ws = _RecordingSocket()
+    mgr._conns[42] = {ws: (7, "Wolf")}  # type: ignore[dict-item]
+    event = {
+        "type": "messages_read",
+        "match_id": 42,
+        "reader_id": 9,
+        "last_read_message_id": 300,
+        "read_at": "2026-08-09T00:00:00+00:00",
+    }
+
+    await mgr._on_remote_event(42, {"kind": "read", "event": event})
+
+    assert ws.sent == [event], "a receipt published by another replica was dropped"
+
+
+async def test_receipt_is_delivered_verbatim_without_is_mine():
+    """`_deliver_message` injects an is_mine into event["message"]; a receipt has
+    no message body and must not grow a synthetic one."""
+    mgr = ConnectionManager()
+    ws = _RecordingSocket()
+    mgr._conns[43] = {ws: (7, "Wolf")}  # type: ignore[dict-item]
+
+    await mgr.broadcast_read_receipt(43, 9, 12, "2026-08-09T00:00:00+00:00")
+
+    assert "message" not in ws.sent[0]
