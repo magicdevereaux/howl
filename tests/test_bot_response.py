@@ -951,6 +951,104 @@ def test_bot_reply_enqueues_one_notification_per_saved_reply(patched_session, db
 
 
 # ---------------------------------------------------------------------------
+# Single-flight lock (GAPS-ROUND-2 #51)
+#
+# Beat fires this task every 900s; a full run can take 400-800s, so an
+# overlapping tick is a matter of when, not if, under a prefork worker or two
+# Beat instances during a deploy. Without a lock, both runs see the same rows
+# in _collect_pending (neither has committed yet) and write duplicate replies.
+# ---------------------------------------------------------------------------
+
+def test_run_skips_entirely_when_lock_is_held(monkeypatch, patched_session, db):
+    """An overlapping tick must bail out before touching the database at
+    all -- not just before saving, but before even collecting pending work,
+    since that read is exactly what a second run would duplicate."""
+    from app.tasks import bot_response as br
+
+    monkeypatch.setattr(br.task_lock, "acquire", lambda key, ttl=None: False)
+    collect_calls = []
+    monkeypatch.setattr(
+        br, "_collect_pending",
+        lambda db_, now: (collect_calls.append(1) or []),
+    )
+
+    bot  = _make_bot(db, email="lockbot@bot.app")
+    real = _make_real(db, email="lockreal@howl.app")
+    m    = _make_match(db, bot, real)
+    bot_id, match_id = bot.id, m.id
+    _make_msg(db, match_id=match_id, sender_id=real.id, ago_seconds=400)
+
+    process_bot_responses()
+
+    assert collect_calls == [], "a locked-out run must not even collect pending work"
+    assert _bot_msg_count(db, match_id, bot_id) == 0
+
+
+def test_run_acquires_with_the_documented_key_and_ttl_then_releases(monkeypatch, patched_session, db):
+    from app.tasks import bot_response as br
+
+    calls = []
+    monkeypatch.setattr(
+        br.task_lock, "acquire",
+        lambda key, ttl=None: (calls.append(("acquire", key, ttl)) or True),
+    )
+    monkeypatch.setattr(br.task_lock, "release", lambda key: calls.append(("release", key)))
+
+    process_bot_responses()
+
+    assert calls[0] == ("acquire", br._LOCK_KEY, br._LOCK_TTL_SECONDS)
+    assert calls[-1] == ("release", br._LOCK_KEY)
+
+
+def test_lock_is_released_even_when_the_run_raises(monkeypatch, patched_session, db):
+    """A crash mid-run must not leave the lock held for its full TTL --
+    otherwise one bad tick silences bot replies for up to _LOCK_TTL_SECONDS."""
+    from app.tasks import bot_response as br
+
+    monkeypatch.setattr(br.task_lock, "acquire", lambda key, ttl=None: True)
+    released = []
+    monkeypatch.setattr(br.task_lock, "release", lambda key: released.append(key))
+
+    def _boom(db_, now):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(br, "_collect_pending", _boom)
+
+    process_bot_responses()  # the task's own broad except must swallow this
+
+    assert released == [br._LOCK_KEY]
+
+
+def test_collect_pending_orders_longest_waiting_first(db):
+    """With a persistent backlog above _MAX_PENDING_PER_RUN, ordering by
+    (bot.id, Match.id) always serves a high-bot_id conversation last, even
+    when its user has been waiting far longer than a low-bot_id one who just
+    replied. Ordering by last_created_at ASC serves whoever has waited
+    longest, independent of id."""
+    from app.tasks.bot_response import _collect_pending
+
+    now = datetime.now(UTC)
+
+    # Lower bot_id (created first) but replied to recently -- short wait.
+    fresh_bot  = _make_bot(db, email="fresh@bot.app")
+    fresh_real = _make_real(db, email="freshreal@howl.app")
+    fresh_match = _make_match(db, fresh_bot, fresh_real)
+    _make_msg(db, match_id=fresh_match.id, sender_id=fresh_real.id, ago_seconds=500)
+
+    # Higher bot_id (created second) but has been waiting far longer.
+    stale_bot  = _make_bot(db, email="stale@bot.app")
+    stale_real = _make_real(db, email="stalereal@howl.app")
+    stale_match = _make_match(db, stale_bot, stale_real)
+    _make_msg(db, match_id=stale_match.id, sender_id=stale_real.id, ago_seconds=10000)
+
+    assert stale_bot.id > fresh_bot.id, "test setup requires stale_bot to sort last by id"
+
+    pending = _collect_pending(db, now)
+
+    assert [p["match_id"] for p in pending] == [stale_match.id, fresh_match.id]
+
+
+# ---------------------------------------------------------------------------
 # Seed script validation
 # ---------------------------------------------------------------------------
 

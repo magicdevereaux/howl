@@ -25,6 +25,7 @@ from app.db import SessionLocal
 from app.models.match import Match
 from app.models.message import Message
 from app.models.user import User
+from app.services import task_lock
 from app.services.pubsub import channel_for
 from app.services.task_queue import enqueue
 from app.tasks.notify import notify_new_message
@@ -59,6 +60,22 @@ _BATCH_SIZE = 10
 #: unbounded run is an unbounded bill. Overflow is simply deferred to the next
 #: tick 15 minutes later.
 _MAX_PENDING_PER_RUN = 200
+
+#: Single-flight lock key for the whole tick. Beat schedules this task every
+#: 900s, but a full run can make up to 20 sequential Claude calls at 20-40s
+#: each -- 400-800s, close enough to 900s that two ticks overlapping is a
+#: matter of when, not if, under a prefork worker (concurrency >= 2) or two
+#: Beat instances (a Railway restart overlapping the old container). Without
+#: this, both overlapping runs see the same rows in _collect_pending (neither
+#: has committed yet) and write a second set of replies for the same
+#: conversations -- the user gets duplicate replies and we pay twice. See
+#: docs/GAPS-ROUND-2.md #51.
+_LOCK_KEY = "bot_response:tick"
+
+#: Long enough to outlive a full run (worst case ~800s above) with headroom;
+#: short enough that a killed worker's lock clears on its own well before the
+#: next scheduled tick 900s later.
+_LOCK_TTL_SECONDS = 1800
 
 #: Abort the run after this many consecutive failed batches. Without it a
 #: systematic failure (bad API key, model change, quota exhaustion) burns
@@ -211,8 +228,13 @@ def _collect_pending(db, now: datetime) -> list[dict]:
         # same as the old `if last_msg is None: continue`.
         .join(ranked_msgs, (ranked_msgs.c.match_id == Match.id) & (ranked_msgs.c.rn == 1))
         .filter(bot.is_bot.is_(True), other.is_bot.is_(False))
-        # Deterministic, so the per-run cap always truncates the same way.
-        .order_by(bot.id, Match.id)
+        # Longest-waiting first, so the per-run cap (#51) sheds fairly: with a
+        # persistent backlog above _MAX_PENDING_PER_RUN, ordering by
+        # (bot.id, Match.id) always served high-bot_id conversations last,
+        # while low-bot_id users who replied promptly kept re-entering ahead
+        # of them. Match.id tie-breaks for determinism when two conversations
+        # land in the same second (SQLite's created_at resolution).
+        .order_by(ranked_msgs.c.created_at.asc(), Match.id)
         .all()
     )
 
@@ -586,7 +608,20 @@ def process_bot_responses() -> None:
     Scans all bot users for conversations requiring a reply, respects
     archetype-specific delay windows, builds batches of up to 10, makes a
     single Claude call per batch, and saves the resulting messages.
+
+    Single-flight: wrapped in a Redis lock (see _LOCK_KEY) so an overlapping
+    tick — a slow run still going at the next 900s mark, or two Beat
+    instances during a deploy — skips instead of re-answering the same
+    conversations. Fails open like every other Redis-backed lock in this
+    codebase (task_lock.acquire returns True if Redis is unreachable): an
+    outage should degrade to today's double-reply risk, not stop bots
+    replying altogether.
     """
+    lock_held = task_lock.acquire(_LOCK_KEY, ttl=_LOCK_TTL_SECONDS)
+    if not lock_held:
+        logger.info("bot_response: another run holds %s — skipping this tick", _LOCK_KEY)
+        return
+
     db = SessionLocal()
     try:
         now = datetime.now(UTC)
@@ -647,3 +682,4 @@ def process_bot_responses() -> None:
         logger.exception("bot_response: task failed: %s", exc)
     finally:
         db.close()
+        task_lock.release(_LOCK_KEY)
