@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db import get_db
-from app.dependencies import get_current_user
+from app.dependencies import require_verified_email
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
@@ -196,10 +196,15 @@ def _get_or_create_match(db: Session, a_id: int, b_id: int) -> tuple[Match, bool
 @router.post("", response_model=SwipeOut, status_code=200)
 def record_swipe(
     body: SwipeIn,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: Session = Depends(get_db),
 ) -> SwipeOut:
-    """Record a like or pass, and create a Match if mutual like."""
+    """Record a like or pass, and create a Match if mutual like.
+
+    Gated on email verification (GAPS #25): swiping is outbound — it can create
+    a match and notify a stranger — so it closes once the grace window expires.
+    Reading the discover feed stays open.
+    """
     if body.target_user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot swipe on yourself.")
 
@@ -275,11 +280,14 @@ def record_swipe(
 
 @router.delete("/last", response_model=UndoSwipeOut, status_code=200)
 def undo_last_swipe(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: Session = Depends(get_db),
 ) -> UndoSwipeOut:
     """
     Delete the current user's most recent swipe.
+
+    Gated on email verification (GAPS #25), alongside swipe creation: undo is a
+    write that can delete a match out from under the other party.
 
     If that swipe was a like that created a match, the match is deleted too.
     For demo user auto-matches, the demo's return-swipe is also removed so

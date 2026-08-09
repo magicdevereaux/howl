@@ -229,3 +229,128 @@ def test_bio_change_resets_counter_after_window_expires(client, db):
     db.refresh(user)
     assert user.avatar_regenerations_this_month == 1
     assert user.profile_needs_regen is False
+
+
+# ---------------------------------------------------------------------------
+# Email-verification gate on the bio-edit regen path (GAPS #25)
+#
+# PATCH /api/profile/me stays open past the grace window -- a user has to be
+# able to edit their profile, and it is adjacent to fixing a typo'd email -- but
+# it must not spend a paid DALL-E call, or it becomes a walk-around for the gate
+# on POST /api/avatar/regenerate.
+# ---------------------------------------------------------------------------
+
+def _past_grace() -> datetime:
+    """A created_at old enough that any sane grace window has closed."""
+    return datetime.now(UTC) - timedelta(days=100)
+
+
+def test_bio_edit_withholds_regen_for_unverified_past_grace(client, db):
+    """The bio saves, but the paid generation is withheld and deferred."""
+    user = _make_user(
+        db,
+        email="unverified_regen@howl.app",
+        bio="Old bio.",
+        is_email_verified=False,
+        created_at=_past_grace(),
+    )
+    user.animal = "wolf"
+    db.commit()
+
+    new_bio = "Brand new bio that is completely different from the old one."
+    called = []
+    with patch("app.api.profile.generate_avatar.delay", lambda uid: called.append(uid)):
+        res = _patch_bio(client, user, new_bio)
+
+    # The edit itself succeeds -- this endpoint is deliberately not gated.
+    assert res.status_code == 200
+    assert res.json()["bio"] == new_bio
+
+    assert called == [], "an unverified past-grace account burned a paid DALL-E call"
+
+    db.refresh(user)
+    assert user.bio == new_bio               # the write landed
+    assert user.profile_needs_regen is True  # deferred, not lost
+    assert user.animal == "wolf"             # existing avatar preserved
+    assert user.avatar_status == AvatarStatus.ready
+
+
+def test_withheld_regen_does_not_consume_a_monthly_slot(client, db):
+    """A withheld generation must not bill the user's quota for a missing image."""
+    user = _make_user(
+        db,
+        email="unverified_slot@howl.app",
+        bio="Old bio.",
+        is_email_verified=False,
+        created_at=_past_grace(),
+    )
+
+    _patch_bio(client, user, "A totally different bio than the one before it.")
+
+    db.refresh(user)
+    assert user.avatar_regenerations_this_month == 0, (
+        "the gate consumed a regen slot for an image that was never generated"
+    )
+
+
+def test_bio_edit_still_regens_for_verified_past_grace(client, db):
+    """Verified accounts are unaffected by the gate, however old they are."""
+    user = _make_user(
+        db,
+        email="verified_regen@howl.app",
+        bio="Old bio.",
+        is_email_verified=True,
+        created_at=_past_grace(),
+    )
+
+    called = []
+    with patch("app.api.profile.generate_avatar.delay", lambda uid: called.append(uid)):
+        res = _patch_bio(client, user, "A fresh bio, quite unlike the previous one.")
+
+    assert res.status_code == 200
+    assert called == [user.id]
+    db.refresh(user)
+    assert user.profile_needs_regen is False
+    assert user.avatar_status == AvatarStatus.pending
+
+
+def test_bio_edit_still_regens_for_unverified_inside_grace(client, db):
+    """Inside the grace window an unverified account behaves completely normally."""
+    user = _make_user(
+        db,
+        email="grace_regen@howl.app",
+        bio="Old bio.",
+        is_email_verified=False,
+        created_at=datetime.now(UTC),
+    )
+
+    called = []
+    with patch("app.api.profile.generate_avatar.delay", lambda uid: called.append(uid)):
+        res = _patch_bio(client, user, "A brand new bio unlike the one it replaced.")
+
+    assert res.status_code == 200
+    assert called == [user.id]
+    db.refresh(user)
+    assert user.profile_needs_regen is False
+
+
+def test_bio_edit_regens_past_grace_when_enforcement_is_off(client, db, monkeypatch):
+    """The kill switch must reopen the spend path too, not just the 403 routes."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "enforce_email_verification", False)
+
+    user = _make_user(
+        db,
+        email="killswitch_regen@howl.app",
+        bio="Old bio.",
+        is_email_verified=False,
+        created_at=_past_grace(),
+    )
+
+    called = []
+    with patch("app.api.profile.generate_avatar.delay", lambda uid: called.append(uid)):
+        res = _patch_bio(client, user, "Yet another entirely different bio string.")
+
+    assert res.status_code == 200
+    assert called == [user.id]

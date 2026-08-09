@@ -294,16 +294,40 @@ def test_mobile_resend_verification_works_too(client, db):
     assert res.status_code == 200
 
 
-def test_require_verified_email_rejects_an_unverified_account(db):
+def test_require_verified_email_rejects_an_unverified_account_past_grace(db):
+    """Enforcement is graduated, so the account has to be past its grace window.
+
+    A freshly created unverified account is deliberately *allowed* -- see
+    test_email_enforcement.py, which owns the full matrix.
+    """
     from fastapi import HTTPException
 
     from app.dependencies import require_verified_email
 
-    unverified = _make_user(db, email="unverified_dep@howl.app", verified=False)
+    unverified = _make_user(
+        db,
+        email="unverified_dep@howl.app",
+        verified=False,
+        created_at=datetime.now(UTC) - timedelta(days=100),
+    )
     with pytest.raises(HTTPException) as exc:
         require_verified_email(current_user=unverified)
     # 403 not 401: the caller authenticated fine, re-authenticating won't help.
     assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "email_verification_required"
+
+
+def test_require_verified_email_allows_an_unverified_account_inside_grace(db):
+    """The grace window is what makes enabling enforcement survivable."""
+    from app.dependencies import require_verified_email
+
+    fresh = _make_user(
+        db,
+        email="unverified_fresh@howl.app",
+        verified=False,
+        created_at=datetime.now(UTC),
+    )
+    assert require_verified_email(current_user=fresh) is fresh
 
 
 def test_require_verified_email_allows_a_verified_account(db):
@@ -313,27 +337,34 @@ def test_require_verified_email_allows_a_verified_account(db):
     assert require_verified_email(current_user=verified) is verified
 
 
-def test_require_verified_email_is_not_wired_to_any_route():
-    """Deliberate: enabling it retroactively locks out every existing account.
+def test_require_verified_email_is_wired_to_the_outbound_routes():
+    """Enforcement is on (GAPS #25). This is the inverse of the test it replaces.
 
-    GAPS #25 leaves the rollout as a product decision. This test documents that
-    the dependency exists but is unattached, and will fail loudly the moment
-    someone wires it up -- at which point they should decide what happens to the
-    1000 seeded bots and delete this test.
+    The predecessor asserted the dependency was attached to *no* route, because
+    the rollout was still a product decision. It has been made: enforcement is
+    graduated behind a grace window derived from `created_at`, with a config kill
+    switch, and only the outbound actions are gated.
+
+    Kept here as a tripwire so an auth refactor that silently drops the gate
+    fails in the auth suite too, not only in test_email_enforcement.py. That
+    file owns the behavioural coverage, including the exact 403 contract.
     """
     from app.dependencies import require_verified_email
     from app.main import app
 
-    wired = []
+    wired = set()
     for route in app.routes:
         for dep in getattr(getattr(route, "dependant", None), "dependencies", []):
             if getattr(dep, "call", None) is require_verified_email:
-                wired.append(getattr(route, "path", "?"))
-    assert wired == [], (
-        f"require_verified_email is now enforced on {wired}. That is a product "
-        "decision -- confirm existing and bot accounts are handled, then remove "
-        "this test."
-    )
+                for method in sorted(getattr(route, "methods", set()) or {"WS"}):
+                    wired.add(f"{method} {route.path}")
+
+    assert wired == {
+        "POST /api/swipes",
+        "DELETE /api/swipes/last",
+        "POST /api/matches/{match_id}/messages",
+        "POST /api/avatar/regenerate",
+    }, f"the gated route set changed: {sorted(wired)}"
 
 
 # ---------------------------------------------------------------------------
