@@ -10,10 +10,12 @@ when the bot's own message has gone unanswered for 2 hours.
 
 import json
 import logging
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
 import anthropic
+from redis import Redis, RedisError
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import aliased
 
@@ -23,6 +25,9 @@ from app.db import SessionLocal
 from app.models.match import Match
 from app.models.message import Message
 from app.models.user import User
+from app.services.pubsub import channel_for
+from app.services.task_queue import enqueue
+from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +242,7 @@ def _collect_pending(db, now: datetime) -> list[dict]:
         pending.append({
             "match_id":         r.match_id,
             "bot_id":           r.bot_id,
+            "real_id":          r.real_id,
             "name":             r.bot_name or "Someone",
             "animal":           r.bot_animal or "wolf",
             "traits":           r.bot_traits,
@@ -253,23 +259,55 @@ def _chunks(lst: list, n: int):
         yield lst[i : i + n]
 
 
-def _save_replies(db, results: list[dict]) -> int:
-    """Persist a batch's replies, returning how many were written.
+def _msg(r: dict) -> Message:
+    return Message(
+        match_id=r["match_id"],
+        sender_id=r["bot_id"],
+        content=r["message"],
+        created_at=datetime.now(UTC),
+    )
+
+
+def _describe(msg: Message, r: dict) -> dict:
+    """Capture what the caller needs to publish/notify, from a Message that
+    has been flushed but not yet committed.
+
+    Reading ``msg.id`` / ``msg.created_at`` here — before ``commit()`` expires
+    the instance — costs no round-trip: flush already populated them on the
+    Python object as part of the INSERT.  Reading them after commit would
+    trigger a per-message refresh SELECT and reintroduce the N+1 the rest of
+    this module exists to avoid (see
+    test_full_run_select_count_does_not_scale_with_bots).
+    """
+    return {
+        "match_id":    r["match_id"],
+        "bot_id":      r["bot_id"],
+        "real_id":     r["real_id"],
+        "message_id":  msg.id,
+        "content":     msg.content,
+        "created_at":  msg.created_at,
+    }
+
+
+def _save_replies(db, results: list[dict]) -> list[dict]:
+    """Persist a batch's replies, returning a description of each one saved.
 
     One commit per batch rather than one per message.  If the batch commit
     fails, each row is retried on its own so a single bad reply (a match deleted
-    mid-run, say) costs one message instead of the whole batch.
+    mid-run, say) costs one message instead of the whole batch. Callers use the
+    returned descriptions to publish a chat event and enqueue a notification
+    per saved reply — see process_bot_responses.
     """
     if not results:
-        return 0
+        return []
 
-    def _msg(r: dict) -> Message:
-        return Message(match_id=r["match_id"], sender_id=r["bot_id"], content=r["message"])
-
+    msgs = [_msg(r) for r in results]
     try:
-        db.add_all([_msg(r) for r in results])
+        db.add_all(msgs)
+        db.flush()
+        saved = [_describe(m, r) for m, r in zip(msgs, results, strict=True)]
         db.commit()
-        return len(results)
+        return saved
     except Exception as exc:
         db.rollback()
         logger.warning(
@@ -277,16 +315,104 @@ def _save_replies(db, results: list[dict]) -> int:
             len(results), exc,
         )
 
-    saved = 0
+    saved = []
     for r in results:
+        msg = _msg(r)
         try:
-            db.add(_msg(r))
+            db.add(msg)
+            db.flush()
+            info = _describe(msg, r)
             db.commit()
-            saved += 1
+            saved.append(info)
         except Exception as exc:
             db.rollback()
             logger.warning("bot_response: failed to save message: %s", exc)
     return saved
+
+
+# ---------------------------------------------------------------------------
+# Cross-replica chat publish (sync, worker-side)
+#
+# app/api/chat.py's ConnectionManager.broadcast delivers a new message two
+# ways: synchronously to any local WebSocket on the replica that handled the
+# request, and via ChatPubSub.publish so every *other* replica serving that
+# match hears about it too. A bot reply is written by this Celery worker,
+# which holds no WebSocket of its own — so unlike a REST handler there is no
+# local delivery step, and the pub/sub publish is the *only* way any replica
+# ever learns the message exists. It has to be byte-identical to what
+# ChatPubSub.publish sends, because the same handler
+# (ConnectionManager._on_remote_event, via _dispatch) decodes it on the way
+# in.
+#
+# ChatPubSub.publish is async (app/services/pubsub.py); this task runs sync in
+# a Celery worker with no event loop, so this reimplements the wire format
+# with a plain sync redis-py client rather than importing an event loop. Fails
+# open — like every other Redis-backed path in this codebase (rate_limit.py,
+# task_lock.py, pubsub.py itself) — because the message is already committed
+# to Postgres by the time this runs; a missed publish costs a client a refetch
+# on reconnect, never the message.
+# ---------------------------------------------------------------------------
+
+#: Fresh per worker process, exactly like ChatPubSub.origin_id. No web replica
+#: shares it, so nothing ever mistakes this worker's publish for its own echo.
+_PUBSUB_ORIGIN = uuid.uuid4().hex
+
+_redis_client: Redis | None = None
+
+
+def _get_redis_client() -> Redis | None:
+    """Lazily build the sync Redis client used only for this worker-side
+    publish. Mirrors app/services/task_lock.py's _get_client(): built once,
+    reused, allowed to be None so callers fail open."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+        except Exception as exc:
+            logger.error("bot_response: could not create Redis client for publish: %s", exc)
+    return _redis_client
+
+
+def _publish_new_message(info: dict) -> None:
+    """Publish a freshly saved bot reply to its match's chat channel.
+
+    ``info`` is one of the dicts returned by ``_save_replies``. The event
+    shape matches app.api.chat._msg_event("new_message", msg) exactly: a
+    message that was just created can never have been read or soft-deleted
+    yet, so read_at/deleted_at are unconditionally None here rather than
+    fetched — there is nothing else they could be.
+
+    The envelope — {"origin": ..., "payload": {"kind": "message", "event":
+    ...}} — matches ChatPubSub.publish (app/services/pubsub.py:216-235)
+    exactly; see tests/test_bot_response.py for the byte-for-byte comparison.
+    """
+    client = _get_redis_client()
+    if client is None:
+        return
+
+    event = {
+        "type": "new_message",
+        "message": {
+            "id": info["message_id"],
+            "sender_id": info["bot_id"],
+            "content": info["content"],
+            "created_at": info["created_at"].isoformat(),
+            "read_at": None,
+            "deleted_at": None,
+        },
+    }
+    envelope = json.dumps({
+        "origin": _PUBSUB_ORIGIN,
+        "payload": {"kind": "message", "event": event},
+    })
+    try:
+        client.publish(channel_for(info["match_id"]), envelope)
+    except RedisError as exc:
+        logger.warning(
+            "bot_response: pub/sub publish for match %d failed (%s); "
+            "message is saved, only the live socket event is lost",
+            info["match_id"], exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +565,7 @@ Rules: 1–3 sentences. No opener like "Hey!". Sound human and distinct per char
             results.append({
                 "match_id": batch[idx]["match_id"],
                 "bot_id":   batch[idx]["bot_id"],
+                "real_id":  batch[idx]["real_id"],
                 "message":  message.strip()[:_MAX_REPLY_CHARS],
             })
         return results
@@ -501,7 +628,18 @@ def process_bot_responses() -> None:
                 continue
             consecutive_failures = 0
 
-            saved += _save_replies(db, results)
+            saved_replies = _save_replies(db, results)
+            saved += len(saved_replies)
+
+            # Bot replies otherwise reach neither a live socket nor a
+            # notification: manager.broadcast is only called from the REST
+            # handlers in app/api/chat.py, and notify_new_message.delay from
+            # only one of them. Without this, a user sitting in the chat sees
+            # nothing until they leave and come back, and one with the app
+            # closed is never told at all. See docs/GAPS-ROUND-2.md #45.
+            for info in saved_replies:
+                _publish_new_message(info)
+                enqueue(notify_new_message, info["match_id"], info["real_id"], info["bot_id"])
 
         logger.info("bot_response: saved %d/%d responses", saved, len(pending))
 

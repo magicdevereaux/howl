@@ -409,6 +409,12 @@ def seed() -> None:
                 avatar_status_updated_at=created_at,
                 is_bot=True,
                 is_email_verified=True,
+                # Bots' addresses (demo1@howl.app … demo1000@howl.app) have no
+                # mailbox behind them. app/tasks/notify.py now also refuses to
+                # email a bot recipient regardless of this flag, but setting it
+                # here protects any future notification path that doesn't go
+                # through that guard. See docs/GAPS-ROUND-2.md #44.
+                email_notifications=False,
                 archetype=data["archetype"],
                 created_at=created_at,
                 updated_at=created_at,
