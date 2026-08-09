@@ -32,6 +32,31 @@ class Settings(BaseSettings):
     r2_bucket_name: str | None = None
     r2_public_url: str | None = None        # public base URL (e.g. https://pub-xxx.r2.dev)
 
+    # ---------------------------------------------------------------------
+    # Email delivery (GAPS #3)
+    #
+    # `auto` picks resend if an API key is present, else SMTP if a host is,
+    # else console (print to stdout — the historical behaviour, and still the
+    # right default for a fresh clone). Configuring a provider is additive:
+    # set the vars and delivery starts.
+    #
+    # The timeout matters. These sends happen inline in the request path, so an
+    # unbounded provider call would park a Starlette threadpool worker exactly
+    # the way an unbounded Celery enqueue did (GAPS-ROUND-2 #43).
+    # ---------------------------------------------------------------------
+    email_backend: str = "auto"             # auto | console | resend | smtp
+    email_from: str = "Howl <noreply@howl.app>"
+    email_timeout_seconds: float = 5.0
+
+    resend_api_key: str | None = None
+
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True               # STARTTLS on a plaintext connection
+    smtp_use_ssl: bool = False              # implicit TLS (port 465); wins over the above
+
     # App - Safe defaults for production
     environment: str = "production"
     debug: bool = False
