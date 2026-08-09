@@ -1,9 +1,10 @@
 # Gaps & Improvements — round two
 
-> **Status, 2026-08-09 (round three).** Both P0s (**#38**, **#39**) closed on 2026-08-08. In this pass
-> **#40–#52, #54–#56, #59–#67** all closed as well — twenty-five entries — leaving **#53**, **#57** and
-> **#58** as the only ones still open. Each closed entry carries its commit; the finding itself is kept
-> under a `<details>` fold or in place, because the reasoning is why the fix is shaped the way it is.
+> **Status, 2026-08-09 (round three): every entry in this document is closed.** Both P0s (**#38**,
+> **#39**) closed on 2026-08-08; **#40 through #67** closed in this pass. Each entry carries the commit
+> that closed it. The findings themselves are kept, not deleted — the reasoning in an entry is usually
+> *why* the fix is shaped the way it is, and a fix whose justification has been thrown away is the next
+> person's mystery.
 >
 > Landed alongside these, and worth knowing about because they are not entries in this file:
 >
@@ -16,13 +17,19 @@
 >   editable nowhere, so a typo at signup became a permanent lockout once the 72-hour grace window
 >   lapsed. Requires the current password and warns the old address.
 >
-> **What is still open, and why it is worth doing:** **#53** (`POST /api/reports` distinguishes three
-> outcomes and so answers "did this user write message N?" for any id, unthrottled and undeduped),
-> **#57** (push-token registration reassigns a token with no proof of device, no per-user cap, no format
-> check) and **#58** (`GET /api/users/discover` returns every eligible user with no `LIMIT` — a few
-> hundred KB per call, re-fetched on every navigation, growing with the user table forever).
+> **Deliberately not done**, and worth stating so nobody assumes otherwise:
 >
-> `main` is at **856+ backend tests**, 148 web, 41 mobile, `ruff` clean.
+> - **#57's takeover half.** Format validation, a per-user cap and audit logging of reassignments all
+>   landed. Proving a token belongs to the device presenting it needs signed device attestation, which
+>   is a real design decision rather than a fix.
+> - **#62's `/health` probe.** R2 is reported as configured-or-not; whether it is actually *reachable*
+>   is only discovered on an upload, which now escalates to Sentry instead of silently falling back.
+> - **Per-run Redis key prefixes in CI.** CI has a real Redis service now on a non-zero DB, and
+>   GitHub's service containers are per-job, so runs cannot collide. Within a run, conftest's autouse
+>   fixtures already handle it.
+>
+> `main` is at **896 backend tests**, 151 web, 41 mobile; `ruff` clean, single alembic head
+> `u2o3p4q5r6s7`.
 
 A second pass over `main` at `c56f9f1`, aimed at what round one under-covered: the avatar pipeline end to
 end, WebSocket concurrency and lifecycle, **authorization** as distinct from authentication, operational
@@ -594,7 +601,7 @@ tests. The deeper version — a `blocks`-aware guard dependency applied to every
 user's id — is the right architecture but a bigger change; the two-call-site version closes the observable
 holes.
 
-### 53. `POST /api/reports` is an oracle for message authorship, and is unthrottled and undeduped
+### 53. ~~`POST /api/reports` is an oracle for message authorship, and is unthrottled and undeduped~~ ✅ FIXED (668c727)
 
 `app/api/reports.py:39-47` validates a submitted `message_id` by loading the message and checking
 `msg.sender_id != body.reported_user_id`. It never checks that the *reporter* is a participant in that
@@ -692,7 +699,7 @@ both in a `pg_advisory_lock` so the second replica waits instead of racing. Maki
 (#39) removes the destructive half of this independently, which is why #39 is the cheaper fix to do
 first.
 
-### 57. Push-token registration reassigns a token with no proof of device, no per-user cap, and no format check
+### 57. ~~Push-token registration reassigns a token with no proof of device, no per-user cap, and no format check~~ ✅ FIXED (de3724a)
 
 `app/api/push_tokens.py:29-33`:
 
@@ -728,7 +735,7 @@ shape, and a cap (say 10 rows per user, evicting oldest) at registration. The ta
 something more like a signed device attestation, which is a real design decision — at minimum log
 reassignments so it is auditable, and consider requiring a fresh login rather than any valid session.
 
-### 58. `GET /api/users/discover` has no `LIMIT` and a fixed ordering
+### 58. ~~`GET /api/users/discover` has no `LIMIT` and a fixed ordering~~ ✅ FIXED (b8501c7 + 2f322e5)
 
 `app/api/users.py:80` — `return q.order_by(User.created_at.desc()).all()`. Every eligible user, in one
 response, on every call.
