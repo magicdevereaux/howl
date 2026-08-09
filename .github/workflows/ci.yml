@@ -10,12 +10,44 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
 
+    # Redis is not mocked centrally (see CLAUDE.md's testing section) — the
+    # rate limiter, Celery enqueueing, and ChatPubSub all talk to a real
+    # client, with autouse conftest fixtures neutralising the ones that would
+    # otherwise hang or leak between tests. Without this service, every one of
+    # those connections failed silently into the fail-open path, so real
+    # Redis behaviour was never actually exercised in CI (GAPS-ROUND-2 #61).
+    #
+    # This container is per-job and ephemeral — GitHub Actions starts it fresh
+    # for every workflow run and discards it after, so it does not carry the
+    # "keys built from ids that repeat" leakage across *runs* that bites local
+    # dev (see tests/conftest.py's docstring / howl_test_harness_traps).
+    # Leakage *within* one run, between tests that happen to reuse the same
+    # id-derived key, is already handled by conftest's existing autouse
+    # fixtures. A true per-test-run key prefix would need those fixtures (or
+    # the Redis client construction itself) to read one, which means changing
+    # tests/conftest.py — out of scope here, see this branch's final report.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       # The test suite runs entirely on in-memory SQLite (see tests/conftest.py)
       # and mocks every outbound service, but app.config declares these fields
       # as required, so importing app.main needs them present.
       DATABASE_URL: postgresql://howl:howl_dev@localhost:5433/howl
-      REDIS_URL: redis://localhost:6379/0
+      # DB 1, not 0: several fixtures/tests reason about "a" Redis logical DB
+      # being exclusively theirs (mirrors the worktree convention of one DB
+      # index per concurrent agent/environment); 0 is the default anything
+      # unconfigured falls back to, so avoiding it here catches a
+      # misconfigured REDIS_URL that silently dropped the path component.
+      REDIS_URL: redis://localhost:6379/1
       SECRET_KEY: ci-secret-not-used-for-anything-real
       ANTHROPIC_API_KEY: sk-ant-ci-placeholder
       ENVIRONMENT: ci
