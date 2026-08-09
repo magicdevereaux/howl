@@ -1,9 +1,12 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+# `manager` owns the live sockets; chat.py does not import this module, so the
+# dependency runs one way only.
+from app.api.chat import manager
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.block import Block
@@ -17,11 +20,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/blocks", tags=["blocks"])
 
 
-def _remove_relationship(blocker_id: int, other_id: int, db: Session) -> None:
-    """Delete any match, messages (via cascade), and mutual swipes between two users."""
+def _remove_relationship(blocker_id: int, other_id: int, db: Session) -> int | None:
+    """Delete any match, messages (via cascade), and mutual swipes between two users.
+
+    Returns the id of the match it removed, if there was one, so the caller can
+    close the live WebSockets that were serving it once the delete commits.
+    """
     u1, u2 = min(blocker_id, other_id), max(blocker_id, other_id)
     match = db.query(Match).filter(Match.user1_id == u1, Match.user2_id == u2).first()
+    removed_match_id: int | None = None
     if match:
+        removed_match_id = match.id  # read before the delete detaches it
         db.delete(match)  # messages cascade
 
     # Remove swipes in both directions so neither user reappears in discover
@@ -30,14 +39,23 @@ def _remove_relationship(blocker_id: int, other_id: int, db: Session) -> None:
         ((Swipe.user_id == other_id) & (Swipe.target_user_id == blocker_id))
     ).delete(synchronize_session=False)
 
+    return removed_match_id
+
 
 @router.post("", status_code=201)
 def block_user(
     body: BlockIn,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Block a user. Removes any existing match and swipe records."""
+    """Block a user. Removes any existing match and swipe records.
+
+    Also closes any WebSocket still serving that match. Blocking used to
+    broadcast nothing and close nothing, so the blocked user's client carried on
+    showing the conversation, and the server believed access was revoked while
+    the socket kept delivering the blocker's incoming messages (GAPS #60).
+    """
     if body.blocked_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot block yourself.")
 
@@ -45,7 +63,7 @@ def block_user(
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    _remove_relationship(current_user.id, body.blocked_id, db)
+    closed_match_id = _remove_relationship(current_user.id, body.blocked_id, db)
 
     try:
         db.add(Block(blocker_id=current_user.id, blocked_id=body.blocked_id))
@@ -55,6 +73,10 @@ def block_user(
         raise HTTPException(status_code=409, detail="User is already blocked.")
 
     logger.info("blocks: user %d blocked user %d", current_user.id, body.blocked_id)
+    # Only after the commit: the 409 path rolls the match delete back with it,
+    # and closing sockets for a match that still exists would be a lie.
+    if closed_match_id is not None:
+        background_tasks.add_task(manager.close_match, closed_match_id, "blocked")
     return {"detail": "User blocked."}
 
 
