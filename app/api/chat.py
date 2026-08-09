@@ -45,9 +45,16 @@ _RATE_LIMIT_MAX = 10       # messages per window, per sender per match
 _RATE_LIMIT_WINDOW_S = 60  # seconds
 _PAGE_SIZE = 50            # messages returned per request
 
-# Inbound WS "typing" events, budgeted per connection. See _TypingBudget.
+# Inbound WS "typing" events, budgeted per (match, user). See _TypingBudget.
 _TYPING_LIMIT = 5
 _TYPING_WINDOW_S = 2.0
+
+# How many sockets one user may hold open on one match. Two, so the ordinary
+# case of the same chat open in two tabs keeps working; a third connect evicts
+# that user's oldest. Without a cap, `_conns[match_id]` is keyed by WebSocket
+# and `connect()` adds unconditionally, so fifty sockets bought fifty typing
+# budgets and made every allowed frame fan out fifty times per replica.
+_MAX_SOCKETS_PER_USER_MATCH = 2
 
 # A single slow socket must not stall delivery for everyone else on this
 # replica, because remote events are all delivered by the one pub/sub reader
@@ -59,6 +66,13 @@ _SEND_TIMEOUT_S = 5.0
 # both clients' existing onclose/onerror reconnect paths fire on it.
 _WS_CLOSE_DROPPED = 1011
 
+# Close code for a socket evicted because the same user opened too many to this
+# match. Application range, distinct from 4001 (re-auth) and 4003 (no access):
+# reconnecting works, but doing so immediately just evicts another of your own
+# sockets, so clients should treat it as "this tab lost the seat" and not retry
+# on a tight loop.
+_WS_CLOSE_REPLACED = 4004
+
 
 def _message_rate_limit_key(user_id: int, match_id: int) -> str:
     """Redis key for the send limit. Scoped per (sender, match), as the
@@ -67,14 +81,24 @@ def _message_rate_limit_key(user_id: int, match_id: int) -> str:
 
 
 class _TypingBudget:
-    """Fixed-window counter for inbound `typing` frames on one WebSocket.
+    """Fixed-window counter for inbound `typing` frames from one user in one match.
 
-    Deliberately in-process and per-connection rather than Redis-backed: a
-    WebSocket is pinned to the process that accepted it, so a local counter is
-    *exact* for that connection and needs no coordination. It also avoids
-    paying a Redis round-trip per keystroke — which, on an endpoint whose whole
-    problem is that it can be spammed, would make the limiter the amplifier.
-    The state dies with the socket, so nothing leaks.
+    Deliberately in-process rather than Redis-backed: every socket a user holds
+    on a match is pinned to the process that accepted it, and that process caps
+    how many they may hold (`_MAX_SOCKETS_PER_USER_MATCH`), so a local counter
+    needs no coordination. It also avoids paying a Redis round-trip per
+    keystroke — which, on an endpoint whose whole problem is that it can be
+    spammed, would make the limiter the amplifier.
+
+    Keyed on `(match_id, user_id)`, **not** on the WebSocket. Per-connection was
+    exact for a connection but the limit it enforces is per *user*: with the
+    counter on the socket, opening N sockets bought N budgets, and each allowed
+    frame then fanned out to every socket in the match on every replica.
+
+    The entry is dropped when the user's last socket for the match goes away, so
+    nothing leaks. A user who reconnects does get a fresh window, but a full
+    WebSocket handshake plus auth costs far more than the handful of cosmetic
+    frames it buys, and the socket cap bounds how fast they can do it.
     """
 
     __slots__ = ("_window_start", "_count")
@@ -111,6 +135,9 @@ class ConnectionManager:
     def __init__(self, pubsub: ChatPubSub | None = None) -> None:
         # match_id → {WebSocket: (user_id, display_name)}
         self._conns: dict[int, dict[WebSocket, tuple[int, str | None]]] = {}
+        # (match_id, user_id) → typing budget, shared by all that user's sockets
+        # on that match. See _TypingBudget.
+        self._typing_budgets: dict[tuple[int, int], _TypingBudget] = {}
         # Strong references to in-flight close tasks. asyncio only holds a weak
         # reference to a running task, so without this the GC is free to cancel
         # a close mid-handshake and we are back to a socket that never learns.
@@ -129,6 +156,8 @@ class ConnectionManager:
         if first_for_match:
             # Only subscribe once per match, on the first local socket.
             await self._pubsub.subscribe(match_id)
+        self._typing_budgets.setdefault((match_id, user_id), _TypingBudget())
+        await self._evict_surplus_sockets(match_id, user_id)
         logger.debug("ws: user %d connected to match %d", user_id, match_id)
 
     async def disconnect(self, match_id: int, ws: WebSocket) -> None:
@@ -139,7 +168,38 @@ class ConnectionManager:
             # No local socket cares about this match any more.
             await self._pubsub.unsubscribe(match_id)
         if entry is not None:
-            logger.debug("ws: user %d disconnected from match %d", entry[0], match_id)
+            user_id = entry[0]
+            if not any(uid == user_id for uid, _name in conns.values()):
+                # Their last socket on this match: the typing window dies with
+                # their presence rather than lingering as a per-user leak.
+                self._typing_budgets.pop((match_id, user_id), None)
+            logger.debug("ws: user %d disconnected from match %d", user_id, match_id)
+
+    async def _evict_surplus_sockets(self, match_id: int, user_id: int) -> None:
+        """Hold *user_id* to _MAX_SOCKETS_PER_USER_MATCH sockets on this match.
+
+        Closes their oldest first — `_conns[match_id]` is insertion-ordered, so
+        the surplus is simply the front of their slice. Evicting the oldest
+        rather than refusing the newest is what makes "same chat in two tabs"
+        behave: the tab you just opened is the one you are looking at.
+        """
+        conns = self._conns.get(match_id) or {}
+        mine = [w for w, (uid, _name) in conns.items() if uid == user_id]
+        for surplus in mine[:-_MAX_SOCKETS_PER_USER_MATCH]:
+            logger.info(
+                "ws: evicting a surplus socket for user %d on match %d (%d open)",
+                user_id, match_id, len(mine),
+            )
+            self._close_soon(surplus, _WS_CLOSE_REPLACED)
+            await self.disconnect(match_id, surplus)
+
+    def allow_typing(self, match_id: int, user_id: int) -> bool:
+        """Consume one unit of *user_id*'s typing budget for this match."""
+        budget = self._typing_budgets.get((match_id, user_id))
+        if budget is None:
+            budget = _TypingBudget()
+            self._typing_budgets[(match_id, user_id)] = budget
+        return budget.allow()
 
     # ── dropping a socket the server has given up on ────────────────────────
 
@@ -471,7 +531,6 @@ async def chat_websocket(
 
     # ── Register and handle incoming events ──────────────────────────────────
     await manager.connect(match_id, user_id, user.name, ws)
-    typing_budget = _TypingBudget()
     try:
         while True:
             try:
@@ -485,7 +544,9 @@ async def chat_websocket(
                     # every replica serving the match, so spam amplifies.
                     # Excess frames are dropped silently rather than closing the
                     # socket — the event is cosmetic and the client cannot tell.
-                    if typing_budget.allow():
+                    # The budget lives on the manager, keyed by (match, user), so
+                    # a second socket does not buy a second allowance.
+                    if manager.allow_typing(match_id, user_id):
                         await manager.broadcast_typing(match_id, user_id)
                     else:
                         logger.debug(

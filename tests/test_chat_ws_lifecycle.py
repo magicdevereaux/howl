@@ -24,7 +24,7 @@ import pytest
 import starlette.websockets
 from starlette.websockets import WebSocketDisconnect
 
-from app.api.chat import ConnectionManager, manager
+from app.api.chat import _TYPING_LIMIT, ConnectionManager, manager
 from app.models.match import Match
 from app.models.message import Message
 from app.models.user import AvatarStatus, User
@@ -68,7 +68,7 @@ def _ws_url(match_id: int) -> str:
 _RECEIVE_TIMEOUT_S = 5.0
 
 
-def _recv(ws) -> tuple[str, object]:
+def _recv(ws, timeout: float | None = None) -> tuple[str, object]:
     """Read one thing from *ws* with a deadline.
 
     Returns ``("frame", payload)``, ``("close", code)`` or ``("timeout", None)``.
@@ -91,7 +91,7 @@ def _recv(ws) -> tuple[str, object]:
 
     reader = threading.Thread(target=_read, daemon=True)
     reader.start()
-    reader.join(_RECEIVE_TIMEOUT_S)
+    reader.join(_RECEIVE_TIMEOUT_S if timeout is None else timeout)
     if "error" in out:
         raise out["error"]  # type: ignore[misc]
     if "close" in out:
@@ -112,6 +112,7 @@ def _clean_manager():
     """The ConnectionManager is a module-level singleton; don't leak sockets."""
     yield
     manager._conns.clear()
+    manager._typing_budgets.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +303,86 @@ async def test_receipt_is_delivered_verbatim_without_is_mine():
     await mgr.broadcast_read_receipt(43, 9, 12, "2026-08-09T00:00:00+00:00")
 
     assert "message" not in ws.sent[0]
+
+
+# ---------------------------------------------------------------------------
+# #59 — cap sockets per (user, match); budget typing per user
+# ---------------------------------------------------------------------------
+
+
+def test_third_socket_for_one_user_evicts_the_oldest(client, db, test_user, _ws_db):
+    """Two tabs are legitimate; fifty are a way to multiply the typing budget."""
+    other = _make_user(db, email="ws_cap@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, cookie = m.id, _cookie(test_user)
+
+    with client.websocket_connect(_ws_url(match_id), headers=cookie) as first:
+        with client.websocket_connect(_ws_url(match_id), headers=cookie):
+            assert len(manager._conns[match_id]) == 2, "two sockets is under the cap"
+
+            with client.websocket_connect(_ws_url(match_id), headers=cookie):
+                assert _recv(first) == ("close", 4004)
+                assert len(manager._conns[match_id]) == 2
+
+
+def test_socket_cap_is_per_user_not_per_match(client, db, test_user, _ws_db):
+    """The other party's sockets must not count against yours."""
+    other = _make_user(db, email="ws_cap_other@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, mine, theirs = m.id, _cookie(test_user), _cookie(other)
+
+    with client.websocket_connect(_ws_url(match_id), headers=mine):
+        with client.websocket_connect(_ws_url(match_id), headers=mine):
+            with client.websocket_connect(_ws_url(match_id), headers=theirs):
+                with client.websocket_connect(_ws_url(match_id), headers=theirs):
+                    assert len(manager._conns[match_id]) == 4
+
+
+def test_typing_budget_is_keyed_on_the_user_not_the_socket():
+    """#26's limit is per user. Fifty sockets must not buy fifty allowances."""
+    mgr = ConnectionManager()
+    allowed = sum(1 for _ in range(8) if mgr.allow_typing(3, 7))
+    assert allowed == 5
+    # A different user in the same match has their own budget.
+    assert mgr.allow_typing(3, 8) is True
+
+
+def test_two_sockets_share_one_typing_budget(client, db, test_user, _ws_db):
+    """The budget used to be a local in the WS handler, so it was per socket:
+    six frames split across two sockets were three and three, both under the
+    limit of five, and all six fanned out."""
+    other = _make_user(db, email="ws_typing@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, mine, theirs = m.id, _cookie(test_user), _cookie(other)
+
+    with client.websocket_connect(_ws_url(match_id), headers=theirs) as watcher:
+        with client.websocket_connect(_ws_url(match_id), headers=mine) as a:
+            with client.websocket_connect(_ws_url(match_id), headers=mine) as b:
+                for sock in (a, b, a, b, a, b):
+                    sock.send_json({"type": "typing"})
+
+                delivered = 0
+                while True:
+                    kind, event = _recv(watcher, timeout=1.0)
+                    if kind != "frame":
+                        break
+                    assert isinstance(event, dict) and event["type"] == "typing"
+                    delivered += 1
+                    if delivered > _TYPING_LIMIT:
+                        break
+
+    assert delivered == _TYPING_LIMIT, "a second socket bought a second budget"
+
+
+def test_typing_budget_survives_one_socket_of_a_pair_closing(client, db, test_user, _ws_db):
+    """Closing one of two tabs must not hand the user a fresh window."""
+    other = _make_user(db, email="ws_typing_reset@howl.app")
+    m = _make_match(db, test_user, other)
+    match_id, uid, cookie = m.id, test_user.id, _cookie(test_user)
+
+    with client.websocket_connect(_ws_url(match_id), headers=cookie):
+        with client.websocket_connect(_ws_url(match_id), headers=cookie):
+            assert (match_id, uid) in manager._typing_budgets
+        assert (match_id, uid) in manager._typing_budgets, "one tab closing reset the window"
+    # Last socket gone: the state dies with the user's presence, so nothing leaks.
+    assert (match_id, uid) not in manager._typing_budgets
