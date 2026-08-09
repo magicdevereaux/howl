@@ -534,19 +534,21 @@ def test_undo_without_swipe_id_is_unchanged(client, db, auth_headers, test_user)
     """Omitting swipe_id keeps the pre-#50 behaviour exactly."""
     other = _make_user(db, email="undo_no_id@howl.app", animal="fox")
     swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+    swipe_id = swipe.id  # captured before delete: the row (and this instance) won't survive it
 
     res = client.delete("/api/swipes/last", headers=auth_headers)
     assert res.status_code == 200
-    assert db.query(Swipe).filter(Swipe.id == swipe.id).first() is None
+    assert db.query(Swipe).filter(Swipe.id == swipe_id).first() is None
 
 
 def test_undo_with_matching_swipe_id_deletes_as_before(client, db, auth_headers, test_user):
     other = _make_user(db, email="undo_match_id@howl.app", animal="owl")
     swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+    swipe_id = swipe.id  # captured before delete: the row (and this instance) won't survive it
 
-    res = client.delete(f"/api/swipes/last?swipe_id={swipe.id}", headers=auth_headers)
+    res = client.delete(f"/api/swipes/last?swipe_id={swipe_id}", headers=auth_headers)
     assert res.status_code == 200
-    assert db.query(Swipe).filter(Swipe.id == swipe.id).first() is None
+    assert db.query(Swipe).filter(Swipe.id == swipe_id).first() is None
 
 
 def test_undo_with_stale_swipe_id_returns_409_and_deletes_nothing(client, db, auth_headers, test_user):
