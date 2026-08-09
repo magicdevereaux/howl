@@ -601,6 +601,82 @@ def test_naive_message_timestamp_written_by_raw_sql_reads_back_aware(db, column)
     assert value == _EXPECTED
 
 
+def test_updated_at_onupdate_fires_for_the_bulk_update_forms_the_app_uses(db):
+    """Refutes GAPS #22's claim that bulk .update() skips updated_at's onupdate.
+
+    #22 records this as "unchanged and still a real trap", naming app/api/swipes.py
+    and app/tasks/notify.py. Measured, it is not a trap: SQLAlchemy's UPDATE
+    compiler adds updated_at to the SET clause for Core update(), ORM
+    Query.update() *and* bulk_update_mappings. The only form that skips a
+    Python-side onupdate is a raw text() UPDATE, which bypasses the compiler
+    entirely — and app/ contains no raw SQL writes at all.
+
+    (notify.py no longer bulk-updates anything either; its bulk statement is a
+    .delete(), where onupdate is meaningless.)
+
+    Pinned as a test so nobody "fixes" a non-problem by adding a trigger, and so
+    that introducing a raw-SQL UPDATE of users has to argue with this first.
+
+    Compared against a fixed sentinel rather than "the previous value", because
+    two statements can land inside one clock tick on Windows and produce byte-
+    identical timestamps — which made the >-based version of this test flaky.
+    """
+    from sqlalchemy import update
+
+    user = _make_user(db, email="onupdate@howl.app")
+    stale = datetime(2020, 1, 1, tzinfo=UTC)
+
+    def park_updated_at() -> None:
+        """Force updated_at to a value now() can never collide with."""
+        db.execute(
+            update(User).where(User.id == user.id).values(updated_at=stale),
+            execution_options={"synchronize_session": False},
+        )
+        db.commit()
+        assert db.get(User, user.id).updated_at == stale
+
+    # The exact shape of app/api/swipes.py's _consume_swipe_quota: a Core
+    # update() with updated_at absent from values().
+    park_updated_at()
+    db.execute(
+        update(User).where(User.id == user.id).values(daily_swipes=5),
+        execution_options={"synchronize_session": False},
+    )
+    db.commit()
+    assert db.get(User, user.id).updated_at != stale, (
+        "Core update() left updated_at at the sentinel — onupdate did not fire"
+    )
+
+    park_updated_at()
+    db.query(User).filter(User.id == user.id).update(
+        {"daily_swipes": 6}, synchronize_session=False
+    )
+    db.commit()
+    assert db.get(User, user.id).updated_at != stale, (
+        "Query.update() left updated_at at the sentinel — onupdate did not fire"
+    )
+
+
+def test_an_explicit_updated_at_wins_over_the_onupdate(db):
+    """A caller that sets updated_at itself must not have it overwritten.
+
+    app/tasks/avatar.py assigns updated_at by hand alongside the status flip. If
+    onupdate clobbered that, the value written would not be the value intended.
+    """
+    from sqlalchemy import update
+
+    user = _make_user(db, email="explicit_updated_at@howl.app")
+    sentinel = datetime(2020, 1, 1, tzinfo=UTC)
+
+    db.execute(
+        update(User).where(User.id == user.id).values(daily_swipes=1, updated_at=sentinel),
+        execution_options={"synchronize_session": False},
+    )
+    db.commit()
+
+    assert db.get(User, user.id).updated_at == sentinel
+
+
 def test_null_timestamp_stays_none():
     """NULL must not be coerced into an epoch — it is a meaningful state here.
 
