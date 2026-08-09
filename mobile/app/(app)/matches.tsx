@@ -61,11 +61,15 @@ export default function MatchesScreen() {
     }
   }, [setTotalUnread]);
 
-  // Refetch whenever this tab comes into focus (e.g. returning from chat)
+  // Refetch whenever this tab comes into focus (e.g. returning from chat).
+  // matches.length must be a dependency: fetchMatches's identity never
+  // changes, so without it this callback would permanently close over the
+  // initial empty array and always do a non-silent (full-spinner) refetch
+  // instead of a silent background one once data has loaded.
   useFocusEffect(
     useCallback(() => {
       fetchMatches(matches.length > 0); // silent if we already have data
-    }, [fetchMatches]),
+    }, [fetchMatches, matches.length]),
   );
 
   const onRefresh = async () => {

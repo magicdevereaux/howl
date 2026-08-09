@@ -50,9 +50,22 @@ async function getExpoPushToken(): Promise<string | null> {
     }
 
     const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-    const result = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined,
-    );
+    if (!projectId) {
+      // Without extra.eas.projectId (populated by `eas init`, which needs the
+      // account owner's EAS login — see mobile/CLAUDE.md and docs/GAPS.md #35),
+      // getExpoPushTokenAsync throws and push silently never works. Logged
+      // unconditionally, not gated on __DEV__: this is a standing build
+      // misconfiguration rather than a transient failure, there is no crash
+      // reporter wired up (see src/components/ErrorBoundary.tsx), and the
+      // catch-all below would otherwise swallow this indistinguishably from
+      // "user dismissed the permission dialog".
+      console.warn(
+        '[push] extra.eas.projectId is missing from app.json — run `eas login && ' +
+        'eas init`. Push notifications cannot register until this is set.',
+      );
+      return null;
+    }
+    const result = await Notifications.getExpoPushTokenAsync({ projectId });
     cachedToken = result.data;
     return cachedToken;
   } catch (err) {

@@ -4,7 +4,20 @@ Seed the database with 1000 diverse bot users for Howl.
 Usage (from the repo root):
     python -m scripts.seed_demo_users
 
-Idempotent: deletes any existing demo*@howl.app rows before inserting.
+**Additive.** Bot rows that already exist are left exactly where they are; only
+missing ones are inserted. This runs on every deploy via `scripts/startup.sh`,
+and it used to start by bulk-deleting every `demo%@howl.app` user — which, because
+`matches.user1_id`/`user2_id` are `ON DELETE CASCADE` and `messages.match_id`
+cascades from `matches`, silently destroyed real users' matches and their entire
+chat history with those bots on every single redeploy. Most of a new user's
+matches are bots (auto-match likes back at 90%), so that was most of their
+conversations. It also reassigned every bot a new row id.
+
+Bots hold no state worth refreshing — avatars, bios and archetypes are all static
+— so there is no reason for a deploy to recreate them. If you genuinely want a
+destructive refresh, set `RESEED_BOTS=true` explicitly. A deploy must never set
+it. See docs/GAPS-ROUND-2.md #39.
+
 No Celery worker or API keys needed — all avatar data is pre-written.
 
 Archetype distribution (weighted):
@@ -20,6 +33,7 @@ import os
 import random
 import secrets
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -311,6 +325,21 @@ def _build_users() -> list[dict]:
 DEMO_USERS = _build_users()
 
 
+def _reseed_requested() -> bool:
+    """Whether an operator has explicitly asked for a destructive refresh.
+
+    Read at call time, not import time, so tests can set it per-case.
+    """
+    return os.getenv("RESEED_BOTS", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _chunked(items: list[str], size: int) -> Iterator[list[str]]:
+    """Split a list for `IN (...)` clauses — 1000 bind params in one IN is past
+    what some drivers accept comfortably."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
 # ---------------------------------------------------------------------------
 # Seed
 # ---------------------------------------------------------------------------
@@ -318,18 +347,47 @@ DEMO_USERS = _build_users()
 def seed() -> None:
     db = SessionLocal()
     try:
-        deleted = (
-            db.query(User)
-            .filter(User.email.like("demo%@howl.app"))
-            .delete(synchronize_session=False)
-        )
-        db.commit()
-        if deleted:
-            print(f"Removed {deleted} existing demo user(s).")
+        # The exact addresses this script owns. Built from DEMO_USERS rather than
+        # matched with `LIKE 'demo%@howl.app'`, which also matched any real
+        # account merely *starting* with "demo" (`demolition@howl.app`) and
+        # deleted it on every deploy.
+        owned_emails = [data["email"] for data in DEMO_USERS]
+
+        if _reseed_requested():
+            # Destructive refresh, opt-in only — see the module docstring for why
+            # this must never be a deploy default.
+            deleted = 0
+            for chunk in _chunked(owned_emails, 500):
+                deleted += (
+                    db.query(User)
+                    .filter(User.email.in_(chunk))
+                    .delete(synchronize_session=False)
+                )
+            db.commit()
+            print(
+                f"RESEED_BOTS=true: removed {deleted} existing demo user(s), "
+                "along with their matches and messages."
+            )
+            existing: set[str] = set()
+        else:
+            existing = {
+                email
+                for chunk in _chunked(owned_emails, 500)
+                for (email,) in db.query(User.email).filter(User.email.in_(chunk)).all()
+            }
+            if existing:
+                print(
+                    f"{len(existing)} demo user(s) already present; leaving them "
+                    "and their conversations untouched."
+                )
 
         base_time = datetime.now(UTC) - timedelta(days=30)
 
+        inserted = 0
         for i, data in enumerate(DEMO_USERS):
+            if data["email"] in existing:
+                continue
+            inserted += 1
             created_at = base_time + timedelta(hours=i * 0.72)  # spread over ~30 days
             user = User(
                 email=data["email"],
@@ -365,7 +423,7 @@ def seed() -> None:
             arch_counts[u["archetype"]] = arch_counts.get(u["archetype"], 0) + 1
         ages = [u["age"] for u in DEMO_USERS]
 
-        print(f"Seeded {len(DEMO_USERS)} demo users.")
+        print(f"Seeded {inserted} new demo user(s); {len(DEMO_USERS)} total.")
         print(f"  Archetypes:  {dict(sorted(arch_counts.items()))}")
         print(f"  Age range:   {min(ages)}–{max(ages)}, mean {sum(ages) // len(ages)}")
 
