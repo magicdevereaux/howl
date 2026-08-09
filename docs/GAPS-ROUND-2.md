@@ -1,12 +1,28 @@
 # Gaps & Improvements — round two
 
-> **Status, 2026-08-08:** both P0s (**#38**, **#39**) are **fixed** — see the entries. Everything from
-> **#40** down is still open. The highest-value remaining items are **#43** (Celery `.delay()` is the one
-> Redis dependency that fails *closed* — a measured 108.8s block, a 500 on an already-committed message,
-> and threadpool exhaustion that takes down every sync route while `/health` still reports `ok`), **#42**
-> (the #7 lock turns a killed worker's duplicate work into *silently dropped* work), **#45** (bot replies
-> are never broadcast or notified, so the re-engagement loop is dead) and **#50** (a failed swipe arms
-> Undo, which then deletes the *previous* match). `main` is at 727 passing tests.
+> **Status, 2026-08-09 (round three).** Both P0s (**#38**, **#39**) closed on 2026-08-08. In this pass
+> **#40–#52, #54–#56, #59–#67** all closed as well — twenty-five entries — leaving **#53**, **#57** and
+> **#58** as the only ones still open. Each closed entry carries its commit; the finding itself is kept
+> under a `<details>` fold or in place, because the reasoning is why the fix is shaped the way it is.
+>
+> Landed alongside these, and worth knowing about because they are not entries in this file:
+>
+> - **GAPS.md #3** — the last open P0 from round one. `app/services/email.py` now has three backends
+>   (`console` / `resend` / `smtp`) chosen by `EMAIL_BACKEND=auto`. Delivery is synchronous and
+>   bounded rather than queued: a Celery worker that is not running is *the* documented production
+>   failure here, so mail that silently never sends because nobody drained the queue is worse than mail
+>   that costs the request a moment.
+> - **`POST /api/auth/change-email`** — the repair path #25's enforcement was missing. `email` was
+>   editable nowhere, so a typo at signup became a permanent lockout once the 72-hour grace window
+>   lapsed. Requires the current password and warns the old address.
+>
+> **What is still open, and why it is worth doing:** **#53** (`POST /api/reports` distinguishes three
+> outcomes and so answers "did this user write message N?" for any id, unthrottled and undeduped),
+> **#57** (push-token registration reassigns a token with no proof of device, no per-user cap, no format
+> check) and **#58** (`GET /api/users/discover` returns every eligible user with no `LIMIT` — a few
+> hundred KB per call, re-fetched on every navigation, growing with the user table forever).
+>
+> `main` is at **856+ backend tests**, 148 web, 41 mobile, `ruff` clean.
 
 A second pass over `main` at `c56f9f1`, aimed at what round one under-covered: the avatar pipeline end to
 end, WebSocket concurrency and lifecycle, **authorization** as distinct from authentication, operational
@@ -177,7 +193,7 @@ delete/insert runs concurrently from each of them.
 
 ## P1 — Correctness and cost
 
-### 40. A failed avatar generation burns the free tier's only monthly regeneration
+### 40. ~~A failed avatar generation burns the free tier's only monthly regeneration~~ ✅ FIXED (9bfa58c)
 
 `app/api/avatar.py:111` increments `avatar_regenerations_this_month` at *enqueue* time and never refunds
 it. `_MONTHLY_REGEN_LIMIT = 1` (`:15`), so a free user gets exactly one regeneration per 30 days,
@@ -211,7 +227,7 @@ writes `failed`. That covers parse errors, generic errors and retry exhaustion. 
 threshold, the previous attempt demonstrably produced nothing and should not be charged. About an hour
 with tests.
 
-### 41. `avatar_status_updated_at` is never written after the enqueue, so stale-detection fires mid-generation
+### 41. ~~`avatar_status_updated_at` is never written after the enqueue, so stale-detection fires mid-generation~~ ✅ FIXED (96f553c)
 
 `avatar_status_updated_at` has exactly two writers, both at enqueue time: `app/api/avatar.py:108` and
 `app/api/profile.py:101` (plus the seed at `seed_demo_users.py:351`). `app/tasks/avatar.py` sets
@@ -238,7 +254,7 @@ Fix: write `avatar_status_updated_at` everywhere `avatar_status` is assigned —
 they cannot drift again; that also creates the transactional single-step transition that #23's deferred
 `avatar_status='ready' ⇒ avatar_url` CHECK was waiting on. Small.
 
-### 42. The #7 idempotency lock converts a worker crash from duplicate work into *silently dropped* work
+### 42. ~~The #7 idempotency lock converts a worker crash from duplicate work into *silently dropped* work~~ ✅ FIXED (27e2d67)
 
 `app/tasks/avatar.py:83-88`:
 
@@ -271,7 +287,7 @@ common case (a genuine concurrent duplicate) still costs nothing because the win
 id as the lock value and let the *same* task id re-acquire, which distinguishes "my own redelivery" from
 "someone else is working". Small either way; the retry version is two lines.
 
-### 43. Enqueueing a Celery task is the one Redis dependency in the request path that fails *closed*
+### 43. ~~Enqueueing a Celery task is the one Redis dependency in the request path that fails *closed*~~ ✅ FIXED (98ab3d4)
 
 Rate limiting fails open by design (`app/services/rate_limit.py:103-105`), chat fan-out fails open to
 local delivery by design (`app/services/pubsub.py:35-42`), and task locks fail open by design
@@ -313,7 +329,7 @@ results) so the enqueue stops touching the result backend at all, which is where
 instead of losing the user's write. Then document it in RUNBOOK alongside the other fail-open entries.
 Half a day, and it removes a single-point-of-failure the docs currently claim doesn't exist.
 
-### 44. Wiring an email provider (#3) will immediately hard-bounce ~1000 addresses at your own domain
+### 44. ~~Wiring an email provider (#3) will immediately hard-bounce ~1000 addresses at your own domain~~ ✅ FIXED (3708c0c)
 
 `app/tasks/notify.py:238` gates the message-notification email on `recipient.email_notifications` and
 nothing else. Bots are ordinary `users` rows, `email_notifications` defaults to `True`
@@ -336,7 +352,7 @@ Fix, two lines: `if recipient.is_bot: return` early in `notify_new_message`, and
 second protects any future notification path. Worth landing *before* #3, and worth a test, because it is
 the class of bug that only ever fails in production.
 
-### 45. Bot replies are never broadcast and never notified, so the bot population is silent
+### 45. ~~Bot replies are never broadcast and never notified, so the bot population is silent~~ ✅ FIXED (529e534)
 
 `app/tasks/bot_response.py:267` constructs `Message` rows and `_save_replies` commits them. That is the
 end of it. Cross-checking the two delivery mechanisms:
@@ -364,7 +380,7 @@ that no replica shares. Note `ChatPubSub.publish` is `async` and the task is syn
 format is a two-key dict (`app/services/pubsub.py:226`), so the sync version is trivial. Half a day
 including the #44 bot-email guard.
 
-### 46. A single 5-second send timeout unregisters a live WebSocket without closing it
+### 46. ~~A single 5-second send timeout unregisters a live WebSocket without closing it~~ ✅ FIXED (bf5f089)
 
 `ConnectionManager._send` returns `False` on a `_SEND_TIMEOUT_S = 5.0` timeout or any exception
 (`app/api/chat.py:205-214`), and both delivery paths then drop the socket from the registry:
@@ -399,7 +415,7 @@ subscribe/unsubscribe bookkeeping in one place. Pin with a test that a timed-out
 frame. Note the fix is only *useful* once #47 lands, since reconnecting without refetching recovers
 nothing.
 
-### 47. Neither client refetches on reconnect, so pub/sub's documented recovery path does not exist
+### 47. ~~Neither client refetches on reconnect, so pub/sub's documented recovery path does not exist~~ ✅ FIXED (bc1d58e + 13e9f5f)
 
 `app/services/pubsub.py:44-51` states the delivery contract explicitly:
 
@@ -436,7 +452,7 @@ calls `loadMessages()` on each `connecting`/`reconnecting` → `open` edge.
 `fresh === []` and `setMessages([])` **wipes the conversation**. The refetch has to merge into `prev` by
 id rather than replace, or clear `seenIdsRef` first. Half a day for both clients.
 
-### 48. `GET /api/matches/{id}/messages` marks only the returned page read, so a badge above 50 never clears
+### 48. ~~`GET /api/matches/{id}/messages` marks only the returned page read, so a badge above 50 never clears~~ ✅ FIXED (3378b1b)
 
 `app/api/chat.py:415` fetches `_PAGE_SIZE + 1 = 51` rows newest-first and truncates to 50; `:423-426`
 marks `read_at` only on the messages in that page. Both unread counters — `unread_count` (`:492-500`)
@@ -458,7 +474,7 @@ Fix: when `before_id is None`, mark the whole conversation read with one stateme
 instead of looping over the page. That is cheaper than the current per-row loop, and it makes "opened the
 chat" mean "read the conversation", which is what the badge already claims. Small.
 
-### 49. Read receipts are never broadcast
+### 49. ~~Read receipts are never broadcast~~ ✅ FIXED (31b71cc + d4b2c23)
 
 Outbound WS events are `new_message`, `message_deleted` and `typing`. `_msg_event`
 (`app/api/chat.py:220-232`) is the only event builder and it is called from exactly two places (`:389`,
@@ -484,7 +500,7 @@ fix for the notification half only: a Redis presence key per `(match_id, user_id
 handler, which `notify_new_message` also consults — needed anyway because the connection registry is
 per-replica and the Celery worker cannot see it.
 
-### 50. A failed swipe pops the card *and* arms Undo, so the next Undo destroys the previous match
+### 50. ~~A failed swipe pops the card *and* arms Undo, so the next Undo destroys the previous match~~ ✅ FIXED (0682ad9 + e957a08)
 
 `frontend/src/App.jsx:834-875`. Two problems in the same handler.
 
@@ -520,7 +536,7 @@ only in that it lives in `App.jsx`; the bug is independent of the decomposition.
 
 ## P2 — Architecture and scale
 
-### 51. `process_bot_responses` has no single-flight lock, so overlapping ticks double-reply and double-pay
+### 51. ~~`process_bot_responses` has no single-flight lock, so overlapping ticks double-reply and double-pay~~ ✅ FIXED (4843b78)
 
 `app/celery_app.py:33-38` schedules the task every 900s. `#8` capped spend *per run*
 (`_MAX_PENDING_PER_RUN = 200`, `_MAX_CONSECUTIVE_FAILURES = 3`) but nothing prevents two runs existing at
@@ -552,7 +568,7 @@ high-`bot_id` conversations are always served last while low-`bot_id` users who 
 re-entering ahead of them. Ordering by `last_created_at ASC` (longest-waiting first) is a one-line change
 and is what a user would consider fair.
 
-### 52. Blocks are enforced only in the discover query; every other endpoint that takes a user id ignores them
+### 52. ~~Blocks are enforced only in the discover query; every other endpoint that takes a user id ignores them~~ ✅ FIXED (13a7069)
 
 `Block` is consulted in exactly one place: the two `notin_` subqueries in `discover_users`
 (`app/api/users.py:41-58`). `block_user` additionally deletes the match and both swipe rows
@@ -607,7 +623,7 @@ return the same 404 for "not found" and "not yours" so the endpoint stops distin
 `(reporter_id, reported_user_id, message_id)` so a duplicate report updates rather than inserts. Two to
 three hours.
 
-### 54. `/health` never touches Postgres or Redis, so a broken replica reports healthy
+### 54. ~~`/health` never touches Postgres or Redis, so a broken replica reports healthy~~ ✅ FIXED (5301b32)
 
 `app/main.py:76-78` returns `{"status": "ok", "environment": …}` unconditionally. It is `async def`, so
 it does not even need the sync threadpool that #43 can exhaust. Railway uses it as the deploy healthcheck
@@ -627,7 +643,7 @@ needs one, so a Redis blip restarts nothing. An hour. The higher-value follow-on
 heartbeat key that `/health` reports the age of, which would turn "avatars stuck pending" into a visible
 signal — Sentry is wired (`app/main.py:24-35`) and would carry the alert.
 
-### 55. No Celery queue routing and no task time limits, so bot batches starve the avatar critical path
+### 55. ~~No Celery queue routing and no task time limits, so bot batches starve the avatar critical path~~ ✅ FIXED (5ad95f5)
 
 `app/celery_app.py:16-29` sets no `task_routes`, no `task_time_limit`, and no `task_soft_time_limit`.
 All four task types share the default queue, and `worker_prefetch_multiplier=1` with `task_acks_late`
@@ -652,7 +668,7 @@ one line of config plus one Railway service. Add `task_soft_time_limit`/`task_ti
 Also worth setting `result_expires` explicitly rather than relying on Celery's one-day default, and
 `ignore_result=True` per #43. A couple of hours plus the deploy change.
 
-### 56. `startup.sh` runs migrations *and* the destructive seed on every replica
+### 56. ~~`startup.sh` runs migrations *and* the destructive seed on every replica~~ ✅ FIXED (db06169)
 
 `scripts/startup.sh` is the Railway start command for the API service, and it runs
 `alembic upgrade head` (`:5`) then the seed (`:12`) before `exec uvicorn` (`:16`). Every replica runs
@@ -733,7 +749,7 @@ Postgres, `ORDER BY random()` on a filtered set this size is acceptable, or add 
 seed. The clients need a "load more when the deck runs low" path, which the web client's array-slicing
 model makes straightforward. Half a day across the backend and both clients.
 
-### 59. No per-user WebSocket connection cap, which also makes the #26 typing limit bypassable
+### 59. ~~No per-user WebSocket connection cap, which also makes the #26 typing limit bypassable~~ ✅ FIXED (06b0dc0)
 
 `ConnectionManager._conns[match_id]` is a dict keyed by `WebSocket` (`app/api/chat.py:101`) and
 `connect()` (`:109-116`) adds unconditionally. Nothing limits how many sockets one user may open to one
@@ -754,7 +770,7 @@ Fix: cap sockets per `(user_id, match_id)` — one or two — and close the olde
 which also gives correct behaviour for the ordinary case of a user opening the same chat in two tabs.
 Then key `_TypingBudget` on `user_id` within the match rather than on the socket. An hour or two.
 
-### 60. There is no server-side revocation of an open WebSocket
+### 60. ~~There is no server-side revocation of an open WebSocket~~ ✅ FIXED (bd0d961 + d4b2c23)
 
 The WS handler authenticates once, at connect (`app/api/chat.py:278-305`), and then loops on
 `receive_text` indefinitely (`:311-331`). The token's `exp` is never re-checked and nothing can evict a
@@ -781,7 +797,7 @@ when it lapses, which the mobile hook already knows how to recover from via `ref
 (3) check a Redis revocation epoch per user, bumped on password reset, at the same checkpoint. (1) is
 half a day and closes the two user-visible cases.
 
-### 61. Test isolation: Celery enqueues are not centrally neutralised, and CI runs with no Redis at all
+### 61. ~~Test isolation: Celery enqueues are not centrally neutralised, and CI runs with no Redis at all~~ ✅ FIXED (98ab3d4 + 0bd9ab4)
 
 GAPS.md's closing note describes three autouse fixtures for Redis leakage. There are five
 (`tests/conftest.py`): `notify_new_match.delay`, `rate_limit.check_rate_limit`,
@@ -822,7 +838,7 @@ being a configuration that no developer runs, and derive test Redis keys from a 
 (`uuid4()` in a session fixture) so two concurrent runs cannot collide even where a test does use real
 Redis. An hour, and it retires a whole class of future flake.
 
-### 62. An R2 upload failure silently falls back to ephemeral local storage, indistinguishable from R2 being unconfigured
+### 62. ~~An R2 upload failure silently falls back to ephemeral local storage, indistinguishable from R2 being unconfigured~~ ✅ FIXED (d77e7f8)
 
 `app/services/image_generation.py:184`:
 
@@ -855,7 +871,7 @@ writing because there is then a behaviour to assert.
 
 ## P3 — Engineering hygiene
 
-### 63. ADR-003 and ADR-004 describe an architecture that no longer exists
+### 63. ~~ADR-003 and ADR-004 describe an architecture that no longer exists~~ ✅ FIXED (4bcd3b0)
 
 `docs/decisions/ADR.md` is presented as the place "an engineer reading the codebase for the first time"
 learns why things are the way they are. Two of its seven records are now false, and neither is marked
@@ -884,7 +900,7 @@ exactly what an ADR is for) and ADR-009 (WebSockets + Redis pub/sub, including t
 policy and the "committed before broadcast" contract that #47 shows the clients don't yet honour). An
 hour, and it is the highest-value hour in this section because these two documents actively mislead.
 
-### 64. `ARCHITECTURE.md` and `RUNBOOK.md` still describe pre-fan-out behaviour as current
+### 64. ~~`ARCHITECTURE.md` and `RUNBOOK.md` still describe pre-fan-out behaviour as current~~ ✅ FIXED (9b66e35)
 
 Both were updated by #36 *before* the eight-branch pass landed, and several statements are now wrong in
 the direction that matters — they describe closed vulnerabilities as open:
@@ -908,7 +924,7 @@ the direction that matters — they describe closed vulnerabilities as open:
 GAPS.md is scrupulous about marking what changed; these two are not, and they are the documents someone
 reaches for at 2am. Fix: a pass over both against `main`. An hour or two, mechanical.
 
-### 65. The seed still identifies bots by email prefix rather than `is_bot`
+### 65. ~~The seed still identifies bots by email prefix rather than `is_bot`~~ ✅ FIXED (c01ce96)
 
 `scripts/seed_demo_users.py:323` selects rows to delete with `User.email.like("demo%@howl.app")`. #15
 closed exactly this class of bug in `app/api/swipes.py` — "Demo detection by email prefix … Any real
@@ -922,7 +938,7 @@ arbitrary local parts, which I could not determine from the repo — so the expo
 the fix is unconditional and it is one line: filter on `User.is_bot.is_(True)`. Best done together with
 #39, which removes the delete entirely.
 
-### 66. `TRUSTED_PROXY_HOPS` cannot actually be configured
+### 66. ~~`TRUSTED_PROXY_HOPS` cannot actually be configured~~ ✅ FIXED (8063246)
 
 `app/services/rate_limit.py:36`:
 
@@ -940,7 +956,7 @@ pydantic-settings' `extra` behaviour for `.env` keys may instead fail at import.
 and that is itself the argument for declaring the field: `trusted_proxy_count: int = 1` in `Settings`,
 read directly. Two lines.
 
-### 67. The mobile client appends WebSocket messages without ordering; the web client sorts by id
+### 67. ~~The mobile client appends WebSocket messages without ordering; the web client sorts by id~~ ✅ FIXED (13e9f5f)
 
 `frontend/src/App.jsx:160-164` rebuilds the message list through a `Map` keyed by id and sorts by id, so
 it is idempotent and order-independent. `mobile/app/(app)/chat/[matchId].tsx:150-156` dedupes on
