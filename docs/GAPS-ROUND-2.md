@@ -1096,3 +1096,26 @@ test from `_msg_event` and friends, committed as JSON — that both client suite
 reducers handle. That catches a renamed field on the next run in whichever codebase changed. The fuller
 version is generating client types from the FastAPI schema, which is a bigger commitment than the
 problem currently justifies.
+
+### 71. `routing.test.jsx > renders matches for a signed-in visitor` is flaky
+
+Observed failing **twice in roughly eight** full `npm test` runs on 2026-08-09, always that one test,
+always on `findByRole('heading', { name: 'Otter', level: 3 })` timing out. It passes when the file is
+run alone (`npx vitest run src/routes/routing.test.jsx`, 20/20) and it passed three consecutive full
+runs immediately after failing, so it is order- or timing-dependent rather than wrong.
+
+I did not chase it further, and I am recording it rather than leaving it as folklore because an
+intermittently red suite is worse than a smaller green one: the next person to see it will assume it is
+their change, and the person after that will learn to re-run until green — at which point the suite has
+stopped being evidence.
+
+Two things make it worth a proper look. It renders the whole `<App/>` against a `fetch` stub, so it
+depends on five requests settling in an unspecified order — `signedInRoutes()` covers `/api/profile/me`,
+`/api/avatar/status`, `/api/users/matches`, `/api/users/discover` and `/api/blocks`. And vitest runs
+files in parallel by default, so a slow neighbour changes this file's timing without changing its code.
+
+Where I would start: run with `--pool=forks --poolOptions.forks.singleFork` to confirm it is
+cross-file interference rather than an intra-test race, then either widen the specific `findBy` timeout
+or — better — assert on something that does not depend on two independent fetches having both resolved.
+The heading it waits for needs `/api/users/matches` to have landed *and* rendered, while the surrounding
+`findByText('Your Matches')` only needs the route.

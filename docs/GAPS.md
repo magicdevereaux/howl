@@ -17,15 +17,14 @@ each entry records how.
 
 ## Status — 2026-08-09
 
-**35 of 37 fully closed, 2 partial, 0 open.**
+**36 of 37 fully closed, 1 partial, 0 open.**
 
-- The 2 partials are **#33** (the web decomposition landed; the auth views specifically did not — see
-  the entry, and do not half-apply it) and **#35** (needs Nathan's EAS account, not effort).
+- The 1 partial is **#35**, which needs Nathan's EAS account rather than effort.
 - **#23** carries one open *product* question, not a defect: `users.age` is nullable and that is the
   18+ gate.
 - Everything under "Remaining work" at the bottom is current. The rest of this document is history.
 
-Suite: **896 backend tests**, 151 web, 41 mobile — from 413 backend and zero client tests when this
+Suite: **896 backend tests**, 153 web, 41 mobile — from 413 backend and zero client tests when this
 audit started, and from 15 failing on a clean checkout.
 
 File and line references in unstruck text describe the code *as it was when the gap was found*. Some
@@ -459,7 +458,7 @@ hardcoded client-side in `frontend/src/App.jsx:815` while the backend is the rea
 
 A shared `packages/shared` for the animal map, reason lists, and limit constants would stop the bleed.
 
-### 33. ~~Web client is one 1073-line component~~ 🟡 MOSTLY FIXED (2d8ea5a) — **the auth views are still undone**
+### 33. ~~Web client is one 1073-line component~~ ✅ FIXED (2d8ea5a, 5693b95)
 
 Landed: real URL routing (`frontend/src/routes/paths.js`, so the back button and deep links work, and
 `/privacy` exists as the link target mobile needed — see #35); five contexts replacing the prop
@@ -467,18 +466,16 @@ drilling (`ChatView` went 21 props → 0, `DiscoverView` 20 → 0, `ProfileView`
 owning the chat input, so a keystroke re-renders one component instead of the tree; and a real test
 suite — the web client went from 21 tests to 151.
 
-**What is deliberately not done:** the auth views. `LoginView` still takes eleven props, and `App.jsx`
-still holds `email`, `password`, `forgotEmail`, `forgotDone`, `resetToken`, `newPassword`,
-`confirmPassword` — the contents of three other screens' form fields — plus the monolithic
-`PasswordReset` component they feed.
+Also landed (`5693b95`): the auth views, which were left undone twice before. `LoginView` went from
+eleven props to two, and `PasswordReset` — one component taking eighteen props and switching on a
+`view` string to be two different screens — was replaced by `ForgotPasswordView` and
+`ResetPasswordView`, each with its own address. Seven more `useState`s left `App.jsx`; it had been
+holding three other screens' form fields so that a fourth could clear them.
 
-A three-prop `LoginView` rewrite and standalone `ForgotPasswordView` / `ResetPasswordView` were
-written and are preserved in the history of branch `fanout-web`. They are **not** merged, on purpose:
-applying them piecemeal breaks the login screen, because `App.jsx` still renders the old prop
-signature. That exact breakage reached `main` once on 2026-08-09 via a stray `git stash pop` in the
-wrong worktree and had to be reverted (see the revert commit). Finish it as one piece — new
-`LoginView`, both new views wired into the router, `PasswordReset` retired, tests updated — or leave
-it alone.
+Worth knowing why this took three attempts: applying it piecemeal breaks the login screen, because a
+three-prop `LoginView` renders nothing useful while `App.jsx` still passes eleven. That exact breakage
+reached `main` on 2026-08-09 through a stray `git stash pop` in the wrong worktree and had to be
+reverted. It is one change or none.
 
 ### 34. ~~Mobile accessibility is absent~~ ✅ FIXED (85554af, 567b3ef)
 
@@ -533,26 +530,20 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 
 ## Remaining work
 
-**Status 2026-08-09: 35 fully closed, 2 partial, 0 open.** `docs/GAPS-ROUND-2.md` (#38–#67) is also
+**Status 2026-08-09: 36 fully closed, 1 partial, 0 open.** `docs/GAPS-ROUND-2.md` (#38–#67) is also
 **fully closed**. Read that file too — it is the deeper audit, and several of its entries reopened
 things this one had marked done.
 
 What is actually left, in the order I would do it:
 
-1. **#33's tail — the web auth views.** The only code-shaped item left in this document. A three-prop
-   `LoginView` and standalone `ForgotPasswordView` / `ResetPasswordView` are written and sitting in
-   branch `fanout-web`'s history; wiring them means also retiring `PasswordReset` and dropping seven
-   `useState`s from `App.jsx`. **Do it as one piece.** Half-applying it puts a login screen on `main`
-   that does not render, which has already happened once.
-
-2. **#35 — `eas login && eas init`.** Needs Nathan's Expo account: `extra.eas.projectId` is missing, so
+1. **#35 — `eas login && eas init`.** Needs Nathan's Expo account: `extra.eas.projectId` is missing, so
    `getExpoPushTokenAsync` fails in real builds, and `eas.json`'s preview/production profiles still
    carry a `.invalid` sentinel instead of the real Railway hostname. Nothing else blocks a mobile build.
 
-3. **#23 — `users.age` is nullable.** A product call, not a defect: it is the 18+ gate. Decide whether
+2. **#23 — `users.age` is nullable.** A product call, not a defect: it is the 18+ gate. Decide whether
    age is required at registration, then make the column `NOT NULL` with a `CHECK (age >= 18)`.
 
-4. **Operational, not code:** #56's split only works if someone configures it. `railway.json` declares
+3. **Operational, not code:** #56's split only works if someone configures it. `railway.json` declares
    a `preDeployCommand` running `scripts/predeploy.sh` (migrations + seed) and `startup.sh` is now just
    `exec uvicorn` — but a Railway project that has not picked that up will simply never migrate. The
    same applies to #55's queue routing: a single worker now needs `-Q celery,bot_response` or bot
