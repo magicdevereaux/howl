@@ -9,7 +9,8 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 | [CLAUDE.md](CLAUDE.md) | Working agreement for this repo — commands, conventions, and the gotchas that bite |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the avatar pipeline, auth, chat, and background work actually fit together |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Setup, the four processes, env vars, and how to diagnose real failures |
-| [docs/GAPS.md](docs/GAPS.md) | Prioritized audit — known defects, risks, and improvements, with file references |
+| [docs/GAPS.md](docs/GAPS.md) | Prioritized audit round one — known defects, risks, and improvements, with file references |
+| [docs/GAPS-ROUND-2.md](docs/GAPS-ROUND-2.md) | Audit round two (#38–#67) — the avatar pipeline end to end, WebSocket lifecycle, authorization, and operational reality |
 | [docs/decisions/ADR.md](docs/decisions/ADR.md) | Architecture decision records |
 | [mobile/CLAUDE.md](mobile/CLAUDE.md) | Mobile-specific routes, conventions, and gaps |
 
@@ -42,8 +43,9 @@ AI-powered dating platform. Write a bio, Claude assigns you a spirit animal, DAL
 - **Real-Time Chat** — WebSocket-based messaging (FastAPI native); typing indicators, read receipts, message soft-delete, cursor-based pagination, unread badge on nav
 - **Chat Profile Modal** — tap the avatar in the chat header to see the matched user's full profile including bio, traits, and spirit animal description
 - **Abuse Reporting** — report profiles or individual messages; Block & Report combines both in one action; stored for manual review
-- **Email Verification** — token generated on register, logged to console in dev mode; unverified banner on profile until confirmed
-- **Password Reset** — time-limited token (1 hour); link logged to console in dev mode
+- **Email Verification** — token generated on register and emailed; enforcement is graduated, with a 72-hour grace window from signup after which only *outbound* actions (swiping, messaging, avatar regeneration) close; unverified banner on profile until confirmed. `POST /api/auth/change-email` (current password required) is the repair path when the address itself was the mistake
+- **Password Reset** — time-limited token (1 hour), emailed; every refresh token is revoked on completion
+- **Email Delivery** — three backends selected by `EMAIL_BACKEND=auto`: Resend, any SMTP relay, or console (prints the link to stdout — the default when nothing is configured, and still what local dev uses). Sends are bounded by a timeout and never raise into the request
 - **Account Deletion** — GDPR-compliant self-service; removes all user data, matches, messages, tokens, and avatar files
 - **Refresh Tokens** — database-backed 30-day refresh tokens; revoked on logout and account deletion
 - **httpOnly Cookie Auth** — access and refresh tokens stored as httpOnly cookies (`samesite=none; secure` in production); no tokens in localStorage or JS memory; Vite proxy used in dev so the browser sees a single origin
@@ -84,7 +86,7 @@ See [Mobile App](#mobile-app) for details.
 
 ## How It Works
 
-1. User registers → verification email logged to console → can log in immediately; httpOnly cookies set on response
+1. User registers → verification email sent (printed to stdout when no provider is configured) → can log in immediately; httpOnly cookies set on response
 2. User writes a bio → Celery task calls Claude → returns spirit animal, personality traits, and a DALL-E prompt
 3. DALL-E generates an avatar image saved to `static/avatars/`; emoji fallback if unavailable
 4. User navigates to **Discover**, sets preference filters, and swipes on the filtered stack (20 swipes/day free)
