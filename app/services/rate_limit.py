@@ -67,6 +67,12 @@ _LIMITS: dict[str, _ActionLimit] = {
     # reasoning as forgot_password applies — the email bucket is keyed on the
     # *target* address, which is the one that would receive the flood.
     "change_email": _ActionLimit("email change", 5, 3),
+    # GAPS #53: without this, POST /api/reports has no cost per attempt, so a
+    # sequential message_id sweep (learning message authorship from which of
+    # 404/400/200 comes back) is unbounded. The `email` bucket is keyed on the
+    # reporter's own account email, not a submitted address -- a per-account
+    # ceiling, not an anti-enumeration measure like the other buckets above.
+    "report": _ActionLimit("report", 20, 10),
 }
 
 
