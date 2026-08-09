@@ -62,6 +62,7 @@ def _make_real(db, *, email: str) -> User:
         email=email,
         password_hash=hash_password("x"),
         avatar_status=AvatarStatus.ready,
+        animal="wolf",
         is_bot=False,
     )
     db.add(u); db.commit(); db.refresh(u)
@@ -509,7 +510,7 @@ def test_run_aborts_after_consecutive_batch_failures(monkeypatch, patched_sessio
     old = datetime.now(UTC) - timedelta(hours=5)
     for i in range(10):
         real = User(email=f"human{i}@howl.app", password_hash=hash_password("x" * 10),
-                    avatar_status=AvatarStatus.ready)
+                    avatar_status=AvatarStatus.ready, animal="wolf")
         db.add(real)
         db.commit()
         m = Match(user1_id=min(bot.id, real.id), user2_id=max(bot.id, real.id))

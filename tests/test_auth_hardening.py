@@ -47,6 +47,7 @@ def _fake_request(*, peer: str = "10.0.0.9", xff: str | None = None) -> Request:
 
 
 def _make_user(db, *, email: str, verified: bool = True, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),

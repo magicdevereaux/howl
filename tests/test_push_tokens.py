@@ -6,7 +6,7 @@ from app.security import hash_password
 
 
 def _make_user(db, *, email: str) -> User:
-    user = User(email=email, password_hash=hash_password("testpass1"), avatar_status=AvatarStatus.ready)
+    user = User(email=email, password_hash=hash_password("testpass1"), avatar_status=AvatarStatus.ready, animal="wolf")
     db.add(user)
     db.commit()
     db.refresh(user)

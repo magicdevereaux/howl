@@ -12,6 +12,7 @@ from app.security import hash_password
 # ---------------------------------------------------------------------------
 
 def _make_user(db, *, email: str, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),
