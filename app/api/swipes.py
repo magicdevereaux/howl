@@ -21,6 +21,7 @@ from app.schemas.swipe import (
     SwipeOut,
     UndoSwipeOut,
 )
+from app.services.task_queue import enqueue
 from app.tasks.auto_match import auto_match_demo_user
 from app.tasks.notify import notify_new_match
 
@@ -261,13 +262,15 @@ def record_swipe(
     # Notify the other user that they have a new match.  Only the request that
     # actually created the row notifies, so a match race sends one push, not two.
     if match_created and match_id is not None:
-        notify_new_match.delay(match_id, body.target_user_id)
+        enqueue(notify_new_match, match_id, body.target_user_id)
 
     # Queue a delayed auto-like if the target is a demo user and we just liked them.
     # The task itself re-validates everything, so it's safe to fire and forget.
     if body.direction == SwipeDirection.like and target.is_bot:
-        auto_match_demo_user.apply_async(
-            args=[current_user.id, body.target_user_id],
+        enqueue(
+            auto_match_demo_user,
+            current_user.id,
+            body.target_user_id,
             countdown=_DEMO_REPLY_DELAY_S,
         )
         logger.info(

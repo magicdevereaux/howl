@@ -143,6 +143,53 @@ def _mock_notify_new_match(monkeypatch):
     monkeypatch.setattr("app.tasks.notify.notify_new_match.delay", lambda *a, **kw: None)
 
 
+@pytest.fixture(autouse=True)
+def celery_enqueues(request, monkeypatch) -> list[tuple[str, tuple, dict]]:
+    """Neutralise *every* Celery enqueue, and record what was enqueued.
+
+    The per-file patches that came before this were per-symptom: `.delay` is
+    patched on `app.api.chat`'s importer in test_chat.py, on `app.api.avatar`'s
+    in test_avatar.py, and so on.  Each one covers a single module, so any new
+    test that sends a message, saves a bio or swipes on a bot reached the real
+    broker.  Two different failures followed from that, and neither looks like a
+    missing patch when you hit it:
+
+    * **Locally** Redis is up (docker compose), so the enqueue *succeeds*.  A real
+      task lands in the shared broker on DB 0 keyed off ids from the SQLite test
+      database, and the Celery worker RUNBOOK tells you to keep running consumes
+      it and executes it against the **dev Postgres**, where those ids mean
+      something else entirely.  Concurrent test runs also feed each other tasks.
+    * **In CI** there is no Redis service at all, so an unpatched enqueue blocks
+      for a measured 108.8 seconds and then raises ``RuntimeError: … The Celery
+      application must be restarted`` — which, per that error text, poisons the
+      result backend for every remaining Celery-touching test in the process.
+
+    Patching ``Task.apply_async`` on the base class nets every call site at once,
+    because ``.delay()`` routes through it.  Deliberately **not**
+    ``task_always_eager``: that runs the task bodies, which is a much larger
+    behaviour change than "do not talk to the broker".
+
+    Opt out with ``@pytest.mark.real_celery`` if the enqueue itself is under test.
+    """
+    if request.node.get_closest_marker("real_celery"):
+        return []
+
+    from celery.app.task import Task
+
+    recorded: list[tuple[str, tuple, dict]] = []
+
+    def fake_apply_async(self, args=None, kwargs=None, **options):
+        recorded.append((self.name, tuple(args or ()), dict(kwargs or {})))
+
+        class _Result:
+            id = "test-task-id"
+
+        return _Result()
+
+    monkeypatch.setattr(Task, "apply_async", fake_apply_async)
+    return recorded
+
+
 # ---------------------------------------------------------------------------
 # Rate limiter
 # ---------------------------------------------------------------------------
@@ -209,6 +256,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "real_pubsub: leave ChatPubSub un-patched (tests that exercise the fan-out itself)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_celery: leave Task.apply_async un-patched (tests that exercise enqueueing itself)",
     )
 
 

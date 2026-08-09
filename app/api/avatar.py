@@ -8,6 +8,7 @@ from app.dependencies import get_current_user, require_verified_email
 from app.models.user import AvatarStatus, User
 from app.schemas.avatar import AvatarStatusOut
 from app.services.image_generation import delete_avatar
+from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
 
 router = APIRouter(prefix="/api/avatar", tags=["avatar"])
@@ -122,6 +123,6 @@ def regenerate_avatar(
     db.commit()
     db.refresh(current_user)
 
-    generate_avatar.delay(current_user.id)
+    enqueue(generate_avatar, current_user.id)
 
     return current_user

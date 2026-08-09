@@ -33,6 +33,7 @@ from app.schemas.chat import MessageIn, MessageOut, MessagePageOut, UnreadCountO
 from app.security import decode_access_token
 from app.services.pubsub import ChatPubSub
 from app.services.rate_limit import check_rate_limit
+from app.services.task_queue import enqueue
 from app.tasks.notify import notify_new_message
 
 logger = logging.getLogger(__name__)
@@ -513,7 +514,7 @@ def send_message(
 
     # Email notification for offline recipients (Celery task handles all skip logic)
     recipient_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
-    notify_new_message.delay(match_id, recipient_id, current_user.id)
+    enqueue(notify_new_message, match_id, recipient_id, current_user.id)
 
     return _to_out(msg, current_user.id)
 

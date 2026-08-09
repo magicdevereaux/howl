@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import User
+from app.services.task_queue import enqueue
 from app.tasks.notify import notify_new_match
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ def auto_match_demo_user(self, user_id: int, demo_user_id: int) -> None:
         )
 
         if match is not None:
-            notify_new_match.delay(match.id, user_id)
+            enqueue(notify_new_match, match.id, user_id)
 
     except IntegrityError:
         db.rollback()

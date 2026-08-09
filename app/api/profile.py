@@ -9,6 +9,7 @@ from app.dependencies import email_verification_error, get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, PublicProfileOut, UserOut
 from app.services.image_generation import delete_avatar
+from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def update_my_profile(
         db.commit()
         db.refresh(current_user)
         if can_regen:
-            generate_avatar.delay(current_user.id)
+            enqueue(generate_avatar, current_user.id)
     elif payload.bio is not None:
         # Bio sent but unchanged — still save other fields
         db.commit()
