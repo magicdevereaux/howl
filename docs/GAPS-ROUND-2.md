@@ -28,6 +28,10 @@
 >   GitHub's service containers are per-job, so runs cannot collide. Within a run, conftest's autouse
 >   fixtures already handle it.
 >
+> **Three new findings, #68–#70, are appended at the end of this file** — they did not exist or were
+> not visible when #38–#67 were written, and all three are open. The one worth reading first is **#70**:
+> nothing enforces the WebSocket event contract across the three codebases, and it silently broke today.
+>
 > `main` is at **896 backend tests**, 151 web, 41 mobile; `ruff` clean, single alembic head
 > `u2o3p4q5r6s7`.
 
@@ -1021,3 +1025,74 @@ Fix: sort by id in the mobile reducer, matching the web client. One line, and it
   refresh paths are real.
 - **CI coverage of the client suites** — `frontend/package.json` uses `vitest run`, not watch, so the web
   job cannot hang CI. Checked because it is a common way for a new CI to be quietly broken.
+
+---
+
+## Round three — new findings (2026-08-09)
+
+Three gaps that did not exist or were not visible when #38–#67 were written. Numbering continues.
+
+### 68. `POST /api/auth/change-email` has no UI on either client
+
+The endpoint landed today (`4a624ba`) as the repair path email-verification enforcement was missing:
+`email` was editable nowhere, so a typo at signup became a permanent lockout once the 72-hour grace
+window closed. It is authenticated, requires the current password, re-issues verification to the new
+address and warns the old one.
+
+**No client calls it.** `ProfileUpdate` still has no `email` field, the web profile screen has no
+control for it, and neither does mobile — which does now have `forgot-password` and `reset-password`
+screens, so the omission is specifically this one. The practical position is that the recovery path
+exists and is reachable only with `curl`, which means for an actual user it does not exist.
+
+Severity is P1 rather than P2 because it is the *recovery* path for a hard failure. The operator kill
+switch (`ENFORCE_EMAIL_VERIFICATION=false`) is still the only remedy a support request can apply, and it
+is global — turning verification off for everyone to unstick one typo.
+
+Fix: an "Change email" control on the profile screen of both clients, taking the new address and the
+current password, and surfacing the 403 (wrong password), 409 (already registered) and 200 states. Half
+a day across both clients. Worth pairing with a `PATCH /api/profile/me` rejection message that points at
+it, since that is where a user will look first.
+
+### 69. The web client's accessibility was never audited the way mobile's was
+
+GAPS #34 closed mobile accessibility — `mobile/app/(app)/discover.tsx` alone carries five
+`accessibilityLabel`s. Nothing equivalent was ever done for the web client, and it is the more
+feature-complete of the two.
+
+`aria-label` appears in exactly four web components (`EmailVerificationBanner`, `MessageComposer`,
+`PreferenceFilters`, `ProfileView`). It appears in none of `DiscoverView`, `ChatView`, `MatchesView`,
+`MessageList`, `Nav`, `LoginView` or `RegisterView`. The swipe buttons — the app's primary interaction —
+are `<button>❌</button>` and `<button>❤️</button>` with a `title` attribute and nothing else, so a
+screen reader announces the emoji. `title` is a tooltip, not an accessible name substitute, and it is
+not exposed on touch at all.
+
+I noticed this while writing a test that needed `getByRole('button', { name: /like/i })` and could not
+find one; the test uses `getByTitle` instead, which is the sort of workaround that quietly encodes the
+defect. Fix: an `aria-label` pass over the interactive elements in those seven components, then switch
+the tests to role-and-name queries so the labels stay honest. A few hours.
+
+### 70. Nothing enforces the WebSocket event contract between the server and the two clients
+
+Not hypothetical — it failed today, and the failure mode is the reason this is worth an entry.
+
+The server (#49) settled on
+`{"type":"messages_read","match_id":…,"reader_id":…,"last_read_message_id":…,"read_at":…}`. The mobile
+client, written in parallel against a description rather than the code, assumed `user_id` and
+`up_to_message_id`. Nothing anywhere detects that: the frame arrives, `JSON.parse` succeeds, the branch
+matches on `type`, no field matches, no error is raised, and the ✓✓ that both clients already render
+simply never appears. It is indistinguishable from the server not sending the event — which is exactly
+the bug #49 was fixing. It was caught by hand, by diffing one agent's report against another's code.
+
+The exposure is structural. Three codebases share this wire format; the shapes live in
+`app/api/chat.py`'s `_msg_event` / `broadcast_read_receipt`, in `frontend/src/App.jsx`'s `onmessage`,
+and in `mobile/src/hooks/useMatchWebSocket.ts`'s `WsEvent` union. There is no shared schema, no
+generated types, and no test that asserts a server-produced frame is accepted by either client. Note
+`tests/test_packaging.py` already enforces byte-identity on the two clients' shared *constants* — the
+precedent for mechanically enforcing a cross-codebase contract exists, and this is the same class of
+drift, applied to the more dangerous surface.
+
+Fix, cheapest useful version: a fixtures file of real server-emitted frames — generated by a backend
+test from `_msg_event` and friends, committed as JSON — that both client suites load and assert their
+reducers handle. That catches a renamed field on the next run in whichever codebase changed. The fuller
+version is generating client types from the FastAPI schema, which is a bigger commitment than the
+problem currently justifies.

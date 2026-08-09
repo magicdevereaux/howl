@@ -7,36 +7,31 @@ each entry records how.
 - **✅ FIXED** — resolved, commit noted inline.
 - **🟡 PARTLY / MOSTLY / HALF** — the substance is done but something specific is deliberately left.
   Every one says what and why, and none of them is left because it was hard.
-- No marker — still open. There are two: **#3** and **#33**.
+- No marker — still open. **As of 2026-08-09 there are none.**
 
-> **A second audit exists: [GAPS-ROUND-2.md](GAPS-ROUND-2.md), findings #38–#67.** It was run on
-> 2026-08-08 against `c56f9f1` and deliberately does not repeat anything below. It contains **two new
-> P0s** — the first since #3 — and flags **#7, #8, #15 and #23 as incompletely closed**, each with
-> proof. Read it before picking up work from this file. Its headline, #38, is that nothing in the
-> codebase validates the *shape* of a Claude response before persisting it.
+> **A second audit exists: [GAPS-ROUND-2.md](GAPS-ROUND-2.md), findings #38–#67**, run on 2026-08-08
+> against `c56f9f1`. It deliberately repeats nothing from this file, it contained the only two P0s
+> since #3, and it flagged **#7, #8, #15 and #23 as incompletely closed** — each with proof. It is
+> also **fully closed** now. Read both; that file is the deeper audit and is where the avatar
+> pipeline, WebSocket lifecycle, authorization and operational findings live.
+
+## Status — 2026-08-09
+
+**35 of 37 fully closed, 2 partial, 0 open.**
+
+- The 2 partials are **#33** (the web decomposition landed; the auth views specifically did not — see
+  the entry, and do not half-apply it) and **#35** (needs Nathan's EAS account, not effort).
+- **#23** carries one open *product* question, not a defect: `users.age` is nullable and that is the
+  18+ gate.
+- Everything under "Remaining work" at the bottom is current. The rest of this document is history.
+
+Suite: **896 backend tests**, 151 web, 41 mobile — from 413 backend and zero client tests when this
+audit started, and from 15 failing on a clean checkout.
 
 File and line references in unstruck text describe the code *as it was when the gap was found*. Some
 have moved; the struck entries note where. Two claims turned out to be **wrong on inspection** and are
-withdrawn rather than "fixed" — see #23's push-token bullet.
-
-**Status: 34 of 37 fully closed, 2 partial, 1 open** (#22, #25, #30 closed and part of #23 closed on
-2026-08-08). The one open item is **#3** (email provider). **#33** is in flight. The 2 partials are #23
-(`users.age` nullable / the 18+ gate remains a product call) and #35 (needs an EAS account).
-
-Suite: **727 backend tests**, up from 539 at the start of 2026-08-08.
-
-See [GAPS-ROUND-2.md](GAPS-ROUND-2.md) for 30 further findings; its two P0s are both fixed, and
-everything from #40 down is open.
-
-**Every P0 and P1 is closed except #3** — no email provider, so password-reset tokens go to stdout. That
-one is blocked on choosing a provider, not on effort.
-
-Suite: **539 backend tests at 90.01% coverage** (from 413, and from 15 failing on a clean checkout when
-the audit started), plus **39 client-side tests** where there were zero.
-
-The 5 partials are #22, #23, #25, #30, #35 — in each case the substance landed and something specific was
-left deliberately, stated in the entry. The 2 open are **#3** (needs a provider decision) and **#33** (a
-session of its own). Full breakdown under "Remaining work" at the bottom.
+withdrawn rather than "fixed" — see #23's push-token bullet, and GAPS-ROUND-2's note on #22's
+`updated_at` claim.
 
 Note on **#5**: marked MITIGATED rather than FIXED. User text is now JSON-encoded, fenced as untrusted,
 and every returned index is range-checked and de-duplicated, so a reply cannot be written into a
@@ -63,11 +58,30 @@ at `app/api/auth.py:136-158` doesn't exist on this path, so the mobile endpoint 
 bypass of the web limiter. This is the login endpoint the shipped app actually uses, and it has **zero
 tests**.
 
-### 3. Password reset and verification tokens are printed to stdout
+### 3. ~~Password reset and verification tokens are printed to stdout~~ ✅ FIXED (3c16bf7)
 
-`app/services/email.py:24-32, 44-51` — there is no email provider. Every reset token goes to the
-Railway log stream, which is a complete account-takeover primitive for anyone with log access. Users
-also simply never receive the emails, so the reset flow is non-functional in production.
+`app/services/email.py` now has three backends selected by `EMAIL_BACKEND=auto`: `resend` (HTTPS, no
+new dependency — `httpx` was already vendored for the avatar image download), `smtp` (stdlib, for any
+existing relay), and `console`, which is the old `print()` behaviour and remains the default when
+nothing is configured. Configuring a provider is purely additive.
+
+Two decisions argued in the module docstring rather than assumed:
+
+- **Delivery is synchronous and bounded, not queued.** Routing these through Celery would take them off
+  the request path but make delivery depend on a worker being up — and a worker that is not running is
+  *the* documented production failure of this deployment (CLAUDE.md gotcha #5). An email that silently
+  never sends because nobody drained the queue is worse than one costing the request a moment.
+  `EMAIL_TIMEOUT_SECONDS` stops a hanging provider parking a threadpool worker the way an unbounded
+  Celery enqueue did (GAPS-ROUND-2 #43).
+- **A send failure never raises**, matching every other outbound dependency here. The caller's account
+  is already committed; failing the request would not un-send anything. Failures log at `error`, so
+  Sentry carries them.
+
+Note an unconfigured *production* deployment still puts tokens in the log stream — `console` is a safe
+default for a fresh clone, not a safe production state. RUNBOOK's diagnosis entry says so explicitly.
+
+This also completed **#25**: see `POST /api/auth/change-email` below, which is the repair path
+enforcement was missing.
 
 ### 4. ~~All 1000 seeded bots share one committed password~~ ✅ FIXED (cf5f690)
 
@@ -445,12 +459,26 @@ hardcoded client-side in `frontend/src/App.jsx:815` while the backend is the rea
 
 A shared `packages/shared` for the animal map, reason lists, and limit constants would stop the bleed.
 
-### 33. Web client is one 1073-line component
+### 33. ~~Web client is one 1073-line component~~ 🟡 MOSTLY FIXED (2d8ea5a) — **the auth views are still undone**
 
-`frontend/src/App.jsx` has ~45 `useState` hooks (`:19-82`), a `view` string standing in for routing
-(`:905-1072`), and heavy prop drilling — `ProfileView` takes 24 props (`:1039-1068`), `DiscoverView`
-20, `ChatView` 21. No memoization, so every keystroke in the chat input re-renders the tree. No URL
-routes means the back button and deep links don't work.
+Landed: real URL routing (`frontend/src/routes/paths.js`, so the back button and deep links work, and
+`/privacy` exists as the link target mobile needed — see #35); five contexts replacing the prop
+drilling (`ChatView` went 21 props → 0, `DiscoverView` 20 → 0, `ProfileView` 24 → 0); `MessageComposer`
+owning the chat input, so a keystroke re-renders one component instead of the tree; and a real test
+suite — the web client went from 21 tests to 151.
+
+**What is deliberately not done:** the auth views. `LoginView` still takes eleven props, and `App.jsx`
+still holds `email`, `password`, `forgotEmail`, `forgotDone`, `resetToken`, `newPassword`,
+`confirmPassword` — the contents of three other screens' form fields — plus the monolithic
+`PasswordReset` component they feed.
+
+A three-prop `LoginView` rewrite and standalone `ForgotPasswordView` / `ResetPasswordView` were
+written and are preserved in the history of branch `fanout-web`. They are **not** merged, on purpose:
+applying them piecemeal breaks the login screen, because `App.jsx` still renders the old prop
+signature. That exact breakage reached `main` once on 2026-08-09 via a stray `git stash pop` in the
+wrong worktree and had to be reverted (see the revert commit). Finish it as one piece — new
+`LoginView`, both new views wired into the router, `PasswordReset` retired, tests updated — or leave
+it alone.
 
 ### 34. ~~Mobile accessibility is absent~~ ✅ FIXED (85554af, 567b3ef)
 
@@ -505,38 +533,38 @@ a test table missing `test_push_tokens.py`, and run instructions omitting Celery
 
 ## Remaining work
 
-**30 fully closed, 5 partial, 2 open.** What is actually left:
+**Status 2026-08-09: 35 fully closed, 2 partial, 0 open.** `docs/GAPS-ROUND-2.md` (#38–#67) is also
+**fully closed**. Read that file too — it is the deeper audit, and several of its entries reopened
+things this one had marked done.
 
-1. **#3 — wire an email provider.** The only open P0, and the only one blocking a real launch. Password
-   reset is non-functional and reset tokens print to the Railway log stream, which is an account-takeover
-   primitive for anyone with log access. Needs a decision: Resend, Postmark or SES. Everything else in
-   the reset flow is built and tested and will work the moment `app/services/email.py` has a transport.
-   This also unblocks the second half of **#25**.
+What is actually left, in the order I would do it:
 
-2. **#25 enforcement — a product decision.** The dependency and the resend endpoint exist; attaching it
-   locks out every pre-existing account and all 1000 bots. See the entry for the two questions to answer.
+1. **#33's tail — the web auth views.** The only code-shaped item left in this document. A three-prop
+   `LoginView` and standalone `ForgotPasswordView` / `ResetPasswordView` are written and sitting in
+   branch `fanout-web`'s history; wiring them means also retiring `PasswordReset` and dropping seven
+   `useState`s from `App.jsx`. **Do it as one piece.** Half-applying it puts a login screen on `main`
+   that does not render, which has already happened once.
 
-3. **#33 — decompose `App.jsx`.** Untouched: still one 1073-line component, ~45 `useState` hooks, a
-   `view` string instead of routing, `ProfileView` taking 24 props. It is a session of its own, and it
-   is also what blocks mobile from deep-linking to a real `/privacy` URL (see #35). The new ESLint config
-   already reports eight missing hook dependencies and several dead bindings in here.
+2. **#35 — `eas login && eas init`.** Needs Nathan's Expo account: `extra.eas.projectId` is missing, so
+   `getExpoPushTokenAsync` fails in real builds, and `eas.json`'s preview/production profiles still
+   carry a `.invalid` sentinel instead of the real Railway hostname. Nothing else blocks a mobile build.
 
-4. **Leftovers inside otherwise-closed entries**, each documented in place:
-   - **#22** — the `replace(tzinfo=utc)` sites still scattered across four columns. Wants one helper or a
-     `TypeDecorator`, not four more one-off fixes.
-   - **#23** — `users.age` nullable (the 18+ gate) is still a product call. The CHECK is **done**:
-     migration `t1n2o3p4q5r6` adds `ck_users_ready_avatar_has_animal`
-     (`avatar_status <> 'ready' OR animal IS NOT NULL`). Deliberately about `animal`, **not**
-     `avatar_url` — two legitimate states hold `ready` with a null url (the 1000 seeded bots, and a
-     best-effort DALL·E failure falling back to an emoji), so a url-based CHECK would have aborted the
-     seed step of every production deploy.
-   - **#30** — the R2 upload path, i.e. the production avatar persistence path, still never exercised.
-   - **#35** — `eas login && eas init` for `extra.eas.projectId`, plus the real deploy hostnames.
-   - **#29** — 21 real findings the new linters surface in existing client code (dead code, four
-     swallowed `err` bindings, eight missing hook deps). Left for a deliberate pass rather than an
-     autofix that would have collided with the rest of this work.
-   - CI typechecks mobile against expo-router's permissive `Href` fallback, because
-     `.expo/types/router.d.ts` is generated and gitignored — so a bad route path will not fail CI.
+3. **#23 — `users.age` is nullable.** A product call, not a defect: it is the 18+ gate. Decide whether
+   age is required at registration, then make the column `NOT NULL` with a `CHECK (age >= 18)`.
+
+4. **Operational, not code:** #56's split only works if someone configures it. `railway.json` declares
+   a `preDeployCommand` running `scripts/predeploy.sh` (migrations + seed) and `startup.sh` is now just
+   `exec uvicorn` — but a Railway project that has not picked that up will simply never migrate. The
+   same applies to #55's queue routing: a single worker now needs `-Q celery,bot_response` or bot
+   replies stop silently. RUNBOOK documents both.
+
+Closed since this list was last written, so do **not** go looking for them: **#3** (email provider,
+above), **#22** (`app/models/types.py`'s `UtcDateTime` on all 18 timestamp columns — the scattered
+`replace(tzinfo=utc)` calls are gone), **#25** (enforcement is live and graduated, and
+`POST /api/auth/change-email` is the repair path it was missing), **#29** (all 21 client linter
+findings; both suites are clean), **#30** (the R2 upload path is covered via `moto` at the
+`_get_r2_client()` seam, and GAPS-ROUND-2 #62 added failure-mode tests on top), and the CI route-type
+hole (CI now runs `npx expo customize tsconfig.json` before `tsc`, so a bad route path fails the build).
 
 ### Notes for whoever picks this up
 
