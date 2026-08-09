@@ -813,6 +813,80 @@ def test_bot_reply_publish_envelope_matches_chatpubsub(patched_session, db, monk
     assert envelope["payload"]["event"] == _msg_event("new_message", saved_msg)
 
 
+@pytest.mark.real_pubsub  # need the actual ChatPubSub.publish, not the autouse noop stub
+async def test_bot_reply_publish_byte_identical_to_real_chatpubsub(patched_session, db, monkeypatch):
+    """Direct parity check against ChatPubSub.publish itself (not just the
+    shared _msg_event helper): drive both publishers with fake clients against
+    the same message row and diff the actual JSON bytes each one sends.
+
+    "origin" legitimately differs — both this worker and ChatPubSub mint their
+    own uuid4 per process and nothing ever compares one against the other —
+    so everything else in the envelope, including "kind" and the full nested
+    "event" dict, is asserted equal.
+    """
+    import asyncio
+
+    from app.api.chat import _msg_event
+    from app.services.pubsub import ChatPubSub, channel_for
+    from app.tasks import bot_response as br
+
+    bot  = _make_bot(db, email="paritybot@bot.app", archetype="responsive")
+    real = _make_real(db, email="parityreal@howl.app")
+    m    = _make_match(db, bot, real)
+    bot_id, match_id = bot.id, m.id   # capture before the task closes the session
+    _make_msg(db, match_id=match_id, sender_id=real.id, content="hi", ago_seconds=400)
+
+    sync_published: dict = {}
+
+    class _FakeSyncRedis:
+        def publish(self, channel, data):
+            sync_published["channel"] = channel
+            sync_published["data"] = data
+
+    monkeypatch.setattr(br, "_get_redis_client", lambda: _FakeSyncRedis())
+
+    process_bot_responses()
+    assert sync_published, "expected the worker to publish"
+
+    saved_msg = (
+        db.query(Message)
+        .filter(Message.match_id == match_id, Message.sender_id == bot_id)
+        .one()
+    )
+
+    # Drive the real (unpatched, thanks to @real_pubsub) ChatPubSub.publish
+    # with the same {"kind": "message", "event": ...} shape app/api/chat.py's
+    # REST send path uses for this same row, and capture its raw output.
+    async_published: dict = {}
+
+    class _FakeAsyncRedis:
+        async def publish(self, channel, data):
+            async_published["channel"] = channel
+            async_published["data"] = data
+
+    pubsub = ChatPubSub()
+    # publish() opens with _reset_if_loop_changed(), which on a brand-new
+    # instance (self._loop is still None) always wipes cached connections —
+    # including one assigned before the first call — because it can't yet
+    # tell "never bound" apart from "bound to a stale loop". Priming _loop to
+    # the loop this test is already running on makes that a no-op, so the
+    # fake client actually survives to be used instead of a real aioredis one.
+    pubsub._loop = asyncio.get_running_loop()
+    pubsub._publisher = _FakeAsyncRedis()  # bypass real aioredis.from_url
+    ok = await pubsub.publish(
+        match_id, {"kind": "message", "event": _msg_event("new_message", saved_msg)}
+    )
+    assert ok is True
+
+    assert sync_published["channel"] == async_published["channel"] == channel_for(match_id)
+
+    sync_envelope = json.loads(sync_published["data"])
+    async_envelope = json.loads(async_published["data"])
+
+    assert set(sync_envelope) == set(async_envelope) == {"origin", "payload"}
+    assert sync_envelope["payload"] == async_envelope["payload"]
+
+
 def test_bot_reply_publish_fails_open_on_redis_error(patched_session, db, monkeypatch):
     """A Redis outage must not stop the reply from being saved."""
     from app.tasks import bot_response as br

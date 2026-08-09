@@ -638,9 +638,8 @@ def process_bot_responses() -> None:
             # nothing until they leave and come back, and one with the app
             # closed is never told at all. See docs/GAPS-ROUND-2.md #45.
             for info in saved_replies:
-                pass  # TEMP: disabled to verify the new tests catch it
-                # _publish_new_message(info)
-                # enqueue(notify_new_message, info["match_id"], info["real_id"], info["bot_id"])
+                _publish_new_message(info)
+                enqueue(notify_new_message, info["match_id"], info["real_id"], info["bot_id"])
 
         logger.info("bot_response: saved %d/%d responses", saved, len(pending))
 
