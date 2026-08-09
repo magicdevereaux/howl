@@ -108,7 +108,9 @@ export default function HowlApp() {
   const [messagesError, setMessagesError] = useState('');
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [messageInput, setMessageInput] = useState('');
+  // No `messageInput` here any more. It was the single worst piece of state in
+  // this component: text on the root meant every keystroke re-rendered the
+  // entire tree (GAPS #33). MessageComposer owns it now.
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
   const [typingUser, setTypingUser] = useState(null); // display name of who's typing
@@ -555,7 +557,6 @@ export default function HowlApp() {
     setMatchPopup(null);
     setCurrentMatch(null);
     setMessages([]);
-    setMessageInput('');
     setMatchesError('');
     setMessagesError('');
     setSendError('');
@@ -646,19 +647,23 @@ export default function HowlApp() {
     }
   };
 
-  const handleDeleteMessage = async (messageId) => {
-    if (!currentMatch) return;
+  // useCallback because MessageList is memoized and takes this as a prop: a new
+  // function identity each render would defeat the memo entirely.
+  const handleDeleteMessage = useCallback(async (messageId) => {
+    if (!currentMatchId) return;
     try {
       const res = await apiFetch(
-        `/api/matches/${currentMatch.id}/messages/${messageId}`,
+        `/api/matches/${currentMatchId}/messages/${messageId}`,
         { method: 'DELETE', credentials: 'include' },
       );
       if (res.ok) {
         const updated = await res.json();
         setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       }
-    } catch { /* ignore */ }
-  };
+    } catch (err) {
+      console.error('Failed to delete message', err);
+    }
+  }, [currentMatchId]);
 
   const loadMoreMessages = async () => {
     if (!currentMatch || loadingMore || !hasMoreMessages || messages.length === 0) return;
@@ -678,14 +683,20 @@ export default function HowlApp() {
     finally { setLoadingMore(false); }
   };
 
-  const sendMessage = async () => {
-    const content = messageInput.trim();
-    if (!content || !currentMatch || sending) return;
+  /**
+   * Send a message. Returns whether it was accepted.
+   *
+   * Takes the text as an argument rather than reading it from state: the text
+   * belongs to MessageComposer now, which is what stopped every keystroke from
+   * re-rendering the app (GAPS #33). The boolean is how the composer knows
+   * whether to clear the field — it keeps what you typed on any failure.
+   */
+  const sendMessage = useCallback(async (content) => {
+    if (!content || !currentMatchId || sending) return false;
     setSending(true);
     setSendError('');
-    setMessageInput('');
     try {
-      const res = await apiFetch(`/api/matches/${currentMatch.id}/messages`, {
+      const res = await apiFetch(`/api/matches/${currentMatchId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
 
@@ -698,31 +709,32 @@ export default function HowlApp() {
           byId.set(msg.id, msg);
           return Array.from(byId.values()).sort((a, b) => a.id - b.id);
         });
-      } else {
-        // Put the text back either way — losing what someone typed is worse
-        // than any error message. But stay quiet about *why* when the global
-        // verification notice is already saying it: "Message failed to send —
-        // please try again" next to "verify your email" reads as two unrelated
-        // faults, and "try again" is advice that cannot work.
-        setMessageInput(content);
-        if (!isVerificationBlocked(res)) {
-          setSendError("Message failed to send — please try again.");
-        }
+        return true;
       }
+      // Stay quiet about *why* when the global verification notice is already
+      // saying it: "Message failed to send — please try again" next to "verify
+      // your email" reads as two unrelated faults, and "try again" is advice
+      // that cannot work.
+      if (!isVerificationBlocked(res)) {
+        setSendError("Message failed to send — please try again.");
+      }
+      return false;
     } catch {
-      setMessageInput(content);
       setSendError('Network error — message not sent.');
+      return false;
     } finally {
       setSending(false);
     }
-  };
+  }, [currentMatchId, sending]);
 
-  const sendTypingEvent = () => {
+  // Stable identity so the memoized composer is not re-rendered by a new
+  // callback on every parent render.
+  const sendTypingEvent = useCallback(() => {
     const ws = chatWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'typing' }));
     }
-  };
+  }, []);
 
   /**
    * Bind the chat state to a match and load its history.
@@ -852,10 +864,11 @@ export default function HowlApp() {
     });
   };
 
-  const handleOpenReport = (userId, name, messageId = undefined) => {
+  // Also a memoized MessageList prop — see handleDeleteMessage.
+  const handleOpenReport = useCallback((userId, name, messageId = undefined) => {
     setReportError('');
     setReportModal({ userId, name, messageId });
-  };
+  }, []);
 
   const handleSubmitReport = async (reason, notes) => {
     setReportSubmitting(true);
@@ -1145,8 +1158,6 @@ export default function HowlApp() {
             messages,
             messagesLoading,
             messagesError,
-            messageInput,
-            setMessageInput,
             sending,
             sendError,
             sendMessage,
