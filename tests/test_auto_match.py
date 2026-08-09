@@ -13,6 +13,7 @@ from app.tasks.auto_match import auto_match_demo_user
 # ---------------------------------------------------------------------------
 
 def _make_user(db, *, email: str, avatar_status: AvatarStatus = AvatarStatus.ready, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),

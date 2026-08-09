@@ -68,6 +68,7 @@ def _inside_grace() -> datetime:
 
 
 def _make_user(db, *, email: str, verified: bool = False, created_at=None, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),

@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, func
+from sqlalchemy import ForeignKey, Integer, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class Block(Base):
@@ -20,7 +21,7 @@ class Block(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),

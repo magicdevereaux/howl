@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class Message(Base):
@@ -29,13 +30,13 @@ class Message(Base):
     )
     content: Mapped[str] = mapped_column(String(2000), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
-    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<Message id={self.id} match={self.match_id} sender={self.sender_id}>"

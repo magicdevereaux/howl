@@ -1,10 +1,11 @@
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, UniqueConstraint, func
+from sqlalchemy import Enum, ForeignKey, Integer, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class SwipeDirection(str, enum.Enum):
@@ -32,7 +33,7 @@ class Swipe(Base):
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),

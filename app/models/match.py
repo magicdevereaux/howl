@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Integer,
     UniqueConstraint,
@@ -11,6 +10,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class Match(Base):
@@ -33,7 +33,7 @@ class Match(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     matched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),

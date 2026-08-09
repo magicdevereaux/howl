@@ -24,6 +24,7 @@ def _make_user(db, *, email: str, is_premium: bool = False, bio: str = "A wolf w
         email=email,
         password_hash=hash_password("testpass"),
         avatar_status=AvatarStatus.ready,
+        animal="wolf",
         bio=bio,
         is_premium=is_premium,
     )

@@ -28,6 +28,7 @@ def _record_push(recorder: list, result: PushSendResult | None = None):
 
 
 def _make_user(db, *, email: str, email_notifications: bool = True, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),
@@ -347,6 +348,7 @@ def test_send_message_queues_notification(client, db, auth_headers, test_user, m
         email="other_notify@howl.app",
         password_hash=hash_password("pass"),
         avatar_status=AvatarStatus.ready,
+        animal="wolf",
     )
     db.add(other)
     db.commit()

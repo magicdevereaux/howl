@@ -5,7 +5,6 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
-    DateTime,
     Enum,
     Integer,
     String,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import UtcDateTime
 
 
 class AvatarStatus(str, enum.Enum):
@@ -34,6 +34,29 @@ class User(Base):
         CheckConstraint(
             "age IS NULL OR (age >= 18 AND age <= 120)",
             name="ck_users_age_range",
+        ),
+        # avatar_status='ready' is the app's word for "this profile is renderable
+        # and belongs in the discover queue" (app/api/users.py filters on exactly
+        # this), and the spirit animal is the product. A ready row with no animal
+        # is a swipe card with nothing on it, shown to everyone, forever — the
+        # clients fall back to a generic emoji rather than crashing, so nothing
+        # would ever surface the mistake.
+        #
+        # Deliberately about `animal` and NOT `avatar_url`. Two legitimate states
+        # have ready + avatar_url IS NULL, so constraining the URL would be
+        # simply false:
+        #   1. the 1000 seeded bots (scripts/seed_demo_users.py) never get a
+        #      DALL-E image and render from `animal` alone;
+        #   2. generate_avatar treats image generation as best-effort — a failed
+        #      or unconfigured DALL-E call yields avatar_url=None and the profile
+        #      still goes ready with its emoji fallback.
+        # See GAPS #23, which deferred this constraint pending a transactional
+        # ready-transition; app/tasks/avatar.py flips status in the same commit
+        # that writes animal, so the invariant already holds at every commit
+        # boundary and this makes it the database's job.
+        CheckConstraint(
+            "avatar_status <> 'ready' OR animal IS NOT NULL",
+            name="ck_users_ready_avatar_has_animal",
         ),
     )
 
@@ -60,20 +83,20 @@ class User(Base):
         server_default=AvatarStatus.pending.value,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
     avatar_status_updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
     email_notifications: Mapped[bool] = mapped_column(
@@ -90,7 +113,7 @@ class User(Base):
     )
     email_verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     email_verification_token_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UtcDateTime, nullable=True
     )
     is_bot: Mapped[bool] = mapped_column(
         Boolean,
@@ -119,7 +142,7 @@ class User(Base):
         server_default="0",
     )
     regenerations_reset_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
     daily_swipes: Mapped[int] = mapped_column(
@@ -129,7 +152,7 @@ class User(Base):
         server_default="0",
     )
     swipes_reset_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UtcDateTime,
         nullable=True,
     )
 

@@ -20,6 +20,7 @@ from app.security import create_access_token, hash_password
 # ---------------------------------------------------------------------------
 
 def _make_user(db, *, email: str, **kwargs) -> User:
+    kwargs.setdefault("animal", "wolf")
     user = User(
         email=email,
         password_hash=hash_password("testpass1"),
