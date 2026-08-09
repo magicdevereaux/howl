@@ -15,9 +15,10 @@ import {
 } from 'react-native';
 
 import { api } from '../../../src/api/client';
-import { useMatchWebSocket, WsMessage } from '../../../src/hooks/useMatchWebSocket';
+import { useMatchWebSocket, WsEvent, WsMessage, WsStatus } from '../../../src/hooks/useMatchWebSocket';
 import { colors as C } from '../../../src/theme';
 import { animalEmoji, capitalise } from '../../../src/utils/avatar';
+import { applyReadReceipt, isReconnectEdge, mergeMessages } from '../../../src/utils/chatMessages';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -57,11 +58,20 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [typingUser, setTypingUser] = useState<string | null>(null);
+  // Set once the match has been unmatched/blocked away from under us (GAPS-
+  // ROUND-2 #60): the socket is gone for good, so stop offering to send.
+  const [matchClosed, setMatchClosed] = useState(false);
 
   const typingHideRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendTypingRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef         = useRef<TextInput>(null);
-  const seenIdsRef       = useRef(new Set<number>()); // dedup between REST + WS
+  // Tracks the WS status across renders so the reconnect-refetch effect below
+  // can see the *previous* value, not just the current one.
+  const prevWsStatusRef  = useRef<WsStatus>('connecting');
+  // Guards against double-fetching on mount: the initial-load effect already
+  // calls loadMessages() once; without this the first connecting→open
+  // transition would trigger a second, redundant fetch.
+  const initialLoadDoneRef = useRef(false);
 
   // ── Block / report menu ───────────────────────────────────────────────────
   const [menuOpen,       setMenuOpen]       = useState(false);
@@ -112,17 +122,11 @@ export default function ChatScreen() {
     const res = await api<PageResponse>(path);
     if (!res.ok) return;
 
-    const fresh = res.data.messages.filter((m) => {
-      if (seenIdsRef.current.has(m.id)) return false;
-      seenIdsRef.current.add(m.id);
-      return true;
-    });
-
-    setMessages((prev) =>
-      beforeId
-        ? [...fresh, ...prev]   // prepend older messages
-        : fresh,                // initial load
-    );
+    // Merge by id rather than replace. This matters for more than the initial
+    // load: a refetch on WS reconnect (below) calls this with no `beforeId`
+    // too, and if every message it returns is already on screen, a naive
+    // `setMessages(fresh)` would blank the conversation (GAPS-ROUND-2 #47).
+    setMessages((prev) => mergeMessages(prev, res.data.messages));
     setHasMore(res.data.has_more);
   }, [mid]);
 
@@ -130,6 +134,7 @@ export default function ChatScreen() {
     (async () => {
       await loadMessages();
       setLoadingInitial(false);
+      initialLoadDoneRef.current = true;
     })();
   }, [loadMessages]);
 
@@ -142,30 +147,55 @@ export default function ChatScreen() {
 
   // ── WebSocket events ──────────────────────────────────────────────────────
 
-  const handleWsEvent = useCallback((event: Parameters<typeof useMatchWebSocket>[1] extends (e: infer E) => void ? E : never) => {
+  const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === 'new_message' || event.type === 'message_deleted') {
-      const msg = event.message;
-      if (seenIdsRef.current.has(msg.id)) {
-        // Message already known — update it (e.g. deletion or read receipt)
-        setMessages((prev) => prev.map((m) => m.id === msg.id ? msg : m));
-      } else {
-        seenIdsRef.current.add(msg.id);
-        setMessages((prev) => [...prev, msg]);
-      }
+      // mergeMessages dedups and overwrites by id, so this is correct whether
+      // the message is new (a genuine arrival) or already known (e.g. a
+      // deletion, or a read-receipt patch riding the same shape).
+      setMessages((prev) => mergeMessages(prev, [event.message]));
     } else if (event.type === 'typing') {
       setTypingUser(event.user_name ?? null);
       if (typingHideRef.current) clearTimeout(typingHideRef.current);
       typingHideRef.current = setTimeout(() => setTypingUser(null), 3000);
+    } else if (event.type === 'messages_read') {
+      // Not yet sent by the server (GAPS-ROUND-2 #49) — harmless no-op until
+      // it is. up_to_message_id is the field name assumed for the contract;
+      // an absent/non-numeric value is ignored rather than throwing.
+      const upTo = event.up_to_message_id;
+      if (typeof upTo === 'number') {
+        setMessages((prev) => applyReadReceipt(prev, upTo, event.read_at));
+      }
+    } else if (event.type === 'match_closed') {
+      // Sent by the server mid-session as of GAPS-ROUND-2 #60 (a backend
+      // agent is wiring unmatch/block to close live sockets), and always
+      // synthesised by the hook itself on a 4003 close either way — see
+      // useMatchWebSocket.ts. Stop offering to send into a match that is gone.
+      setMatchClosed(true);
     }
+    // Anything else (including event kinds the server doesn't send yet) is
+    // ignored: no default case, so unknown types are a silent no-op.
   }, []);
 
-  const { sendTyping } = useMatchWebSocket(mid, handleWsEvent);
+  const { sendTyping, status: wsStatus } = useMatchWebSocket(mid, handleWsEvent);
+
+  // Refetch on reconnect (GAPS-ROUND-2 #47): pub/sub delivery is fire-and-
+  // forget, so a socket that just came back up may have missed events —
+  // including the app's own background→foreground cycle, which closes and
+  // reopens the socket on every switch. mergeMessages() in loadMessages()
+  // guarantees this never wipes what's already on screen.
+  useEffect(() => {
+    const prev = prevWsStatusRef.current;
+    prevWsStatusRef.current = wsStatus;
+    if (initialLoadDoneRef.current && isReconnectEdge(prev, wsStatus)) {
+      void loadMessages();
+    }
+  }, [wsStatus, loadMessages]);
 
   // ── Sending ───────────────────────────────────────────────────────────────
 
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || sending || matchClosed) return;
     setSending(true);
     setSendError(null);
     setInput('');
@@ -182,13 +212,9 @@ export default function ChatScreen() {
       return;
     }
 
-    // WS echo will arrive and add it via seenIds dedup; also add directly
-    // in case WS is momentarily disconnected
-    const msg = res.data;
-    if (!seenIdsRef.current.has(msg.id)) {
-      seenIdsRef.current.add(msg.id);
-      setMessages((prev) => [...prev, msg]);
-    }
+    // WS echo will arrive and merge in harmlessly by id; add it directly too
+    // in case the WS is momentarily disconnected.
+    setMessages((prev) => mergeMessages(prev, [res.data]));
   };
 
   const handleInputChange = (text: string) => {
@@ -276,9 +302,18 @@ export default function ChatScreen() {
         )}
 
         {/* Send error */}
-        {sendError && (
+        {sendError && !matchClosed && (
           <View style={styles.sendErrorRow}>
             <Text style={styles.sendErrorText}>⚠️ {sendError}</Text>
+          </View>
+        )}
+
+        {/* Match closed — unmatched or blocked away mid-session */}
+        {matchClosed && (
+          <View style={styles.matchClosedRow}>
+            <Text style={styles.matchClosedText}>
+              This conversation is no longer available.
+            </Text>
           </View>
         )}
 
@@ -289,21 +324,22 @@ export default function ChatScreen() {
             style={styles.input}
             value={input}
             onChangeText={handleInputChange}
-            placeholder={`Message ${name || 'them'}…`}
+            placeholder={matchClosed ? 'This conversation has ended' : `Message ${name || 'them'}…`}
             placeholderTextColor={C.textDisabled}
             multiline
             maxLength={2000}
+            editable={!matchClosed}
             returnKeyType="send"
             blurOnSubmit={false}
             onSubmitEditing={handleSend}
           />
           <Pressable
-            style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
+            style={[styles.sendBtn, (!input.trim() || sending || matchClosed) && styles.sendBtnDisabled]}
             onPress={handleSend}
-            disabled={!input.trim() || sending}
+            disabled={!input.trim() || sending || matchClosed}
             accessibilityRole="button"
             accessibilityLabel={sending ? 'Sending message' : 'Send message'}
-            accessibilityState={{ disabled: !input.trim() || sending, busy: sending }}
+            accessibilityState={{ disabled: !input.trim() || sending || matchClosed, busy: sending }}
           >
             {sending
               ? <ActivityIndicator color={C.text} size="small" />
@@ -480,6 +516,14 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   sendErrorText: { color: C.errorLight, fontSize: 13, textAlign: 'center' },
+
+  matchClosedRow: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+    padding: 10,
+  },
+  matchClosedText: { color: C.textSec, fontSize: 13, textAlign: 'center', fontStyle: 'italic' },
 
   inputBar: {
     flexDirection: 'row',

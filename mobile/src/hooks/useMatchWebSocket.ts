@@ -27,7 +27,20 @@ export type WsEvent =
   | { type: 'new_message';    message: WsMessage }
   | { type: 'message_deleted'; message: WsMessage }
   | { type: 'typing';         user_name: string }
-  | { type: 'error';          error: { code: string; message: string; grace_expired_at?: string } };
+  | { type: 'error';          error: { code: string; message: string; grace_expired_at?: string } }
+  // Not yet sent by the server as of GAPS-ROUND-2 #49 — a backend agent is
+  // adding it. Field names are the most likely shape given the docs ("match
+  // id, the reader's user id, and a high-water-mark message id"); reconcile
+  // at merge time if the backend lands on something else. Harmless if it
+  // never arrives: onmessage only forwards recognised-looking frames and this
+  // handler is additive.
+  | { type: 'messages_read';  match_id?: number; user_id?: number; up_to_message_id?: number; read_at?: string }
+  // Not yet sent mid-session by the server as of GAPS-ROUND-2 #60 (today it
+  // only ever arrives via the 4003 close at connect time). The hook also
+  // synthesises this event itself on a mid-session 4003 close, so the screen
+  // reacts the same way regardless of whether the server sends a companion
+  // frame before closing.
+  | { type: 'match_closed';   match_id?: number; reason?: string };
 
 /** Connection state, so the UI can tell the user why messages aren't arriving. */
 export type WsStatus =
@@ -158,6 +171,13 @@ export function useMatchWebSocket(
 
       if (code === CLOSE_FORBIDDEN) {
         // Blocked, unmatched, or never a participant — retrying cannot help.
+        // Synthesise a match_closed event through the same channel a server
+        // frame would use, so the screen reacts identically whether this
+        // fires at connect time (the only case today) or mid-session (GAPS-
+        // ROUND-2 #60, once a backend agent wires unmatch/block to close
+        // live sockets) — with or without a companion JSON frame from the
+        // server.
+        onEventRef.current({ type: 'match_closed', reason: 'forbidden' });
         setStatus('closed');
         return;
       }
@@ -216,10 +236,17 @@ export function useMatchWebSocket(
           void connect();
         }
       } else if (state === 'background') {
-        // Close proactively to save battery; we'll reconnect on foreground
+        // Close proactively to save battery; we'll reconnect on foreground.
+        // Reflect that in `status` (rather than leaving a stale 'open'
+        // behind) so the eventual reopen is a real connecting/reconnecting →
+        // open edge the screen can detect and refetch on — otherwise this
+        // deliberate close/reopen cycle is exactly the gap GAPS-ROUND-2 #47
+        // describes: it manufactures a drop with no visible transition to
+        // hang a refetch off of.
         clearReconnect();
         try { wsRef.current?.close(); } catch { /* already closing */ }
         wsRef.current = null;
+        setStatus('reconnecting');
       }
     });
 
