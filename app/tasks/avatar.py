@@ -3,6 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 import anthropic
+from celery.exceptions import MaxRetriesExceededError, Retry
 from pydantic import BaseModel, Field, field_validator
 
 from app.celery_app import celery_app
@@ -10,6 +11,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models.user import AvatarStatus, User
 from app.services import task_lock
+from app.services.avatar_status import set_avatar_status
 from app.services.image_generation import generate_avatar_image
 
 logger = logging.getLogger(__name__)
@@ -69,12 +71,42 @@ class _ClaudeAvatarPayload(BaseModel):
         return normalised
 
 
+def _refund_regen_slot(user: User) -> None:
+    """Give back the monthly regeneration slot this attempt consumed.
+
+    GAPS-ROUND-2 #40. Both paths that can queue a generation --
+    ``POST /api/avatar/regenerate`` and a bio edit on ``PATCH /api/profile/me``
+    -- charge ``avatar_regenerations_this_month`` at *enqueue* time, and
+    ``_MONTHLY_REGEN_LIMIT`` is 1. Without a refund, a generation that
+    permanently fails leaves a free user 429'd for thirty days over an avatar
+    they never received, and the 429 copy tells them to upgrade to premium.
+    The users most likely to hit that are new ones whose first impression of
+    the product's differentiating feature is a broken image and a paywall.
+
+    Floored at 0 rather than asserted, because the counter is also reset by the
+    30-day window: a failure that lands after the window rolled over must not
+    push it negative and hand out a free extra slot next month.
+    """
+    charged = user.avatar_regenerations_this_month or 0
+    user.avatar_regenerations_this_month = max(0, charged - 1)
+
+
 def _mark_failed(db: object, user: User | None) -> None:
-    """Set avatar_status to failed and commit. Safe to call with user=None."""
+    """Mark the avatar failed, refund the regeneration slot, and commit.
+
+    Safe to call with user=None. This is the single choke point for every
+    *permanent* failure -- parse/validation errors, generic exceptions, and
+    Claude retry exhaustion -- which is why the refund belongs here and not at
+    the individual call sites: one of them would eventually be forgotten.
+
+    The refund is written in the same transaction as the status, so the user is
+    never observable as "failed but still charged".
+    """
     if user is None:
         return
     try:
-        user.avatar_status = AvatarStatus.failed
+        set_avatar_status(user, AvatarStatus.failed)
+        _refund_regen_slot(user)
         user.updated_at = datetime.now(UTC)
         db.commit()
     except Exception:
@@ -99,7 +131,9 @@ def generate_avatar(self, user_id: int) -> None:
     apply — an already-ready check for redelivery after a successful run, and a
     Redis single-flight lock for concurrent or in-flight duplicates. The lock
     fails open, so a Redis outage degrades to the old behaviour rather than
-    blocking avatar generation entirely.
+    blocking avatar generation entirely. Losing the lock *defers* the task
+    rather than completing it (#42): a completed task is an acked message, and
+    acking work nobody is doing loses it silently.
     """
     db = SessionLocal()
     user: User | None = None
@@ -125,10 +159,54 @@ def generate_avatar(self, user_id: int) -> None:
 
         lock_held = task_lock.acquire(lock_key)
         if not lock_held:
+            # GAPS-ROUND-2 #42: defer, never drop.
+            #
+            # A bare `return` here completes the task, so Celery acks the
+            # message and the work is gone. That turned #7's double-payment
+            # guard into a silent-loss bug: the lock TTL is 600s and release
+            # only happens in `finally`, which does not run on SIGKILL, so a
+            # worker killed mid-generation leaves its own key behind. With
+            # task_acks_late the message is redelivered immediately, the row is
+            # still `pending` so the already-ready guard above does not fire,
+            # `acquire` finds the dead worker's key, and the redelivery acks
+            # itself into the void. Nothing ever retries it — which is exactly
+            # the failure ADR-001 says Celery is here to prevent.
+            #
+            # Retrying costs nothing in the case this lock exists for. A
+            # genuine concurrent duplicate means the winner is running now, and
+            # it will have written `ready` long before the retry lands, so the
+            # guard above short-circuits the retry for free.
+            #
+            # Rejected alternative: storing `self.request.id` as the lock value
+            # so a redelivery can re-acquire its own lock. Redelivery preserves
+            # the task id, so it would distinguish "my own crash" from "someone
+            # else is working" and skip this wait entirely — but redelivery
+            # does not imply the first worker is dead. A broker visibility
+            # timeout redelivers a task whose original is still running, and
+            # owner-based re-acquisition would let that duplicate straight
+            # through to both paid APIs, reopening #7. The wait is the cheaper
+            # side of that trade.
             logger.info(
-                "generate_avatar: user %d already being generated elsewhere — skipping", user_id
+                "generate_avatar: user %d is locked by another attempt — retrying", user_id
             )
-            return
+            raise self.retry(countdown=task_lock.DEFAULT_TTL_SECONDS // 4)
+
+        # ── Heartbeat ────────────────────────────────────────────────────────
+        # Re-stamp `pending` now that this attempt is genuinely starting.
+        #
+        # Without this the timestamp records when the task was *enqueued*, and
+        # the two-minute staleness rule then measures broker latency plus work
+        # rather than work. A generation that is legitimately slower than two
+        # minutes -- three `anthropic.APIError` retries are 60s apart by
+        # construction, so that path alone is 3+ minutes -- looks dead while it
+        # is still running, and `frontend/src/App.jsx` stops polling and offers
+        # "Try Again". Since each retry re-enters the task body, each one
+        # refreshes the heartbeat, so a retrying generation never looks stale.
+        #
+        # Safe to commit here: the CHECK-constrained ready transition below has
+        # to be one statement batch, and this is before it, not inside it.
+        set_avatar_status(user, AvatarStatus.pending)
+        db.commit()
 
         # ── Claude call ──────────────────────────────────────────────────────
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -192,13 +270,36 @@ def generate_avatar(self, user_id: int) -> None:
         user.personality_traits = personality_traits
         user.avatar_description = avatar_description
         user.avatar_url = avatar_url
-        user.avatar_status = AvatarStatus.ready
+        set_avatar_status(user, AvatarStatus.ready)
         user.updated_at = datetime.now(UTC)
         db.commit()
         logger.info(
             "generate_avatar: user %d → complete (animal=%r, image=%s)",
             user_id, animal, "yes" if avatar_url else "no (emoji fallback)",
         )
+
+    except Retry:
+        # `self.retry()` above signals a deferral by raising, and Retry is an
+        # ordinary Exception — without this it would be swallowed by the generic
+        # handler below and turned into a permanent failure. Exceptions raised
+        # *inside* an except clause (the anthropic.APIError branch) propagate out
+        # of the try statement rather than into a sibling handler, so only the
+        # lock deferral, which is raised from the try body, needs this.
+        raise
+
+    except MaxRetriesExceededError:
+        # The lock outlived our retry budget: 3 retries at TTL//4 is 450s
+        # against a 600s TTL, so the only way here is a lock nobody will ever
+        # release. `failed` is the honest state — it is one the app already
+        # recovers from, the clients render it with a working "Try Again", and
+        # _mark_failed refunds the regeneration slot (#40) so pressing it costs
+        # the user nothing. Staying `pending` forever is the outcome #42 exists
+        # to remove.
+        logger.error(
+            "generate_avatar: user %d gave up waiting for the generation lock", user_id
+        )
+        db.rollback()
+        _mark_failed(db, user)
 
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         # Bad response from Claude — don't retry, just fail

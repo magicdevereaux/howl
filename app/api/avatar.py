@@ -7,6 +7,7 @@ from app.db import get_db
 from app.dependencies import get_current_user, require_verified_email
 from app.models.user import AvatarStatus, User
 from app.schemas.avatar import AvatarStatusOut
+from app.services.avatar_status import set_avatar_status
 from app.services.image_generation import delete_avatar
 from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
@@ -21,9 +22,57 @@ _REGEN_WINDOW_SECONDS = 30 * 24 * 3600  # 30-day rolling window
 #: legitimate user reaches it.
 _PREMIUM_REGEN_LIMIT = 100
 
+#: How old a `pending` avatar has to be before we treat the attempt as dead.
+#: Deliberately the same threshold both clients use to decide a generation is
+#: stuck and to offer "Try Again" (`STALE_PENDING_MS` in frontend/src/App.jsx).
+#: If the UI is willing to tell the user their generation failed, the server has
+#: to agree, or pressing the button the UI offered returns 429.
+_STALE_PENDING_SECONDS = 2 * 60
+
 
 def _regen_limit_for(user: User) -> int:
     return _PREMIUM_REGEN_LIMIT if user.is_premium else _MONTHLY_REGEN_LIMIT
+
+
+def refund_stale_pending_attempt(user: User, db: Session) -> bool:
+    """Refund one slot if the user's last generation is a dead `pending`.
+
+    GAPS-ROUND-2 #40. `_mark_failed` refunds every failure the *task* can
+    observe, but the documented production failure is that the task never ran
+    at all: the Celery worker and Beat are not started by `scripts/startup.sh`
+    and have to be separate Railway services (CLAUDE.md gotcha #5). Nothing
+    then drains the queue, so the row stays `pending`, no code path ever marks
+    it `failed`, and the slot charged at enqueue is never given back.
+
+    A `pending` older than `_STALE_PENDING_SECONDS` is the same condition the
+    clients already use to declare the generation stuck. It is evidence the
+    previous attempt produced nothing, so it must not be charged for.
+
+    Deliberately bounded rather than free: the refund lets the user re-enqueue,
+    and re-enqueuing stamps `avatar_status_updated_at`, so the row is not stale
+    again for another `_STALE_PENDING_SECONDS`. A user facing a dead worker
+    therefore gets one retry every two minutes, not unlimited paid retries.
+
+    Returns True if a slot was refunded.
+    """
+    if user.avatar_status != AvatarStatus.pending:
+        return False
+    if user.avatar_regenerations_this_month <= 0:
+        return False
+
+    stamped_at = user.avatar_status_updated_at
+    if stamped_at is not None:
+        # SQLite (all tests) returns these naive; see CLAUDE.md on timestamps.
+        if stamped_at.tzinfo is None:
+            stamped_at = stamped_at.replace(tzinfo=UTC)
+        if (datetime.now(UTC) - stamped_at).total_seconds() < _STALE_PENDING_SECONDS:
+            return False
+    # stamped_at is None => charged for an attempt that left no trace of when it
+    # started. There is nothing to wait for, so treat it as stale.
+
+    user.avatar_regenerations_this_month -= 1
+    db.flush()
+    return True
 
 
 def _enforce_regen_limit(user: User, db: Session) -> None:
@@ -49,6 +98,11 @@ def _enforce_regen_limit(user: User, db: Session) -> None:
         user.regenerations_reset_at = now
         db.flush()
         return  # counter just reset — this regeneration is allowed
+
+    if user.avatar_regenerations_this_month >= limit:
+        # About to block. Before doing so, give back a slot charged for a
+        # generation that demonstrably never produced anything (#40).
+        refund_stale_pending_attempt(user, db)
 
     if user.avatar_regenerations_this_month >= limit:
         resets_at = reset_at + timedelta(seconds=_REGEN_WINDOW_SECONDS)
@@ -114,8 +168,7 @@ def regenerate_avatar(
     current_user.personality_traits = None
     current_user.avatar_description = None
     current_user.avatar_url = None
-    current_user.avatar_status = AvatarStatus.pending
-    current_user.avatar_status_updated_at = datetime.now(UTC)
+    set_avatar_status(current_user, AvatarStatus.pending)
     current_user.profile_needs_regen = False  # avatar now reflects current profile
 
     current_user.avatar_regenerations_this_month += 1

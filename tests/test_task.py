@@ -31,10 +31,19 @@ def _claude_response(payload: dict) -> MagicMock:
     return response
 
 
-def _mock_user(bio: str | None = "A curious fox who loves to explore dense forests.") -> MagicMock:
+def _mock_user(
+    bio: str | None = "A curious fox who loves to explore dense forests.",
+    *,
+    regenerations: int = 1,
+) -> MagicMock:
     user = MagicMock(spec=User)
     user.id = 1
     user.bio = bio
+    # Real integer, not a MagicMock: _mark_failed now does arithmetic on this to
+    # refund the monthly regeneration slot (GAPS-ROUND-2 #40), and a MagicMock
+    # would make `max()` raise rather than assert anything useful. 1 is the
+    # realistic value -- every path that queues this task charges a slot first.
+    user.avatar_regenerations_this_month = regenerations
     return user
 
 
@@ -263,7 +272,7 @@ def test_mark_failed_with_none_user():
 
 
 def test_mark_failed_sets_status():
-    user = MagicMock(spec=User)
+    user = _mock_user()
     db = MagicMock()
     _mark_failed(db, user)
     assert user.avatar_status == AvatarStatus.failed
@@ -272,8 +281,94 @@ def test_mark_failed_sets_status():
 
 def test_mark_failed_rolls_back_on_commit_error():
     """If the commit itself fails, _mark_failed swallows the error gracefully."""
-    user = MagicMock(spec=User)
+    user = _mock_user()
     db = MagicMock()
     db.commit.side_effect = Exception("DB is gone")
     _mark_failed(db, user)  # should not raise
     db.rollback.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regeneration-slot refund on terminal failure (GAPS-ROUND-2 #40)
+#
+# _MONTHLY_REGEN_LIMIT is 1 and the counter is charged at *enqueue* time, so a
+# failure that is not refunded costs a free user their only regeneration for
+# thirty days -- for an avatar they never received.
+# ---------------------------------------------------------------------------
+
+def test_mark_failed_refunds_the_regeneration_slot():
+    user = _mock_user(regenerations=1)
+    db = MagicMock()
+
+    _mark_failed(db, user)
+
+    assert user.avatar_regenerations_this_month == 0
+    assert user.avatar_status == AvatarStatus.failed
+
+
+def test_mark_failed_refund_is_floored_at_zero():
+    """A failure landing after the 30-day window reset must not go negative.
+
+    A negative counter would hand out a free extra regeneration next month.
+    """
+    user = _mock_user(regenerations=0)
+    db = MagicMock()
+
+    _mark_failed(db, user)
+
+    assert user.avatar_regenerations_this_month == 0
+
+
+def test_parse_failure_refunds_the_regeneration_slot():
+    """The end-to-end shape of the bug: Claude returns junk, user keeps their slot."""
+    user = _mock_user(regenerations=1)
+    db = _mock_db(user)
+
+    block = MagicMock()
+    block.type = "text"
+    block.text = "not json at all"
+    bad_response = MagicMock()
+    bad_response.content = [block]
+
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch("app.tasks.avatar.anthropic.Anthropic") as MockClient,
+    ):
+        MockClient.return_value.messages.create.return_value = bad_response
+        generate_avatar.apply(args=[1])
+
+    assert user.avatar_status == AvatarStatus.failed
+    assert user.avatar_regenerations_this_month == 0
+
+
+def test_generic_failure_refunds_the_regeneration_slot():
+    """Any unexpected exception is just as permanent as a parse error."""
+    user = _mock_user(regenerations=1)
+    db = _mock_db(user)
+
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch("app.tasks.avatar.anthropic.Anthropic") as MockClient,
+    ):
+        MockClient.return_value.messages.create.side_effect = RuntimeError("boom")
+        generate_avatar.apply(args=[1])
+
+    assert user.avatar_status == AvatarStatus.failed
+    assert user.avatar_regenerations_this_month == 0
+
+
+def test_successful_generation_does_not_refund():
+    """A slot spent on an avatar the user actually received stays spent."""
+    user = _mock_user(regenerations=1)
+    db = _mock_db(user)
+
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch("app.tasks.avatar.anthropic.Anthropic") as MockClient,
+        patch("app.tasks.avatar.generate_avatar_image", return_value="/avatars/x.png"),
+    ):
+        MockClient.return_value.messages.create.return_value = _claude_response(VALID_PAYLOAD)
+        generate_avatar.apply(args=[1])
+
+    assert user.avatar_status == AvatarStatus.ready
+    assert user.avatar_regenerations_this_month == 1
