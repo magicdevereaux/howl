@@ -20,9 +20,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "//": "EXPO_PUBLIC_API_URL/WEB_URL below are PLACEHOLDERS, not confirmed real hosts — see mobile/CLAUDE.md and docs/GAPS.md #35. They use the .invalid TLD (RFC 2606: reserved, guaranteed never to resolve) so src/api/client.ts and src/config.ts can refuse an unreplaced value outright instead of a build silently shipping a hostname nobody deployed. Replace both with the real Railway/Vercel staging hosts once they exist.",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://howl-staging.up.railway.app",
-        "EXPO_PUBLIC_WEB_URL": "https://howl-staging.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-RAILWAY-STAGING-HOST.invalid",
+        "EXPO_PUBLIC_WEB_URL": "https://REPLACE-WITH-VERCEL-STAGING-HOST.invalid"
       },
       "ios": {
         "resourceClass": "m-medium"
@@ -33,9 +34,10 @@
     },
     "production": {
       "autoIncrement": true,
+      "//": "See the `preview` profile's `//` comment above — same placeholder situation for the production hosts.",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://howl-production.up.railway.app",
-        "EXPO_PUBLIC_WEB_URL": "https://howl.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-RAILWAY-PRODUCTION-HOST.invalid",
+        "EXPO_PUBLIC_WEB_URL": "https://REPLACE-WITH-VERCEL-PRODUCTION-HOST.invalid"
       },
       "ios": {
         "resourceClass": "m-medium"

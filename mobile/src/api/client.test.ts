@@ -13,7 +13,10 @@
 
 import {
   api,
+  EMAIL_VERIFICATION_REQUIRED_CODE,
   isConnectivityError,
+  isEmailVerificationRequired,
+  setEmailVerificationRequiredHandler,
   STATUS_BAD_PAYLOAD,
   STATUS_OFFLINE,
   STATUS_TIMEOUT,
@@ -137,6 +140,81 @@ describe('timeouts', () => {
 
     const init = spy.mock.calls[0][1] as RequestInit;
     expect(init.signal).toBeDefined();
+  });
+});
+
+describe('email verification required (403)', () => {
+  // Only fires past the 72h post-registration grace window, so it can't be
+  // triggered by hand in a test — exercised here with a mocked response
+  // matching the documented contract:
+  //   HTTP 403, {"detail": {"code": "email_verification_required", "message": ..., "grace_expired_at": ...}}
+  afterEach(() => setEmailVerificationRequiredHandler(null));
+
+  it('surfaces a distinct, checkable code instead of a generic error string', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          detail: {
+            code: 'email_verification_required',
+            message: 'Please verify your email to keep using Howl.',
+            grace_expired_at: '2026-08-01T00:00:00Z',
+          },
+        },
+        403,
+      ),
+    );
+
+    const res = await api('/api/swipes', { method: 'POST' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.status).toBe(403);
+      expect(res.code).toBe(EMAIL_VERIFICATION_REQUIRED_CODE);
+      expect(res.error).toBe('Please verify your email to keep using Howl.');
+      expect(isEmailVerificationRequired(res)).toBe(true);
+    }
+  });
+
+  it('notifies the shared handler so the banner shows regardless of call site', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          detail: {
+            code: 'email_verification_required',
+            message: 'Please verify your email to keep using Howl.',
+            grace_expired_at: '2026-08-01T00:00:00Z',
+          },
+        },
+        403,
+      ),
+    );
+
+    const handler = jest.fn();
+    setEmailVerificationRequiredHandler(handler);
+
+    await api('/api/matches/1/messages', { method: 'POST' });
+
+    expect(handler).toHaveBeenCalledWith({
+      message: 'Please verify your email to keep using Howl.',
+      graceExpiredAt: '2026-08-01T00:00:00Z',
+    });
+  });
+
+  it('does not confuse an ordinary 403 (no structured code) for verification-required', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse({ detail: 'You are blocked from viewing this profile.' }, 403),
+    );
+
+    const handler = jest.fn();
+    setEmailVerificationRequiredHandler(handler);
+
+    const res = await api('/api/profile/999');
+
+    expect(handler).not.toHaveBeenCalled();
+    if (!res.ok) {
+      expect(res.code).toBeUndefined();
+      expect(isEmailVerificationRequired(res)).toBe(false);
+    }
   });
 });
 
