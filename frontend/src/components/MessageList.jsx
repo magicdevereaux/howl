@@ -94,7 +94,10 @@ function MessageList({ messages, otherName, otherId, onDelete, onReport }) {
                 <p style={{ margin: '4px 0 0', fontSize: '10px', opacity: 0.6, textAlign: 'right' }}>
                   {formatTime(msg.created_at)}
                   {msg.is_mine && (
-                    <span style={{ marginLeft: '5px', color: msg.read_at ? 'var(--accent-hover)' : 'var(--text-disabled)' }}>
+                    <span
+                      data-testid={`receipt-${msg.id}`}
+                      style={{ marginLeft: '5px', color: msg.read_at ? 'var(--accent-hover)' : 'var(--text-disabled)' }}
+                    >
                       {msg.read_at ? '✓✓' : '✓'}
                     </span>
                   )}

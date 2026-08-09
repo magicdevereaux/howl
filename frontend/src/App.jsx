@@ -117,6 +117,9 @@ export default function HowlApp() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
   const [typingUser, setTypingUser] = useState(null); // display name of who's typing
+  // Set when the match is unmatched or blocked away mid-session (GAPS-ROUND-2
+  // #60). Per conversation, so it is cleared alongside hasConnectedRef below.
+  const [matchClosed, setMatchClosed] = useState(false);
 
   const chatWsRef = useRef(null);       // holds the live WebSocket for sending
   const typingTimerRef = useRef(null);  // auto-clears the typing indicator
@@ -355,6 +358,7 @@ export default function HowlApp() {
     let reconnectTimer = null;
     let active = true; // false after cleanup so reconnect attempts stop
     hasConnectedRef.current = false; // per conversation, not per app session
+    setMatchClosed(false);
 
     const connect = () => {
       if (!active) return;
@@ -386,6 +390,36 @@ export default function HowlApp() {
             setTypingUser(user_name || 'Someone');
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             typingTimerRef.current = setTimeout(() => setTypingUser(null), 2500);
+          } else if (type === 'messages_read') {
+            // GAPS-ROUND-2 #49. A high-water mark, not a per-message event, so a
+            // dropped receipt is repaired by the next one rather than lost. The
+            // server marked every message in the match the reader did *not*
+            // send, so from here that means "our own messages up to this id".
+            //
+            // The frame also reaches the reader's own sockets, which is how a
+            // second tab clears its badge — but that copy must not be applied
+            // here, or the reader would see ✓✓ on messages the other party
+            // hasn't looked at.
+            const { reader_id: readerId, last_read_message_id: upTo, read_at: readAt } = data;
+            if (typeof upTo === 'number' && readerId !== user?.id) {
+              setMessages((prev) => {
+                let changed = false;
+                const next = prev.map((m) => {
+                  if (m.is_mine && m.id <= upTo && !m.read_at) {
+                    changed = true;
+                    return { ...m, read_at: readAt };
+                  }
+                  return m;
+                });
+                return changed ? next : prev;
+              });
+            }
+          } else if (type === 'match_closed') {
+            // The match was unmatched or blocked away from under us (#60). The
+            // server closes with 4003 right after this frame, and that close is
+            // already terminal, so all this has to do is stop the user typing
+            // into a conversation that no longer exists.
+            setMatchClosed(true);
           }
         } catch { /* ignore malformed frames */ }
       };
@@ -428,7 +462,12 @@ export default function HowlApp() {
       setTypingUser(null);
       if (ws) ws.close();
     };
-  }, [view, currentMatchId, loadMessages]);
+    // `user?.id` is read by the messages_read handler to tell our own echoed
+    // receipt from the other party's. It is stable for the life of a session,
+    // so listing it costs nothing — but leaving it out would mean a socket
+    // opened before the profile fetch resolved kept comparing against
+    // `undefined` and applied the reader's own receipt to their own messages.
+  }, [view, currentMatchId, loadMessages, user?.id]);
 
   // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser
   // history. `urlTokens` is stable (useState initialiser), so this runs once.
@@ -1113,7 +1152,7 @@ export default function HowlApp() {
     messages, messagesLoading, messagesError, loadMessages,
     sending, sendError, sendMessage, sendTypingEvent,
     hasMoreMessages, loadingMore, loadMoreMessages, handleDeleteMessage,
-    typingUser,
+    typingUser, matchClosed,
     handleUnmatch, handleBlock, handleBlockAndReport,
   };
 

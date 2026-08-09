@@ -26,7 +26,7 @@ export default function ChatView() {
     currentMatch, messages, messagesLoading, messagesError, loadMessages,
     sending, sendError, sendMessage, sendTypingEvent,
     hasMoreMessages, loadingMore, loadMoreMessages, handleDeleteMessage,
-    typingUser, handleUnmatch, handleBlock, handleBlockAndReport,
+    typingUser, matchClosed, handleUnmatch, handleBlock, handleBlockAndReport,
   } = useChat();
 
   const other = currentMatch.other_user;
@@ -203,13 +203,25 @@ export default function ChatView() {
         </div>
       )}
 
-      <MessageComposer
-        otherName={other.name}
-        sending={sending}
-        sendError={sendError}
-        onSend={sendMessage}
-        onTyping={sendTypingEvent}
-      />
+      {matchClosed ? (
+        /* The match was unmatched or blocked away from under us (GAPS-ROUND-2
+           #60). The socket is gone for good and the next send would 404, so
+           say what happened instead of offering an input that cannot work. */
+        <div style={{
+          padding: '16px', textAlign: 'center', color: 'var(--text-secondary)',
+          fontStyle: 'italic', borderTop: '1px solid var(--border)',
+        }}>
+          This conversation has ended.
+        </div>
+      ) : (
+        <MessageComposer
+          otherName={other.name}
+          sending={sending}
+          sendError={sendError}
+          onSend={sendMessage}
+          onTyping={sendTypingEvent}
+        />
+      )}
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

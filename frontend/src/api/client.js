@@ -26,18 +26,27 @@ export const EMAIL_VERIFICATION_REQUIRED = 'email_verification_required';
 export const WS_CLOSE_UNAUTHENTICATED = 4001;   // no/invalid credentials
 export const WS_CLOSE_NOT_YOUR_MATCH = 4003;    // authenticated, wrong match
 export const WS_CLOSE_VERIFICATION_REQUIRED = 4403;
+// The server caps sockets per (user, match) and evicts the oldest when a newer
+// one connects (GAPS-ROUND-2 #59). This tab lost its seat to another of our own
+// — a second tab, or a socket the browser never tore down. Reconnecting would
+// evict that newer socket and leave the two trading places forever.
+export const WS_CLOSE_TOO_MANY_SOCKETS = 4004;
 
 /**
  * Close codes that reconnecting cannot fix.
  *
- * All three are decisions about *this* identity and *this* match, so a retry
- * produces the same answer. Retrying 4403 in particular would hammer the
- * server for as long as the tab stays open.
+ * The first three are decisions about *this* identity and *this* match, so a
+ * retry produces the same answer. Retrying 4403 in particular would hammer the
+ * server for as long as the tab stays open. 4004 is different in kind — the
+ * refusal is about how many sockets we hold, not who we are — but retrying is
+ * just as futile, and worse: it would evict the newer socket that replaced us
+ * and start the two trading places indefinitely.
  */
 export const WS_TERMINAL_CLOSE_CODES = new Set([
   WS_CLOSE_UNAUTHENTICATED,
   WS_CLOSE_NOT_YOUR_MATCH,
   WS_CLOSE_VERIFICATION_REQUIRED,
+  WS_CLOSE_TOO_MANY_SOCKETS,
 ]);
 
 let onVerificationRequired = null;

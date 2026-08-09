@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { api } from '../../../src/api/client';
+import { useAuth } from '../../../src/auth/AuthContext';
 import { useMatchWebSocket, WsEvent, WsMessage, WsStatus } from '../../../src/hooks/useMatchWebSocket';
 import { colors as C } from '../../../src/theme';
 import { animalEmoji, capitalise } from '../../../src/utils/avatar';
@@ -46,6 +47,10 @@ export default function ChatScreen() {
   }>();
 
   const mid = Number(matchId);
+
+  // Needed to tell our own read receipt apart from the other party's — see the
+  // `messages_read` branch in handleWsEvent.
+  const { user } = useAuth();
 
   // ── State ─────────────────────────────────────────────────────────────────
 
@@ -158,11 +163,17 @@ export default function ChatScreen() {
       if (typingHideRef.current) clearTimeout(typingHideRef.current);
       typingHideRef.current = setTimeout(() => setTypingUser(null), 3000);
     } else if (event.type === 'messages_read') {
-      // Not yet sent by the server (GAPS-ROUND-2 #49) — harmless no-op until
-      // it is. up_to_message_id is the field name assumed for the contract;
-      // an absent/non-numeric value is ignored rather than throwing.
-      const upTo = event.up_to_message_id;
-      if (typeof upTo === 'number') {
+      // GAPS-ROUND-2 #49. The server marks every message in the match that the
+      // reader did *not* send, and broadcasts a high-water mark — so a dropped
+      // receipt is repaired by the next one rather than lost.
+      //
+      // The frame also goes to the reader's own sockets, so that a second tab
+      // clears its badge. That copy must not be applied here: `applyReadReceipt`
+      // patches `is_mine` messages, and for the reader those are precisely the
+      // ones that were *not* marked. Applying it would show the reader ✓✓ on
+      // messages the other party has not seen.
+      const upTo = event.last_read_message_id;
+      if (typeof upTo === 'number' && event.reader_id !== user?.id) {
         setMessages((prev) => applyReadReceipt(prev, upTo, event.read_at));
       }
     } else if (event.type === 'match_closed') {
@@ -174,7 +185,7 @@ export default function ChatScreen() {
     }
     // Anything else (including event kinds the server doesn't send yet) is
     // ignored: no default case, so unknown types are a silent no-op.
-  }, []);
+  }, [user?.id]);
 
   const { sendTyping, status: wsStatus } = useMatchWebSocket(mid, handleWsEvent);
 

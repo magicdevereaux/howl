@@ -34,7 +34,7 @@ export type WsEvent =
   // at merge time if the backend lands on something else. Harmless if it
   // never arrives: onmessage only forwards recognised-looking frames and this
   // handler is additive.
-  | { type: 'messages_read';  match_id?: number; user_id?: number; up_to_message_id?: number; read_at?: string }
+  | { type: 'messages_read';  match_id?: number; reader_id?: number; last_read_message_id?: number; read_at?: string }
   // Not yet sent mid-session by the server as of GAPS-ROUND-2 #60 (today it
   // only ever arrives via the 4003 close at connect time). The hook also
   // synthesises this event itself on a mid-session 4003 close, so the screen
@@ -57,6 +57,7 @@ export type WsStatus =
 const CLOSE_UNAUTHENTICATED           = 4001; // missing/expired/invalid token
 const CLOSE_FORBIDDEN                 = 4003; // not a participant in this match
 const CLOSE_EMAIL_VERIFICATION_REQUIRED = 4403; // grace window over — terminal, see app/api/chat.py
+const CLOSE_TOO_MANY_SOCKETS          = 4004; // this user has too many sockets on this match
 
 const RECONNECT_BASE_MS = 2_500;
 const RECONNECT_MAX_MS  = 30_000;
@@ -178,6 +179,17 @@ export function useMatchWebSocket(
         // live sockets) — with or without a companion JSON frame from the
         // server.
         onEventRef.current({ type: 'match_closed', reason: 'forbidden' });
+        setStatus('closed');
+        return;
+      }
+
+      if (code === CLOSE_TOO_MANY_SOCKETS) {
+        // The server caps sockets per (user, match) and evicts the oldest when
+        // a newer one connects (GAPS-ROUND-2 #59). This connection lost its
+        // seat to another of *our own* — a second tab, or a stale socket the
+        // OS never tore down after a background/foreground cycle. Reconnecting
+        // immediately would evict that newer socket and start the two trading
+        // places forever, so stop and let the surviving one serve the user.
         setStatus('closed');
         return;
       }
