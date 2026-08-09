@@ -24,19 +24,6 @@ import ChatRoute from './routes/ChatRoute';
 import RequireAuth from './routes/RequireAuth';
 import { PATHS, chatPath, pathForView, viewForPath } from './routes/paths';
 
-// Display-only starting value for the "N swipes left" counter.
-//
-// It is NOT the rule. `_DAILY_SWIPE_LIMIT` in app/api/swipes.py is the only
-// authority, and the server never lets a swipe through past it regardless of
-// what this says. `UserOut` does not carry the quota today, so the client has
-// nothing to read until the server rejects a swipe with
-// `429 {code: 'daily_limit_reached', limit: N}` — at which point the real
-// value replaces this one for the rest of the session.
-//
-// Follow-up that removes the guess entirely: add `daily_swipe_limit` to
-// UserOut so /api/auth/me reports it up front. See docs/GAPS.md #32.
-const FALLBACK_DAILY_SWIPE_LIMIT = 20;
-
 /**
  * Password-reset and verify-email links point at the *site root* with a query
  * string — `app/services/email.py:24,44` builds `{frontend_url}?token=…` and
@@ -100,12 +87,21 @@ export default function HowlApp() {
   const [swipeError, setSwipeError] = useState('');
   const [canUndo, setCanUndo] = useState(false);
   const [undoMessage, setUndoMessage] = useState('');
-  // The daily swipe quota is enforced by the backend (app/api/swipes.py) and it
-  // is the only authority on the number. The server does not advertise it until
-  // it rejects a swipe, so this starts as an optimistic display value and is
-  // replaced by `detail.limit` from the 429 the moment the server disagrees.
-  // Never treat it as the rule — it only decides what the counter renders.
-  const [swipeLimit, setSwipeLimit] = useState(FALLBACK_DAILY_SWIPE_LIMIT);
+  // Everything the server has told us about the daily swipe quota, or null.
+  //
+  // The quota is a server rule: `_DAILY_SWIPE_LIMIT` in app/api/swipes.py is
+  // the only authority, and a conditional UPDATE enforces it regardless of what
+  // any client believes. `UserOut` does not carry the number, so until the
+  // server refuses a swipe the client genuinely does not know it — and the
+  // honest representation of "don't know" is null, not 20.
+  //
+  // It used to be seeded with a hardcoded 20 (GAPS #32), which the client then
+  // used to grey out swiping on its own. Two ways for that to be wrong: raise
+  // the server limit and the client locks users out early with a message
+  // stating the old number; lower it and the client promises swipes the server
+  // will refuse. Now the server's 429 supplies the limit, the wording and the
+  // reset time together, and nothing is displayed before it arrives.
+  const [swipeQuota, setSwipeQuota] = useState(null);
   const [currentMatch, setCurrentMatch] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -944,12 +940,15 @@ export default function HowlApp() {
       if (isVerificationBlocked(res)) return;
 
       if (res.status === 429 && data.detail?.code === 'daily_limit_reached') {
-        // The server just told us the real quota. Adopt it, then mark the
-        // counter exhausted — no full profile refetch needed.
-        const serverLimit = Number(data.detail.limit);
-        const limit = Number.isFinite(serverLimit) && serverLimit > 0 ? serverLimit : swipeLimit;
-        setSwipeLimit(limit);
-        setUser(prev => prev ? { ...prev, daily_swipes: limit } : prev);
+        // The one moment the server states the rule. Take all of it — the
+        // number, its own wording, and the reset time it computed — rather than
+        // keeping a second copy of any of them here.
+        const limit = Number(data.detail.limit);
+        setSwipeQuota({
+          limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+          message: data.detail.message || null,
+          resetsAt: data.detail.resets_at || null,
+        });
         return;
       }
 
@@ -1019,8 +1018,14 @@ export default function HowlApp() {
   const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
   const navProps = { view, setView, handleLogout, totalUnread };
 
-  const swipeLimitReached = !user?.is_premium && (user?.daily_swipes || 0) >= swipeLimit;
-  const swipesRemaining = user?.is_premium ? null : Math.max(0, swipeLimit - (user?.daily_swipes || 0));
+  // "Out of swipes" is now something the server has said, not something the
+  // client worked out. Premium accounts are unlimited and never see either.
+  const swipeLimitReached = !user?.is_premium && !!swipeQuota;
+  const swipesRemaining =
+    user?.is_premium || !swipeQuota?.limit
+      ? null
+      : Math.max(0, swipeQuota.limit - (user?.daily_swipes || 0));
+  const swipesUsed = user?.is_premium ? null : user?.daily_swipes || 0;
 
   // ---------------------------------------------------------------------------
   // Data on route entry.
@@ -1097,7 +1102,9 @@ export default function HowlApp() {
           handleSaveFilters={handleSaveFilters}
           swipeLimitReached={swipeLimitReached}
           swipesRemaining={swipesRemaining}
-          swipesResetAt={user?.swipes_reset_at}
+          swipesUsed={swipesUsed}
+          limitMessage={swipeQuota?.message}
+          limitResetsAt={swipeQuota?.resetsAt}
           handleSwipe={handleSwipe}
           handleUndo={handleUndo}
           handleBlock={handleBlock}

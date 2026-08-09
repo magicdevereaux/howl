@@ -8,7 +8,7 @@ export default function DiscoverView({
   swipeLoading, swipeError, canUndo, undoMessage,
   matchPopup, setMatchPopup, avatarStatus,
   preferenceFilters, handleSaveFilters,
-  swipeLimitReached, swipesRemaining, swipesResetAt,
+  swipeLimitReached, swipesRemaining, swipesUsed, limitMessage, limitResetsAt,
   handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
   setView, navProps,
 }) {
@@ -43,17 +43,21 @@ export default function DiscoverView({
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '48px 24px', background: 'rgba(255,255,255,0.04)', borderRadius: '20px' }}>
             <div style={{ fontSize: '56px', marginBottom: '16px' }}>🐾</div>
             <p style={{ fontSize: '20px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-primary)' }}>You're out of swipes!</p>
+            {/* The server's own sentence. It used to read "You've used all 20
+                free swipes for today", with the 20 written here — a number the
+                backend owns and can change (GAPS #32). It already ends with the
+                premium upsell, which is why there is no second line. */}
             <p style={{ fontSize: '14px', opacity: 0.8, marginBottom: '4px' }}>
-              You've used all 20 free swipes for today.
+              {limitMessage || 'You have used all your free swipes for today.'}
             </p>
-            {swipesResetAt && (
+            {limitResetsAt && (
               <p style={{ fontSize: '13px', opacity: 0.65, marginBottom: '20px' }}>
-                Resets in ~{Math.ceil((new Date(swipesResetAt).getTime() + 86400000 - Date.now()) / 3600000)}h
+                {/* resets_at, computed server-side from the window it actually
+                    enforces, rather than swipes_reset_at + a 24h constant
+                    duplicated here. */}
+                Resets in ~{Math.max(0, Math.ceil((new Date(limitResetsAt).getTime() - Date.now()) / 3600000))}h
               </p>
             )}
-            <p style={{ fontSize: '13px', opacity: 0.7, fontStyle: 'italic' }}>
-              Upgrade to premium for unlimited swiping.
-            </p>
           </div>
         ) : discoverLoading ? (
           <div style={{ textAlign: 'center', color: 'var(--text-primary)', padding: '60px', fontSize: '18px' }}>
@@ -76,13 +80,23 @@ export default function DiscoverView({
           </div>
         ) : (
           <>
-            {swipesRemaining !== null && swipesRemaining <= 5 && (
+            {/* Two truthful shapes, depending on what the server has told us.
+                "N left" needs the limit, which only arrives with a 429; before
+                that the count of swipes used is real data from the profile and
+                requires no guess at the rule. Neither invents a number. */}
+            {swipesRemaining !== null && swipesRemaining <= 5 ? (
               <div style={{ textAlign: 'right', marginBottom: '16px' }}>
                 <p style={{ color: swipesRemaining <= 2 ? '#fc8181' : 'var(--text-disabled)', fontSize: '12px', fontWeight: '600', margin: 0 }}>
                   {swipesRemaining} swipe{swipesRemaining !== 1 ? 's' : ''} left today
                 </p>
               </div>
-            )}
+            ) : swipesUsed ? (
+              <div style={{ textAlign: 'right', marginBottom: '16px' }}>
+                <p style={{ color: 'var(--text-disabled)', fontSize: '12px', fontWeight: '600', margin: 0 }}>
+                  {swipesUsed} swipe{swipesUsed !== 1 ? 's' : ''} used today
+                </p>
+              </div>
+            ) : null}
 
             {/* Card */}
             <div style={{ background: 'var(--bg-card)', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 16px 48px rgba(0,0,0,0.4)' }}>
