@@ -118,8 +118,25 @@ degraded-but-intentional mode, not a bug. `GET /api/matches/{id}/messages` is st
 a client can fall back to — the message itself was never lost, only the live push.
 
 **Nobody receives password reset or verification emails**
-There is no email provider. `app/services/email.py` prints to stdout. Reset tokens are in the log
-stream — treat those logs as secrets.
+Almost always: no provider is configured, so `EMAIL_BACKEND=auto` resolved to `console` and
+`app/services/email.py` printed the link to stdout instead of sending it. Reset and verification
+tokens are then sitting in the Railway log stream — **treat those logs as secrets**. Set
+`RESEND_API_KEY` (or the `SMTP_*` block) and delivery starts; nothing else changes.
+
+If a provider *is* configured, the send failed and said so: grep for `email:` at `error` level, or
+look in Sentry. A send never raises into the request — the caller's account is already created and
+failing the request would not un-send anything — so a broken provider looks like silence at the user
+and a log line at you. The likeliest causes are an unverified sending domain (Resend returns 403 with
+that in the body, which is logged verbatim) and SMTP credentials.
+
+Note delivery is **synchronous**, not queued, and bounded by `EMAIL_TIMEOUT_SECONDS` (default 5s).
+That is deliberate: a Celery worker that isn't running is the most common failure of this deployment,
+and a verification email that silently never sends because nobody drained the queue is worse than one
+that costs the request a moment.
+
+A user who typo'd their address at signup is **not** stuck: `POST /api/auth/change-email` (current
+password required) moves the account and re-sends. Before that endpoint existed, the only remedy was
+`ENFORCE_EMAIL_VERIFICATION=false`.
 
 **Bots stopped replying**
 Beat isn't running, or the `bot_response` queue has no worker consuming it (GAPS #55 — check this

@@ -103,10 +103,16 @@ written by hand in the API layer. Full detail in [docs/ARCHITECTURE.md](docs/ARC
    credential-delivery shells (web sets a cookie, mobile returns a bearer token) over one shared
    service. Put changes to registration, login, token issuance or TTLs in the service. Don't
    reintroduce logic into either router.
-4. **Emails are `print()` statements.** `app/services/email.py` has no provider wired. Password-reset
-   and verification tokens go to stdout, which in production means the Railway log stream.
+4. **Email only sends if a provider is configured.** `app/services/email.py` has three backends and
+   `EMAIL_BACKEND=auto` picks `resend` (needs `RESEND_API_KEY`), else `smtp` (needs `SMTP_HOST`), else
+   `console` — which `print()`s the link, so an unconfigured production deployment puts reset and
+   verification tokens in the Railway log stream. Sends are **synchronous and bounded**
+   (`EMAIL_TIMEOUT_SECONDS`), not queued, because a worker that isn't running is gotcha #5 — and they
+   never raise into the request, matching every other outbound dependency here.
 5. **Celery worker and Beat are not started by `scripts/startup.sh`.** In production they must be
-   separate Railway services. If avatars are stuck `pending` in prod, this is why.
+   separate Railway services, and since queue routing landed the worker needs
+   `-Q celery,bot_response` (or a second worker for `bot_response`) or bot replies stop silently.
+   If avatars are stuck `pending` in prod, this is why.
 6. **Avatars written locally are ephemeral.** Without the `R2_*` env vars, `static/avatars/` is wiped on
    every redeploy.
 7. **`task_acks_late=True`, so any killed task re-runs from the top.** `generate_avatar` is guarded by
