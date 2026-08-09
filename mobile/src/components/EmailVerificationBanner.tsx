@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import { useEmailVerification } from '../contexts/EmailVerificationContext';
 import { colors as C } from '../theme';
 
 const DEFAULT_MESSAGE = 'Verify your email to keep swiping and chatting.';
+const NO_EMAIL_MESSAGE = "Couldn't resend — sign in again and retry from the email you registered with.";
 
 /**
  * Global, dismissible notice shown once any request — REST or the chat
@@ -19,21 +21,33 @@ const DEFAULT_MESSAGE = 'Verify your email to keep swiping and chatting.';
  */
 export function EmailVerificationBanner() {
   const { info, dismiss } = useEmailVerification();
+  const { user } = useAuth();
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   if (!info) return null;
 
   const handleResend = async () => {
+    if (!user?.email) {
+      setFeedback(NO_EMAIL_MESSAGE);
+      return;
+    }
     setSending(true);
     setFeedback(null);
-    const res = await api('/api/auth/resend-verification', { method: 'POST' });
+    // The shared cookie-free /api/auth/* endpoint — same one the mobile
+    // forgot/reset-password screens use — takes the address in the body
+    // rather than deriving it from the session, so it stays usable even if
+    // the caller's own token has already gone stale.
+    const res = await api<{ message: string }>('/api/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email: user.email }),
+    });
     setSending(false);
-    setFeedback(
-      res.ok
-        ? "If your account needs verifying, we've sent a new link to your email."
-        : res.error,
-    );
+    // On success, show the server's own message rather than a duplicated
+    // copy of it here — it's already worded to be account-state-agnostic
+    // ("if that email is registered and not yet verified..."), and this way
+    // the two can't drift apart.
+    setFeedback(res.ok ? res.data.message : res.error);
   };
 
   return (
