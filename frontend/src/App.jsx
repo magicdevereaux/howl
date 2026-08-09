@@ -942,19 +942,33 @@ export default function HowlApp() {
         return;
       }
 
-      setDiscoverUsers(prev => prev.slice(1));
-      setCanUndo(true);
-      if (res.ok && data.matched) {
-        setMatchPopup(data.match);
-      } else if (!res.ok) {
+      // Only mutate the deck and arm Undo once a swipe row is known to exist.
+      // GAPS-ROUND-2 #50: this used to run unconditionally, so a 500/409 both
+      // discarded a card that was never recorded *and* left Undo pointing at
+      // the previous, successful swipe — `DELETE /api/swipes/last` deletes the
+      // most recent actual row, which on a failure is someone else's match.
+      // Addressed by id, not position: `discoverUsers` can be replaced
+      // wholesale by a refetch (nav revisit) between this request firing and
+      // its response landing, and a positional `slice(1)` would then remove
+      // whichever profile now sits at index 0 rather than the one the user
+      // actually swiped on.
+      if (res.ok) {
+        setDiscoverUsers(prev => prev.filter(u => u.id !== targetUserId));
+        setCanUndo(true);
+        if (data.matched) {
+          setMatchPopup(data.match);
+        }
+        setUser(prev => prev ? { ...prev, daily_swipes: (prev.daily_swipes || 0) + 1 } : prev);
+      } else {
+        // Leave the card in place — "tap to try again" only makes sense if
+        // there is still something to tap on.
         setSwipeError('Swipe failed — tap to try again.');
         setTimeout(() => setSwipeError(''), 4000);
       }
-      if (res.ok) {
-        setUser(prev => prev ? { ...prev, daily_swipes: (prev.daily_swipes || 0) + 1 } : prev);
-      }
     } catch {
-      setDiscoverUsers(prev => prev.slice(1));
+      // Same contract as the res.ok === false branch above: the request may
+      // never have reached the server, so the card stays and Undo stays
+      // unarmed.
       setSwipeError('Network error — swipe may not have saved.');
       setTimeout(() => setSwipeError(''), 4000);
     } finally {
