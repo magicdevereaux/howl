@@ -16,6 +16,7 @@ from fastapi import (
 
 # Query kept for before_id pagination param
 from jose import JWTError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
@@ -286,6 +287,34 @@ def _msg_event(event_type: str, msg: Message) -> dict:
     }
 
 
+def _mark_conversation_read(
+    match_id: int, reader_id: int, now: datetime, db: Session
+) -> int | None:
+    """Mark every unread incoming message in *match_id* as read at *now*.
+
+    Returns the id of the newest row it marked (the read high-water mark), or
+    None if there was nothing unread.
+
+    One UPDATE for the whole conversation rather than a Python loop over a page:
+    cheaper than the per-row version it replaces, and it makes "opened the chat"
+    mean "read the conversation", which is what the badge already claims.
+    """
+    unread = [
+        Message.match_id == match_id,
+        Message.sender_id != reader_id,
+        Message.read_at.is_(None),
+    ]
+    # Taken *before* the UPDATE, while the rows are still identifiable as unread.
+    high_water = db.query(func.max(Message.id)).filter(*unread).scalar()
+    if high_water is None:
+        return None
+    db.query(Message).filter(*unread).update(
+        {Message.read_at: now}, synchronize_session=False
+    )
+    db.commit()
+    return int(high_water)
+
+
 def _require_match_member(match_id: int, user_id: int, db: Session) -> Match:
     """Return the Match or raise 404/403."""
     match = db.get(Match, match_id)
@@ -489,6 +518,25 @@ def get_messages(
     """
     _require_match_member(match_id, current_user.id, db)
 
+    # Opening the chat marks the *conversation* read, not just the page that
+    # happens to fit in one response. Both unread counters — `unread_count` here
+    # and the correlated subquery in `list_matches` — count every unread row in
+    # the match with no limit, while this endpoint is the only thing that ever
+    # writes `read_at`. Marking one 50-row page therefore left a match with 60
+    # unread stuck at a badge of 10 forever: the user has read everything the UI
+    # will show them and there is no way left to clear it. Reachable in ordinary
+    # use — the `desperate` seed archetype chases after two hours of silence and
+    # there are fifty of them.
+    #
+    # Paging backward (`before_id`) is a different act: it loads history the user
+    # is scrolling into, so it still marks only what it returns.
+    #
+    # Ordered before the page fetch so the returned rows carry the new `read_at`
+    # without a second round trip.
+    now = datetime.now(UTC)
+    if before_id is None:
+        _mark_conversation_read(match_id, current_user.id, now, db)
+
     q = db.query(Message).filter(Message.match_id == match_id)
     if before_id is not None:
         q = q.filter(Message.id < before_id)
@@ -501,14 +549,14 @@ def get_messages(
         raw = raw[:_PAGE_SIZE]
     messages = list(reversed(raw))
 
-    now = datetime.now(UTC)
-    marked = False
-    for msg in messages:
-        if msg.sender_id != current_user.id and msg.read_at is None:
-            msg.read_at = now
-            marked = True
-    if marked:
-        db.commit()
+    if before_id is not None:
+        marked = False
+        for msg in messages:
+            if msg.sender_id != current_user.id and msg.read_at is None:
+                msg.read_at = now
+                marked = True
+        if marked:
+            db.commit()
 
     return MessagePageOut(
         messages=[_to_out(msg, current_user.id) for msg in messages],

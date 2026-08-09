@@ -282,6 +282,74 @@ def test_get_messages_does_not_mark_own_messages_as_read(client, db, test_user, 
     assert msg.read_at is None
 
 
+def test_get_messages_marks_the_whole_conversation_read(client, db, test_user, auth_headers):
+    """A badge above one page used to be permanently unclearable (GAPS #48).
+
+    `get_messages` marked only the 50 rows it returned, while both unread
+    counters count every unread row in the match. With 60 unread, the user read
+    everything the UI shows and the badge still said 10 — forever, since this
+    endpoint is the only code that writes read_at.
+    """
+    other = _make_user(db, email="read_all@howl.app")
+    m = _make_match(db, test_user, other)
+    for i in range(60):
+        _send(db, match_id=m.id, sender_id=other.id, content=str(i))
+
+    assert client.get(f"/api/matches/{m.id}/unread-count", headers=auth_headers).json()["count"] == 60
+
+    page = client.get(f"/api/matches/{m.id}/messages", headers=auth_headers).json()
+    assert len(page["messages"]) == 50          # still one page on the wire
+    assert page["has_more"] is True
+
+    after = client.get(f"/api/matches/{m.id}/unread-count", headers=auth_headers).json()["count"]
+    assert after == 0, "unread messages older than the first page never clear"
+
+
+def test_bulk_read_does_not_touch_own_or_other_matches(client, db, test_user, auth_headers):
+    """The one-statement UPDATE must keep the same scope the loop had."""
+    other = _make_user(db, email="read_scope@howl.app")
+    third = _make_user(db, email="read_scope_b@howl.app")
+    m = _make_match(db, test_user, other)
+    other_match = _make_match(db, test_user, third)
+
+    mine = _send(db, match_id=m.id, sender_id=test_user.id, content="mine")
+    elsewhere = _send(db, match_id=other_match.id, sender_id=third.id, content="elsewhere")
+
+    client.get(f"/api/matches/{m.id}/messages", headers=auth_headers)
+
+    db.refresh(mine)
+    db.refresh(elsewhere)
+    assert mine.read_at is None, "marked the reader's own message read"
+    assert elsewhere.read_at is None, "marked another match's messages read"
+
+
+def test_returned_page_carries_the_new_read_at(client, db, test_user):
+    """The reader's own view of read_at must reflect the write it just caused."""
+    other = _make_user(db, email="read_echo@howl.app")
+    m = _make_match(db, test_user, other)
+    _send(db, match_id=m.id, sender_id=other.id, content="unread")
+
+    headers = {"Cookie": f"access_token={create_access_token(test_user.id)}"}
+    page = client.get(f"/api/matches/{m.id}/messages", headers=headers).json()
+    assert page["messages"][0]["read_at"] is not None
+
+
+def test_paging_backward_still_marks_only_what_it_returns(client, db, test_user, auth_headers):
+    """`before_id` loads history the user is scrolling into, not the whole match."""
+    other = _make_user(db, email="read_page@howl.app")
+    m = _make_match(db, test_user, other)
+    msgs = [_send(db, match_id=m.id, sender_id=other.id, content=str(i)) for i in range(10)]
+
+    client.get(f"/api/matches/{m.id}/messages?before_id={msgs[5].id}", headers=auth_headers)
+
+    for msg in msgs[:5]:
+        db.refresh(msg)
+        assert msg.read_at is not None
+    for msg in msgs[5:]:
+        db.refresh(msg)
+        assert msg.read_at is None
+
+
 def test_get_messages_isolation(client, db, test_user, auth_headers):
     """Messages from one match don't appear in another match's conversation."""
     other = _make_user(db, email="iso_a@howl.app")
