@@ -3,6 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 import anthropic
+from celery.exceptions import MaxRetriesExceededError, Retry
 from pydantic import BaseModel, Field, field_validator
 
 from app.celery_app import celery_app
@@ -130,7 +131,9 @@ def generate_avatar(self, user_id: int) -> None:
     apply — an already-ready check for redelivery after a successful run, and a
     Redis single-flight lock for concurrent or in-flight duplicates. The lock
     fails open, so a Redis outage degrades to the old behaviour rather than
-    blocking avatar generation entirely.
+    blocking avatar generation entirely. Losing the lock *defers* the task
+    rather than completing it (#42): a completed task is an acked message, and
+    acking work nobody is doing loses it silently.
     """
     db = SessionLocal()
     user: User | None = None
@@ -156,10 +159,37 @@ def generate_avatar(self, user_id: int) -> None:
 
         lock_held = task_lock.acquire(lock_key)
         if not lock_held:
+            # GAPS-ROUND-2 #42: defer, never drop.
+            #
+            # A bare `return` here completes the task, so Celery acks the
+            # message and the work is gone. That turned #7's double-payment
+            # guard into a silent-loss bug: the lock TTL is 600s and release
+            # only happens in `finally`, which does not run on SIGKILL, so a
+            # worker killed mid-generation leaves its own key behind. With
+            # task_acks_late the message is redelivered immediately, the row is
+            # still `pending` so the already-ready guard above does not fire,
+            # `acquire` finds the dead worker's key, and the redelivery acks
+            # itself into the void. Nothing ever retries it — which is exactly
+            # the failure ADR-001 says Celery is here to prevent.
+            #
+            # Retrying costs nothing in the case this lock exists for. A
+            # genuine concurrent duplicate means the winner is running now, and
+            # it will have written `ready` long before the retry lands, so the
+            # guard above short-circuits the retry for free.
+            #
+            # Rejected alternative: storing `self.request.id` as the lock value
+            # so a redelivery can re-acquire its own lock. Redelivery preserves
+            # the task id, so it would distinguish "my own crash" from "someone
+            # else is working" and skip this wait entirely — but redelivery
+            # does not imply the first worker is dead. A broker visibility
+            # timeout redelivers a task whose original is still running, and
+            # owner-based re-acquisition would let that duplicate straight
+            # through to both paid APIs, reopening #7. The wait is the cheaper
+            # side of that trade.
             logger.info(
-                "generate_avatar: user %d already being generated elsewhere — skipping", user_id
+                "generate_avatar: user %d is locked by another attempt — retrying", user_id
             )
-            return
+            raise self.retry(countdown=task_lock.DEFAULT_TTL_SECONDS // 4)
 
         # ── Heartbeat ────────────────────────────────────────────────────────
         # Re-stamp `pending` now that this attempt is genuinely starting.
@@ -247,6 +277,29 @@ def generate_avatar(self, user_id: int) -> None:
             "generate_avatar: user %d → complete (animal=%r, image=%s)",
             user_id, animal, "yes" if avatar_url else "no (emoji fallback)",
         )
+
+    except Retry:
+        # `self.retry()` above signals a deferral by raising, and Retry is an
+        # ordinary Exception — without this it would be swallowed by the generic
+        # handler below and turned into a permanent failure. Exceptions raised
+        # *inside* an except clause (the anthropic.APIError branch) propagate out
+        # of the try statement rather than into a sibling handler, so only the
+        # lock deferral, which is raised from the try body, needs this.
+        raise
+
+    except MaxRetriesExceededError:
+        # The lock outlived our retry budget: 3 retries at TTL//4 is 450s
+        # against a 600s TTL, so the only way here is a lock nobody will ever
+        # release. `failed` is the honest state — it is one the app already
+        # recovers from, the clients render it with a working "Try Again", and
+        # _mark_failed refunds the regeneration slot (#40) so pressing it costs
+        # the user nothing. Staying `pending` forever is the outcome #42 exists
+        # to remove.
+        logger.error(
+            "generate_avatar: user %d gave up waiting for the generation lock", user_id
+        )
+        db.rollback()
+        _mark_failed(db, user)
 
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         # Bad response from Claude — don't retry, just fail

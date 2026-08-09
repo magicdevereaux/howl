@@ -7,6 +7,8 @@ DALL-E calls. These cover both guards.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from celery.exceptions import Retry
 from redis import RedisError
 
 from app.models.user import AvatarStatus, User
@@ -69,6 +71,9 @@ def _user(**kw):
     user.bio = "A curious fox who loves dense forests."
     user.avatar_status = kw.get("avatar_status", AvatarStatus.pending)
     user.avatar_url = kw.get("avatar_url", None)
+    # A real int: _mark_failed refunds this (#40), and arithmetic on a MagicMock
+    # raises rather than asserting anything.
+    user.avatar_regenerations_this_month = kw.get("regenerations", 1)
     return user
 
 
@@ -116,6 +121,127 @@ def test_skips_when_lock_is_held(monkeypatch):
         patch("app.tasks.avatar.anthropic.Anthropic") as MockClient,
         patch("app.tasks.avatar.generate_avatar_image") as mock_img,
     ):
+        generate_avatar.apply(args=[1])
+
+    MockClient.assert_not_called()
+    mock_img.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Losing the lock defers, it does not drop (GAPS-ROUND-2 #42)
+#
+# A bare `return` completes the task, so Celery acks the message. Combined with
+# a 600s TTL that is only released in `finally` -- which does not run on
+# SIGKILL -- a worker killed mid-generation left its own lock behind, and the
+# task_acks_late redelivery acked itself into the void. The row stayed
+# `pending` forever with nothing left to retry it.
+# ---------------------------------------------------------------------------
+
+def test_a_held_lock_defers_the_task_instead_of_acking_it(monkeypatch):
+    """The redelivery must be re-queued, not completed."""
+    db = MagicMock()
+    db.get.return_value = _user()
+    monkeypatch.setattr("app.services.task_lock.acquire", lambda *a, **kw: False)
+
+    attempts = []
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch.object(
+            generate_avatar,
+            "retry",
+            side_effect=lambda **kw: attempts.append(kw) or Retry(),
+        ),
+    ):
+        generate_avatar.apply(args=[1])
+
+    assert len(attempts) == 1, "the task returned normally, so the message was acked"
+
+
+def test_deferral_waits_a_fraction_of_the_lock_ttl(monkeypatch):
+    """Long enough that the winner has usually finished, short enough to bound
+    a dead worker's lock: 3 retries at TTL//4 is 450s against a 600s TTL."""
+    db = MagicMock()
+    db.get.return_value = _user()
+    monkeypatch.setattr("app.services.task_lock.acquire", lambda *a, **kw: False)
+
+    attempts = []
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch.object(
+            generate_avatar,
+            "retry",
+            side_effect=lambda **kw: attempts.append(kw) or Retry(),
+        ),
+    ):
+        generate_avatar.apply(args=[1])
+
+    assert attempts[0]["countdown"] == task_lock.DEFAULT_TTL_SECONDS // 4
+
+
+def test_the_retry_signal_is_not_swallowed_into_a_permanent_failure(monkeypatch):
+    """`Retry` is an ordinary Exception, so the generic handler would eat it.
+
+    If it did, a deferral would be indistinguishable from a crash: the row
+    would go `failed` and the deferred work would still be acked and lost.
+    """
+    user = _user()
+    db = MagicMock()
+    db.get.return_value = user
+    monkeypatch.setattr("app.services.task_lock.acquire", lambda *a, **kw: False)
+
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch.object(generate_avatar, "retry", side_effect=Retry()),
+        pytest.raises(Retry),
+    ):
+        generate_avatar.apply(args=[1], throw=True)
+
+    assert user.avatar_status != AvatarStatus.failed
+
+
+def test_the_retry_budget_is_bounded_and_ends_in_failed(monkeypatch):
+    """A lock nobody will ever release must not leave the user pending forever.
+
+    `failed` is a state the app recovers from -- the clients render a working
+    "Try Again" and _mark_failed refunds the regeneration slot (#40) -- whereas
+    `pending` forever is exactly what #42 exists to remove.
+    """
+    user = _user()
+    db = MagicMock()
+    db.get.return_value = user
+    monkeypatch.setattr("app.services.task_lock.acquire", lambda *a, **kw: False)
+
+    with patch("app.tasks.avatar.SessionLocal", return_value=db):
+        # Eager mode re-invokes the task body per retry, so this exhausts the
+        # real max_retries budget rather than a simulated one.
+        generate_avatar.apply(args=[1])
+
+    assert user.avatar_status == AvatarStatus.failed
+    assert user.avatar_regenerations_this_month == 0  # refunded, so retry is free
+
+
+def test_a_deferred_duplicate_costs_nothing_once_the_winner_finishes(monkeypatch):
+    """The common case: the winner wrote `ready` before our retry landed."""
+    lock_free = iter([False, True])
+    monkeypatch.setattr("app.services.task_lock.acquire", lambda *a, **kw: next(lock_free))
+
+    user = _user()
+    db = MagicMock()
+    db.get.return_value = user
+
+    def _winner_finishes(**kw):
+        user.avatar_status = AvatarStatus.ready
+        user.avatar_url = "/avatars/winner.png"
+        return Retry()
+
+    with (
+        patch("app.tasks.avatar.SessionLocal", return_value=db),
+        patch("app.tasks.avatar.anthropic.Anthropic") as MockClient,
+        patch("app.tasks.avatar.generate_avatar_image") as mock_img,
+        patch.object(generate_avatar, "retry", side_effect=_winner_finishes),
+    ):
+        generate_avatar.apply(args=[1])
+        # The retry lands: the already-ready guard short-circuits it for free.
         generate_avatar.apply(args=[1])
 
     MockClient.assert_not_called()
