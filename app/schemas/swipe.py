@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.models.swipe import SwipeDirection
+from app.schemas.ai_fields import DescriptionText, TraitList
 
 
 class DiscoverUserOut(BaseModel):
@@ -14,8 +15,8 @@ class DiscoverUserOut(BaseModel):
     location: str | None = None
     bio: str | None = None
     animal: str | None = None
-    personality_traits: list[str] | None = None
-    avatar_description: str | None = None
+    personality_traits: TraitList = None
+    avatar_description: DescriptionText = None
     avatar_url: str | None = None
 
 
@@ -27,7 +28,7 @@ class MatchedProfileOut(BaseModel):
     name: str | None = None
     animal: str | None = None
     avatar_url: str | None = None
-    avatar_description: str | None = None
+    avatar_description: DescriptionText = None
 
 
 class LastMessageOut(BaseModel):

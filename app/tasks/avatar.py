@@ -3,6 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 import anthropic
+from pydantic import BaseModel, Field, field_validator
 
 from app.celery_app import celery_app
 from app.config import settings
@@ -24,6 +25,48 @@ Return ONLY a valid JSON object — no markdown fences, no prose, just the objec
     "avatar_description": "<1-2 sentences describing a vivid human-animal hybrid avatar suitable for image generation>",
     "image_prompt": "<DALL-E 3 prompt under 350 characters: mystical animal spirit art, specific colors, fantasy aesthetic>"
 }"""
+
+
+class _ClaudeAvatarPayload(BaseModel):
+    """Shape contract for Claude's JSON reply, enforced before anything persists.
+
+    GAPS-ROUND-2 #38. Nothing used to validate this. The annotations at the parse
+    site were decoration, `personality_traits` and `avatar_description` are JSON
+    columns so any shape stored cleanly, and five response schemas then declare
+    them `list[str] | None` / `str | None`. One plausible-but-wrong reply — traits
+    as objects rather than strings — permanently 500'd the affected user's login
+    on both clients *and* `GET /api/users/discover` for every other user, since
+    discover has no LIMIT and serialises the whole ready population at once.
+
+    Enforcing it here is the real fix: a bad shape must never reach the database.
+    `ValidationError` subclasses `ValueError`, so it lands in the existing
+    `(json.JSONDecodeError, KeyError, ValueError)` handler below and marks the
+    avatar `failed` — a state the app already recovers from via
+    `POST /api/avatar/regenerate`. `app/schemas/ai_fields.py` handles rows written
+    before this existed.
+
+    Pydantic v2 does the work here: in lax mode it still refuses `dict` -> `str`
+    and `int` -> `str`, so every near-miss shape is rejected rather than coerced
+    into something that looks fine until it is read back.
+    """
+
+    animal: str
+    personality_traits: list[str] = Field(default_factory=list)
+    avatar_description: str = ""
+    # Optional so the caller's animal-specific fallback still applies when Claude
+    # omits it; an empty string would defeat that.
+    image_prompt: str | None = None
+
+    @field_validator("animal")
+    @classmethod
+    def _animal_must_be_meaningful(cls, value: str) -> str:
+        # Mirrors the old `data["animal"].strip().lower()` plus its empty check.
+        # Normalising here means the DB CHECK from #23
+        # (ready => animal IS NOT NULL) can never see a whitespace-only animal.
+        normalised = value.strip().lower()
+        if not normalised:
+            raise ValueError("Claude returned an empty animal field")
+        return normalised
 
 
 def _mark_failed(db: object, user: User | None) -> None:
@@ -113,17 +156,18 @@ def generate_avatar(self, user_id: int) -> None:
             logger.info("Stripped markdown fences")
 
         # ── Parse & validate ─────────────────────────────────────────────────
+        # Shape-validated before anything is persisted -- see _ClaudeAvatarPayload
+        # and GAPS-ROUND-2 #38. A wrong shape raises ValidationError (a ValueError)
+        # and routes to _mark_failed rather than poisoning the row.
         data: dict = json.loads(raw_text)
+        payload = _ClaudeAvatarPayload.model_validate(data)
 
-        animal: str = data["animal"].strip().lower()
-        if not animal:
-            raise ValueError("Claude returned an empty animal field")
-
-        personality_traits: list[str] = data.get("personality_traits", [])
-        avatar_description: str = data.get("avatar_description", "")
-        image_prompt: str = data.get(
-            "image_prompt",
-            f"A mystical {animal} spirit animal, ethereal digital art, fantasy style, vibrant colors",
+        animal: str = payload.animal
+        personality_traits: list[str] = payload.personality_traits
+        avatar_description: str = payload.avatar_description
+        image_prompt: str = payload.image_prompt or (
+            f"A mystical {animal} spirit animal, ethereal digital art, "
+            "fantasy style, vibrant colors"
         )
 
         logger.info(

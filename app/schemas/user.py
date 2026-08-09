@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 from app.models.user import AvatarStatus
+from app.schemas.ai_fields import DescriptionText, TraitList
 
 
 class UserRegister(BaseModel):
@@ -47,8 +48,8 @@ class UserOut(BaseModel):
     location: str | None = None
     bio: str | None
     animal: str | None
-    personality_traits: list[str] | None = None
-    avatar_description: str | None = None
+    personality_traits: TraitList = None
+    avatar_description: DescriptionText = None
     avatar_url: str | None
     avatar_status: AvatarStatus
     profile_needs_regen: bool = False
@@ -190,8 +191,8 @@ class PublicProfileOut(BaseModel):
     location: str | None = None
     bio: str | None = None
     animal: str | None = None
-    personality_traits: list[str] | None = None
-    avatar_description: str | None = None
+    personality_traits: TraitList = None
+    avatar_description: DescriptionText = None
     avatar_url: str | None = None
     avatar_status: AvatarStatus
 
