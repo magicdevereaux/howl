@@ -18,7 +18,7 @@ export default function ChatView({
   handleDeleteMessage,
   typingUser, sendTypingEvent,
   handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
-  setView, fetchMatches,
+  setView,
 }) {
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
@@ -110,7 +110,7 @@ export default function ChatView({
       {/* Chat header */}
       <div style={{ background: 'rgba(0,0,0,0.4)', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
         <button
-          onClick={() => { setView('matches'); fetchMatches(); }}
+          onClick={() => setView('matches')}
           style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
         >
           ← Matches

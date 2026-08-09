@@ -1,12 +1,14 @@
 import React from 'react';
 
-export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread = 0 }) {
-  const navButton = (label, targetView, fetchFn) => {
+// Navigation no longer triggers loads — being on the route does (see the
+// route-entry effects in App.jsx). So this component only navigates.
+export default function Nav({ view, setView, handleLogout, totalUnread = 0 }) {
+  const navButton = (label, targetView) => {
     const active = view === targetView;
     return (
       <button
         key={targetView}
-        onClick={() => { setView(targetView); fetchFn && fetchFn(); }}
+        onClick={() => setView(targetView)}
         style={{
           padding: '10px 20px',
           background: active ? 'var(--bg-card)' : 'rgba(255,255,255,0.08)',
@@ -29,12 +31,12 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '12px' }}>
       <h1 style={{ fontSize: '36px', fontWeight: '700', color: 'var(--text-primary)', fontFamily: 'var(--font-ceremonial)', letterSpacing: '0.05em' }}>Howl 🐺</h1>
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-        {navButton('Discover', 'discover', fetchDiscoverUsers)}
+        {navButton('Discover', 'discover')}
 
         {/* Matches button with unread badge */}
         <div style={{ position: 'relative', display: 'inline-flex' }}>
           <button
-            onClick={() => { setView('matches'); fetchMatches(); }}
+            onClick={() => setView('matches')}
             style={{
               padding: '10px 20px',
               background: matchesActive ? 'var(--bg-card)' : 'rgba(255,255,255,0.08)',
@@ -69,7 +71,7 @@ export default function Nav({ view, setView, fetchDiscoverUsers, fetchMatches, h
           )}
         </div>
 
-        {navButton('My Profile', 'profile', null)}
+        {navButton('My Profile', 'profile')}
         <button
           onClick={handleLogout}
           style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}

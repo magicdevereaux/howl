@@ -20,7 +20,7 @@ export default function DiscoverView({
   preferenceFilters, handleSaveFilters,
   swipeLimitReached, swipesRemaining, swipesResetAt,
   handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
-  setView, fetchMatches, navProps,
+  setView, navProps,
 }) {
   const [blockConfirm, setBlockConfirm] = React.useState(false);
   const [localFilters, setLocalFilters] = useState({
@@ -326,7 +326,7 @@ export default function DiscoverView({
               Keep Swiping
             </button>
             <button
-              onClick={() => { setMatchPopup(null); setView('matches'); fetchMatches(); }}
+              onClick={() => { setMatchPopup(null); setView('matches'); }}
               style={{ width: '100%', marginTop: '10px', padding: '12px', background: 'transparent', color: 'var(--gold)', border: '2px solid var(--gold)', borderRadius: '10px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
             >
               View Matches

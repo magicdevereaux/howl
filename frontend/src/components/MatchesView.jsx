@@ -5,7 +5,7 @@ import { animalEmoji, avatarUrl } from '../utils';
 export default function MatchesView({
   matches, matchesLoading, matchesError,
   fetchMatches, openChat, user,
-  setView, fetchDiscoverUsers, handleOpenReport, navProps,
+  setView, handleOpenReport, navProps,
 }) {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', padding: '40px 20px' }}>
@@ -38,7 +38,7 @@ export default function MatchesView({
             <p style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)' }}>No matches yet</p>
             <p style={{ fontSize: '14px', marginTop: '8px' }}>Go discover some spirit animals!</p>
             <button
-              onClick={() => { setView('discover'); fetchDiscoverUsers(); }}
+              onClick={() => setView('discover')}
               style={{ marginTop: '20px', padding: '12px 28px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '10px', fontWeight: '600', cursor: 'pointer', fontSize: '15px' }}
             >
               Discover People

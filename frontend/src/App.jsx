@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { API_URL, WS_URL, fetchApi } from './utils';
 import { WS_RECONNECT_DELAY_MS } from './shared/constants';
-import ChatView from './components/ChatView';
 import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
 import LegalPage from './components/LegalPage';
@@ -10,6 +10,10 @@ import MatchesView from './components/MatchesView';
 import PasswordReset from './components/PasswordReset';
 import ProfileView from './components/ProfileView';
 import RegisterView from './components/RegisterView';
+import Splash from './components/Splash';
+import ChatRoute from './routes/ChatRoute';
+import RequireAuth from './routes/RequireAuth';
+import { PATHS, chatPath, pathForView, viewForPath } from './routes/paths';
 
 // Display-only starting value for the "N swipes left" counter.
 //
@@ -24,17 +28,36 @@ import RegisterView from './components/RegisterView';
 // UserOut so /api/auth/me reports it up front. See docs/GAPS.md #32.
 const FALLBACK_DAILY_SWIPE_LIMIT = 20;
 
-export default function HowlApp() {
-  // Read password-reset token from URL before any state is initialised.
-  // e.g. https://howl.app?token=abc123  →  open reset-password view directly.
-  const _urlResetToken = new URLSearchParams(window.location.search).get('token') || '';
-  const _urlVerifyToken = new URLSearchParams(window.location.search).get('verify') || '';
+/**
+ * Password-reset and verify-email links point at the *site root* with a query
+ * string — `app/services/email.py:24,44` builds `{frontend_url}?token=…` and
+ * `{frontend_url}?verify=…`. So the tokens have to be captured before anything
+ * rewrites the URL, and read once per mount rather than once per render: the
+ * effect below strips the query so the token never reaches browser history,
+ * after which a re-read would come back empty.
+ */
+function readUrlTokens() {
+  const params = new URLSearchParams(window.location.search);
+  return { reset: params.get('token') || '', verify: params.get('verify') || '' };
+}
 
-  const [view, setView] = useState(
-    // 'login' | 'register' | 'profile' | 'discover' | 'matches' | 'chat'
-    // | 'forgot-password' | 'reset-password' | 'privacy' | 'terms'
-    _urlResetToken ? 'reset-password' : 'login'
-  );
+export default function HowlApp() {
+  const [urlTokens] = useState(readUrlTokens);
+  const navigate = useNavigate();
+  // Not `location` — that name is already taken by the user's city, below.
+  const routerLocation = useLocation();
+
+  // The URL is now the authority for what renders. `view` is derived from it,
+  // and `setView` is a shim onto navigate() so the extracted view components
+  // can keep calling setView('matches') while they are converted.
+  const view = viewForPath(routerLocation.pathname);
+  const setView = useCallback((next) => navigate(pathForView(next)), [navigate]);
+
+  // True until the cookie session check settles. Without it a deep link to a
+  // protected route would bounce to /login before we knew whether there was a
+  // session — the old client had the milder version of the same bug, showing a
+  // flash of the login form to every returning user.
+  const [booting, setBooting] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -57,6 +80,9 @@ export default function HowlApp() {
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
   const [matches, setMatches] = useState([]);
+  // Whether the match list has completed a fetch at least once. `/chat/:matchId`
+  // needs to tell "not fetched yet" from "fetched, and that match isn't yours".
+  const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [matchesError, setMatchesError] = useState('');
   const [matchPopup, setMatchPopup] = useState(null);
@@ -95,7 +121,7 @@ export default function HowlApp() {
   const [deleteError, setDeleteError] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotDone, setForgotDone] = useState(false);
-  const [resetToken, setResetToken] = useState(_urlResetToken);
+  const [resetToken, setResetToken] = useState(urlTokens.reset);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [resetDone, setResetDone] = useState(false);
@@ -116,8 +142,10 @@ export default function HowlApp() {
     !!user?.bio &&
     !isStale;
 
-  // On mount, attempt to restore session via cookie — fetchProfile navigates to
-  // 'profile' on success or stays on 'login' silently on 401.
+  // On mount, attempt to restore the session from the cookie. It does not
+  // navigate: on a deep link to /discover, forcing /profile after the session
+  // check would defeat the whole point of having URLs. The index route and
+  // RequireAuth decide where an unrouted visit lands.
   useEffect(() => {
     fetchProfile();
   }, []);
@@ -199,29 +227,30 @@ export default function HowlApp() {
     };
   }, [view, currentMatch?.id]);
 
-  // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser history.
+  // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser
+  // history. `urlTokens` is stable (useState initialiser), so this runs once.
   useEffect(() => {
-    if (_urlResetToken || _urlVerifyToken) {
+    if (urlTokens.reset || urlTokens.verify) {
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [urlTokens]);
 
   // Process an email verification link clicked from the user's inbox.
   useEffect(() => {
-    if (!_urlVerifyToken) return;
+    if (!urlTokens.verify) return;
     (async () => {
       try {
         const res = await fetchApi(`${API_URL}/api/auth/verify-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: _urlVerifyToken }),
+          body: JSON.stringify({ token: urlTokens.verify }),
         });
         if (res.ok) {
           setUser(prev => prev ? { ...prev, is_email_verified: true } : prev);
         }
       } catch { /* ignore — the banner stays until the next profile fetch */ }
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [urlTokens]);
 
   const fetchProfile = async () => {
     try {
@@ -241,12 +270,12 @@ export default function HowlApp() {
         setEmailNotifications(data.email_notifications ?? true);
         setLocation(data.location || '');
         setBio(data.bio || '');
-        setView('profile');
         fetchAvatarStatus();
         fetchMatches();
       }
-      // 401 means no valid cookie — stay on login view silently
-    } catch { /* network error — stay on login */ }
+      // 401 means no valid cookie — stay signed out silently
+    } catch { /* network error — stay signed out */ }
+    finally { setBooting(false); }
   };
 
   const fetchAvatarStatus = async () => {
@@ -261,7 +290,10 @@ export default function HowlApp() {
           return data;
         });
       } else if (res.status === 401) {
-        setView('login');
+        // Clearing the user is what sends us to /login now — RequireAuth
+        // reacts to it. Previously this only swapped the view, leaving a stale
+        // user object behind that the profile screen would still render from.
+        setUser(null);
       }
     } catch (err) {
       console.error('Failed to fetch avatar status', err);
@@ -285,7 +317,9 @@ export default function HowlApp() {
         setName(data.user.name || '');
         setLocation(data.user.location || '');
         setBio(data.user.bio || '');
-        setView('profile');
+        // Land where they were headed if a deep link bounced them here
+        // (RequireAuth records it), otherwise the profile as before.
+        navigate(routerLocation.state?.from || PATHS.profile, { replace: true });
         fetchAvatarStatus();
         fetchMatches();
       } else {
@@ -432,7 +466,8 @@ export default function HowlApp() {
     setMessagesError('');
     setSendError('');
     setSwipeError('');
-    setView('login');
+    setMatchesLoaded(false);
+    navigate(PATHS.login, { replace: true });
   };
 
   const handleDeleteAccount = async () => {
@@ -455,9 +490,10 @@ export default function HowlApp() {
         setMatches([]);
         setMessages([]);
         setCurrentMatch(null);
+        setMatchesLoaded(false);
         setDeleteModalOpen(false);
         setDeleteConfirmText('');
-        setView('register');
+        navigate(PATHS.register, { replace: true });
       } else {
         const data = await res.json().catch(() => ({}));
         setDeleteError(data.detail || 'Deletion failed — please try again.');
@@ -516,7 +552,11 @@ export default function HowlApp() {
     }
   };
 
-  const loadMessages = async (matchId) => {
+  // useCallback with an empty dep list because the body closes over nothing but
+  // state setters (stable by contract) and module constants. That makes it a
+  // stable identity, which ChatRoute needs: it calls this from an effect, and an
+  // identity that changed every render would loop.
+  const loadMessages = useCallback(async (matchId) => {
     setMessagesLoading(true);
     setMessagesError('');
     try {
@@ -535,7 +575,7 @@ export default function HowlApp() {
     } finally {
       setMessagesLoading(false);
     }
-  };
+  }, []);
 
   const handleDeleteMessage = async (messageId) => {
     if (!currentMatch) return;
@@ -608,15 +648,27 @@ export default function HowlApp() {
     }
   };
 
-  const openChat = (match) => {
+  /**
+   * Bind the chat state to a match and load its history.
+   *
+   * Split from navigation on purpose: `/chat/:matchId` has to be openable cold
+   * (pasted link, refresh, notification), so ChatRoute calls this from an
+   * effect once it has resolved the id. `openChat` is the click path and does
+   * both.
+   */
+  const bindChat = useCallback((match) => {
     setTypingUser(null);
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     setCurrentMatch(match);
     setMessages([]);
     setMessagesError('');
     setSendError('');
-    setView('chat');
     loadMessages(match.id);
+  }, [loadMessages]);
+
+  const openChat = (match) => {
+    bindChat(match);
+    navigate(chatPath(match.id));
   };
 
   const fetchBlocks = async () => {
@@ -637,7 +689,7 @@ export default function HowlApp() {
     });
     setCurrentMatch(null);
     setMessages([]);
-    setView('matches');
+    navigate(PATHS.matches, { replace: true });
     fetchMatches();
   };
 
@@ -670,7 +722,7 @@ export default function HowlApp() {
     if (currentMatch?.other_user?.id === userId) {
       setCurrentMatch(null);
       setMessages([]);
-      setView('matches');
+      navigate(PATHS.matches, { replace: true });
       fetchMatches();
     }
     fetchBlocks();
@@ -787,7 +839,9 @@ export default function HowlApp() {
     } catch { /* silently revert on network error */ }
   };
 
-  const fetchDiscoverUsers = async () => {
+  // useCallback so the route-entry effects below can depend on them honestly.
+  // Both close over state setters and module constants only.
+  const fetchDiscoverUsers = useCallback(async () => {
     setDiscoverLoading(true);
     setDiscoverError('');
     try {
@@ -797,7 +851,7 @@ export default function HowlApp() {
       if (res.ok) {
         setDiscoverUsers(await res.json());
       } else if (res.status === 401) {
-        setView('login');
+        setUser(null);
         setError('Session expired. Please sign in again.');
       } else {
         setDiscoverError('Failed to load users');
@@ -807,9 +861,9 @@ export default function HowlApp() {
     } finally {
       setDiscoverLoading(false);
     }
-  };
+  }, []);
 
-  const fetchMatches = async () => {
+  const fetchMatches = useCallback(async () => {
     setMatchesLoading(true);
     setMatchesError('');
     try {
@@ -818,8 +872,9 @@ export default function HowlApp() {
       });
       if (res.ok) {
         setMatches(await res.json());
+        setMatchesLoaded(true);
       } else if (res.status === 401) {
-        setView('login');
+        setUser(null);
         setError('Session expired. Please sign in again.');
       } else {
         setMatchesError("Couldn't load your matches.");
@@ -829,7 +884,7 @@ export default function HowlApp() {
     } finally {
       setMatchesLoading(false);
     }
-  };
+  }, []);
 
   const handleSwipe = async (targetUserId, direction) => {
     setSwipeLoading(true);
@@ -918,58 +973,70 @@ export default function HowlApp() {
   );
 
   const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
-  const navProps = { view, setView, fetchDiscoverUsers, fetchMatches, handleLogout, totalUnread };
+  const navProps = { view, setView, handleLogout, totalUnread };
 
   const swipeLimitReached = !user?.is_premium && (user?.daily_swipes || 0) >= swipeLimit;
   const swipesRemaining = user?.is_premium ? null : Math.max(0, swipeLimit - (user?.daily_swipes || 0));
 
-  if (view === 'privacy' || view === 'terms') {
-    return <LegalPage view={view} setView={setView} />;
-  }
+  // ---------------------------------------------------------------------------
+  // Data on route entry.
+  //
+  // These lists used to be loaded by whichever button navigated to them — Nav's
+  // tab, the match popup's "View Matches", the empty state's "Discover People".
+  // With real URLs that is no longer sufficient: /discover and /matches can be
+  // entered by a pasted link, a refresh or the back button, none of which press
+  // a button. Loading is now a property of being on the route.
+  //
+  // Keyed on the user *id*, not the user object: `setUser` runs on every swipe
+  // (it increments daily_swipes), and depending on identity would refetch the
+  // whole list each time.
+  // ---------------------------------------------------------------------------
+  const userId = user?.id ?? null;
 
-  if (view === 'forgot-password' || view === 'reset-password') {
-    return (
-      <PasswordReset
-        view={view} setView={setView}
-        forgotEmail={forgotEmail} setForgotEmail={setForgotEmail}
-        forgotDone={forgotDone} error={error} loading={loading}
-        handleForgotPassword={handleForgotPassword}
-        resetToken={resetToken} setResetToken={setResetToken}
-        newPassword={newPassword} setNewPassword={setNewPassword}
-        confirmPassword={confirmPassword} setConfirmPassword={setConfirmPassword}
-        resetDone={resetDone} setResetDone={setResetDone}
-        resetError={resetError} handleResetPassword={handleResetPassword}
-      />
-    );
-  }
+  useEffect(() => {
+    if (userId && view === 'discover') fetchDiscoverUsers();
+  }, [userId, view, fetchDiscoverUsers]);
 
-  if (view === 'register') {
-    return (
-      <RegisterView
-        email={email} setEmail={setEmail}
-        password={password} setPassword={setPassword}
-        error={error} loading={loading}
-        handleRegister={handleRegister} setView={setView}
-      />
-    );
-  }
+  useEffect(() => {
+    if (userId && view === 'matches') fetchMatches();
+  }, [userId, view, fetchMatches]);
 
-  if (view === 'login') {
-    return (
-      <LoginView
-        email={email} setEmail={setEmail}
-        password={password} setPassword={setPassword}
-        error={error} loading={loading}
-        handleLogin={handleLogin} setView={setView}
-        setForgotEmail={setForgotEmail}
-        setForgotDone={setForgotDone}
-        setError={setError}
-      />
-    );
-  }
+  const passwordResetEl = (
+    <PasswordReset
+      view={view} setView={setView}
+      forgotEmail={forgotEmail} setForgotEmail={setForgotEmail}
+      forgotDone={forgotDone} error={error} loading={loading}
+      handleForgotPassword={handleForgotPassword}
+      resetToken={resetToken} setResetToken={setResetToken}
+      newPassword={newPassword} setNewPassword={setNewPassword}
+      confirmPassword={confirmPassword} setConfirmPassword={setConfirmPassword}
+      resetDone={resetDone} setResetDone={setResetDone}
+      resetError={resetError} handleResetPassword={handleResetPassword}
+    />
+  );
 
-  if (view === 'discover') {
-    return (
+  const registerEl = (
+    <RegisterView
+      email={email} setEmail={setEmail}
+      password={password} setPassword={setPassword}
+      error={error} loading={loading}
+      handleRegister={handleRegister} setView={setView}
+    />
+  );
+
+  const loginEl = (
+    <LoginView
+      email={email} setEmail={setEmail}
+      password={password} setPassword={setPassword}
+      error={error} loading={loading}
+      handleLogin={handleLogin} setView={setView}
+      setForgotEmail={setForgotEmail}
+      setForgotDone={setForgotDone}
+      setError={setError}
+    />
+  );
+
+  const discoverEl = (
       <>
         <DiscoverView
           discoverUsers={discoverUsers}
@@ -993,16 +1060,13 @@ export default function HowlApp() {
           handleOpenReport={handleOpenReport}
           fetchDiscoverUsers={fetchDiscoverUsers}
           setView={setView}
-          fetchMatches={fetchMatches}
           navProps={navProps}
         />
         {reportModalEl}
       </>
-    );
-  }
+  );
 
-  if (view === 'matches') {
-    return (
+  const matchesEl = (
       <>
         <MatchesView
           matches={matches}
@@ -1012,50 +1076,49 @@ export default function HowlApp() {
           openChat={openChat}
           user={user}
           setView={setView}
-          fetchDiscoverUsers={fetchDiscoverUsers}
           handleOpenReport={handleOpenReport}
           navProps={navProps}
         />
         {reportModalEl}
       </>
-    );
-  }
+  );
 
-  if (view === 'chat' && currentMatch) {
-    return (
+  const chatEl = (
       <>
-        <ChatView
+        <ChatRoute
+          matches={matches}
+          matchesLoaded={matchesLoaded}
           currentMatch={currentMatch}
-          messages={messages}
-          setMessages={setMessages}
-          messagesLoading={messagesLoading}
-          messagesError={messagesError}
-          messageInput={messageInput}
-          setMessageInput={setMessageInput}
-          sending={sending}
-          sendError={sendError}
-          sendMessage={sendMessage}
-          loadMessages={loadMessages}
-          hasMoreMessages={hasMoreMessages}
-          loadingMore={loadingMore}
-          loadMoreMessages={loadMoreMessages}
-          handleDeleteMessage={handleDeleteMessage}
-          typingUser={typingUser}
-          sendTypingEvent={sendTypingEvent}
-          handleUnmatch={handleUnmatch}
-          handleBlock={handleBlock}
-          handleBlockAndReport={handleBlockAndReport}
-          handleOpenReport={handleOpenReport}
-          setView={setView}
-          fetchMatches={fetchMatches}
+          onOpen={bindChat}
+          chatProps={{
+            messages,
+            setMessages,
+            messagesLoading,
+            messagesError,
+            messageInput,
+            setMessageInput,
+            sending,
+            sendError,
+            sendMessage,
+            loadMessages,
+            hasMoreMessages,
+            loadingMore,
+            loadMoreMessages,
+            handleDeleteMessage,
+            typingUser,
+            sendTypingEvent,
+            handleUnmatch,
+            handleBlock,
+            handleBlockAndReport,
+            handleOpenReport,
+            setView,
+          }}
         />
         {reportModalEl}
       </>
-    );
-  }
+  );
 
-  // Default: profile view
-  return (
+  const profileEl = (
     <>
       <ProfileView
         user={user}
@@ -1090,5 +1153,43 @@ export default function HowlApp() {
       />
       {reportModalEl}
     </>
+  );
+
+  const protect = (element) => (
+    <RequireAuth user={user} booting={booting}>{element}</RequireAuth>
+  );
+
+  // A password-reset link lands on `/?token=…`; send it to the screen that can
+  // use it. The token itself is already in state and has been stripped from the
+  // URL, so it is not carried through the redirect.
+  const indexEl = urlTokens.reset
+    ? <Navigate to={PATHS.resetPassword} replace />
+    : booting
+      ? <Splash />
+      : <Navigate to={user ? PATHS.profile : PATHS.login} replace />;
+
+  return (
+    <Routes>
+      <Route path="/" element={indexEl} />
+
+      {/* Public, and deliberately stable: the mobile client deep-links to
+          these two exact paths for the canonical legal text (GAPS #35). */}
+      <Route path={PATHS.privacy} element={<LegalPage view="privacy" setView={setView} />} />
+      <Route path={PATHS.terms} element={<LegalPage view="terms" setView={setView} />} />
+
+      <Route path={PATHS.login} element={user ? <Navigate to={PATHS.profile} replace /> : loginEl} />
+      <Route path={PATHS.register} element={registerEl} />
+      <Route path={PATHS.forgotPassword} element={passwordResetEl} />
+      <Route path={PATHS.resetPassword} element={passwordResetEl} />
+
+      <Route path={PATHS.discover} element={protect(discoverEl)} />
+      <Route path={PATHS.matches} element={protect(matchesEl)} />
+      <Route path={PATHS.chat} element={protect(chatEl)} />
+      <Route path={PATHS.profile} element={protect(profileEl)} />
+
+      {/* Unknown path: hand it to the index route, which knows whether there is
+          a session and therefore whether "home" is /profile or /login. */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
