@@ -4,6 +4,7 @@ import {
   getRefreshToken,
   saveAccessToken,
 } from '../auth/storage';
+import { isUnreplacedEasPlaceholder } from '../config';
 
 // ── Base URL ──────────────────────────────────────────────────────────────────
 
@@ -19,10 +20,26 @@ const DEV_FALLBACK_API_URL = 'http://localhost:8001';
  * opaque network error. If `EXPO_PUBLIC_API_URL` is missing outside dev we
  * return an empty base URL and `api()` reports a configuration error instead,
  * which is diagnosable. `eas.json` sets the variable for every build profile.
+ *
+ * The same posture applies to an *unreplaced* eas.json placeholder (see
+ * docs/GAPS.md #35: the real Railway hostnames aren't known yet, so the
+ * preview/production profiles ship a `.invalid` sentinel). A build made
+ * without fixing that must not silently point at a hostname that can never
+ * resolve — it should report the same diagnosable configuration error as a
+ * genuinely missing value.
  */
 function resolveApiUrl(): string {
   const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, '');
+  if (configured) {
+    if (!isUnreplacedEasPlaceholder(configured)) return configured.replace(/\/+$/, '');
+    // Unconditional, not __DEV__-gated: this is a standing build
+    // misconfiguration, not a transient failure, and there is no crash
+    // reporter — the console is the only record of why every request failed.
+    console.warn(
+      `[api] EXPO_PUBLIC_API_URL is still the eas.json placeholder (${configured}) — ` +
+      'replace it with the real Railway host before shipping this build profile.',
+    );
+  }
   return __DEV__ ? DEV_FALLBACK_API_URL : '';
 }
 
