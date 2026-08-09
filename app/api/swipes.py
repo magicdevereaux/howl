@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from app.schemas.swipe import (
     SwipeOut,
     UndoSwipeOut,
 )
+from app.services.blocks import blocked_between
 from app.services.task_queue import enqueue
 from app.tasks.auto_match import auto_match_demo_user
 from app.tasks.notify import notify_new_match
@@ -216,6 +217,14 @@ def record_swipe(
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
+    # GAPS #52: a blocked user could still `like` the person who blocked them.
+    # No match forms while the block stands (the mutual-like check below never
+    # sees a reciprocal swipe from the blocker), but on unblock the target's
+    # discover feed would show them again with this like already banked — one
+    # tap produces an instant match. 404, not 403: don't confirm the block.
+    if blocked_between(db, current_user.id, body.target_user_id):
+        raise HTTPException(status_code=404, detail="User not found.")
+
     # The swipe row is the dedup gate: if it inserts, this request owns the swipe.
     _insert_swipe(db, current_user.id, body.target_user_id, body.direction)
 
@@ -283,6 +292,16 @@ def record_swipe(
 
 @router.delete("/last", response_model=UndoSwipeOut, status_code=200)
 def undo_last_swipe(
+    swipe_id: int | None = Query(
+        default=None,
+        description=(
+            "The id of the swipe the client believes it is undoing. Optional "
+            "and backwards compatible: omit it to get the pre-#50 behaviour "
+            "(delete whichever swipe is newest). When present, it must match "
+            "the swipe that would actually be deleted or the request 409s "
+            "without deleting anything."
+        ),
+    ),
     current_user: User = Depends(require_verified_email),
     db: Session = Depends(get_db),
 ) -> UndoSwipeOut:
@@ -298,6 +317,16 @@ def undo_last_swipe(
 
     Returns the deleted swipe's target user so the frontend can push them
     back to the front of the discover stack.
+
+    GAPS #50: a client can arm "Undo" optimistically before its POST
+    /api/swipes response comes back, and if that POST actually failed there is
+    no new swipe row -- so an undo call would silently delete the *previous*,
+    successful swipe instead (and cascade away its match and messages if it
+    had one). Passing `swipe_id` lets a client assert which swipe it means to
+    undo; a mismatch 409s instead of deleting a different swipe out from under
+    the caller. The client fix (checking the POST's response before arming
+    Undo) makes the race less likely; this makes it safe even when the client
+    gets it wrong.
     """
     # Ordered by id, not created_at: created_at is a Python-side default with
     # no server_default, so two swipes can share a timestamp (or arrive out of
@@ -316,14 +345,20 @@ def undo_last_swipe(
     if last_swipe is None:
         raise HTTPException(status_code=404, detail="No swipes to undo.")
 
-    swipe_id, target_user_id, direction = last_swipe
+    last_swipe_id, target_user_id, direction = last_swipe
+
+    if swipe_id is not None and swipe_id != last_swipe_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This is not your most recent swipe; refusing to undo it.",
+        )
 
     target = db.query(User).filter(User.id == target_user_id).first()
 
     # Conditional delete: rowcount decides.  Two concurrent undos select the
     # same row, but only one deletes it — the loser gets a clean 404 instead of
     # a StaleDataError, and cannot go on to delete a second undo's match.
-    if db.query(Swipe).filter(Swipe.id == swipe_id).delete(synchronize_session=False) == 0:
+    if db.query(Swipe).filter(Swipe.id == last_swipe_id).delete(synchronize_session=False) == 0:
         db.rollback()
         raise HTTPException(status_code=404, detail="No swipes to undo.")
 

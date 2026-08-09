@@ -9,6 +9,7 @@ from app.dependencies import email_verification_error, get_current_user
 from app.models.user import AvatarStatus, User
 from app.schemas.user import ProfileUpdate, PublicProfileOut, UserOut
 from app.services.avatar_status import set_avatar_status
+from app.services.blocks import blocked_between
 from app.services.image_generation import delete_avatar
 from app.services.task_queue import enqueue
 from app.tasks.avatar import generate_avatar
@@ -179,8 +180,15 @@ def get_profile(
 
     Requires authentication and returns a narrow schema — this endpoint is
     enumerable by user id, so it must never expose email or account state.
+
+    GAPS #52: also 404s when either party has blocked the other. A block's
+    entire purpose is "this person should not be able to see me" — returning
+    403 here would confirm the block exists, so this collapses into the same
+    "not found" a nonexistent id gets.
     """
     user = db.get(User, user_id)
     if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if blocked_between(db, current_user.id, user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return user

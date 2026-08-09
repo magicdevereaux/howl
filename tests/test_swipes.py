@@ -1,6 +1,7 @@
 """Tests for POST /api/swipes, GET /api/users/discover, GET /api/users/matches."""
 
 
+from app.models.block import Block
 from app.models.match import Match
 from app.models.swipe import Swipe, SwipeDirection
 from app.models.user import AvatarStatus, User
@@ -83,6 +84,74 @@ def test_swipe_duplicate_returns_409(client, db, auth_headers, test_user):
         json={"target_user_id": other.id, "direction": "like"},
     )
     assert res.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# POST /api/swipes — blocks (GAPS #52)
+#
+# A blocked user could otherwise still `like` the person who blocked them; the
+# swipe row would sit there and, on unblock, resolve into an instant match the
+# moment the blocker's discover feed shows them again. 404, not 403 — the
+# endpoint must not confirm a block exists.
+# ---------------------------------------------------------------------------
+
+def test_swipe_blocked_by_target_returns_404(client, db, auth_headers, test_user):
+    other = _make_user(db, email="blocker@howl.app")
+    db.add(Block(blocker_id=other.id, blocked_id=test_user.id))
+    db.commit()
+
+    res = client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": other.id, "direction": "like"},
+    )
+    assert res.status_code == 404
+
+
+def test_swipe_on_user_i_blocked_returns_404(client, db, auth_headers, test_user):
+    other = _make_user(db, email="blocked_target@howl.app")
+    db.add(Block(blocker_id=test_user.id, blocked_id=other.id))
+    db.commit()
+
+    res = client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": other.id, "direction": "like"},
+    )
+    assert res.status_code == 404
+
+
+def test_swipe_blocked_does_not_persist_a_swipe_row(client, db, auth_headers, test_user):
+    """The whole point: no row means no like banked for an instant match on unblock."""
+    other = _make_user(db, email="noswiperow@howl.app")
+    db.add(Block(blocker_id=other.id, blocked_id=test_user.id))
+    db.commit()
+
+    client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": other.id, "direction": "like"},
+    )
+
+    assert db.query(Swipe).filter(
+        Swipe.user_id == test_user.id, Swipe.target_user_id == other.id
+    ).count() == 0
+
+
+def test_swipe_after_unblock_works_normally(client, db, auth_headers, test_user):
+    other = _make_user(db, email="unblocked_target@howl.app")
+    block = Block(blocker_id=test_user.id, blocked_id=other.id)
+    db.add(block)
+    db.commit()
+    db.delete(block)
+    db.commit()
+
+    res = client.post(
+        "/api/swipes",
+        headers=auth_headers,
+        json={"target_user_id": other.id, "direction": "like"},
+    )
+    assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -449,3 +518,64 @@ def test_undo_restores_user_to_discover_queue(client, db, auth_headers, test_use
     # Back in discover after undo
     after = [u["id"] for u in client.get("/api/users/discover", headers=auth_headers).json()]
     assert other.id in after
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/swipes/last?swipe_id=  (GAPS #50)
+#
+# A client can arm "Undo" before checking its POST /api/swipes response. If
+# that POST failed, there is no new swipe row, so an id-less undo would delete
+# the *previous*, successful swipe (and cascade away its match) instead. The
+# optional `swipe_id` query param lets the client assert which swipe it means
+# to undo; a mismatch 409s and deletes nothing.
+# ---------------------------------------------------------------------------
+
+def test_undo_without_swipe_id_is_unchanged(client, db, auth_headers, test_user):
+    """Omitting swipe_id keeps the pre-#50 behaviour exactly."""
+    other = _make_user(db, email="undo_no_id@howl.app", animal="fox")
+    swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+    swipe_id = swipe.id  # captured before delete: the row (and this instance) won't survive it
+
+    res = client.delete("/api/swipes/last", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Swipe).filter(Swipe.id == swipe_id).first() is None
+
+
+def test_undo_with_matching_swipe_id_deletes_as_before(client, db, auth_headers, test_user):
+    other = _make_user(db, email="undo_match_id@howl.app", animal="owl")
+    swipe = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.pass_)
+    swipe_id = swipe.id  # captured before delete: the row (and this instance) won't survive it
+
+    res = client.delete(f"/api/swipes/last?swipe_id={swipe_id}", headers=auth_headers)
+    assert res.status_code == 200
+    assert db.query(Swipe).filter(Swipe.id == swipe_id).first() is None
+
+
+def test_undo_with_stale_swipe_id_returns_409_and_deletes_nothing(client, db, auth_headers, test_user):
+    """The case #50 exists for: a failed POST armed Undo for a swipe id that
+    never landed, and the user's real most-recent swipe (possibly matched) is
+    a different row. The stale id must not delete it."""
+    other = _make_user(db, email="undo_stale_id@howl.app", animal="bear")
+    real_last = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+    never_landed_id = real_last.id + 9999
+
+    res = client.delete(f"/api/swipes/last?swipe_id={never_landed_id}", headers=auth_headers)
+    assert res.status_code == 409
+    # Nothing was deleted
+    assert db.query(Swipe).filter(Swipe.id == real_last.id).first() is not None
+
+
+def test_undo_stale_swipe_id_does_not_delete_the_match(client, db, auth_headers, test_user):
+    """The scenario from the orchestrator's brief: a stale id must not delete a
+    real match and cascade away its messages."""
+    other = _make_user(db, email="undo_stale_match@howl.app", animal="wolf")
+    real_last = _make_swipe(db, user_id=test_user.id, target_user_id=other.id, direction=SwipeDirection.like)
+    _make_swipe(db, user_id=other.id, target_user_id=test_user.id, direction=SwipeDirection.like)
+    match = Match(user1_id=min(test_user.id, other.id), user2_id=max(test_user.id, other.id))
+    db.add(match)
+    db.commit()
+
+    res = client.delete(f"/api/swipes/last?swipe_id={real_last.id + 1}", headers=auth_headers)
+    assert res.status_code == 409
+    assert db.query(Match).filter(Match.id == match.id).first() is not None
+    assert db.query(Swipe).filter(Swipe.id == real_last.id).first() is not None
