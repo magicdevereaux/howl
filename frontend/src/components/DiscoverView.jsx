@@ -1,17 +1,28 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
 import Nav from './Nav';
 import PreferenceFilters from './PreferenceFilters';
+import { useDiscover } from '../contexts/DiscoverContext';
+import { useReport } from '../contexts/ReportContext';
+import { useSession } from '../contexts/SessionContext';
+import { PATHS } from '../routes/paths';
 import { animalEmoji, avatarUrl } from '../utils';
 
-export default function DiscoverView({
-  discoverUsers, discoverLoading, discoverError,
-  swipeLoading, swipeError, canUndo, undoMessage,
-  matchPopup, setMatchPopup, avatarStatus,
-  preferenceFilters, handleSaveFilters,
-  swipeLimitReached, swipesRemaining, swipesUsed, limitMessage, limitResetsAt,
-  handleSwipe, handleUndo, handleBlock, handleOpenReport, fetchDiscoverUsers,
-  setView, navProps,
-}) {
+// Zero props, down from twenty-four. See contexts/SessionContext.jsx.
+export default function DiscoverView() {
+  const navigate = useNavigate();
+  const { openReport } = useReport();
+  const { avatarStatus } = useSession();
+  const {
+    discoverUsers, discoverLoading, discoverError, fetchDiscoverUsers,
+    swipeLoading, swipeError, canUndo, undoMessage,
+    matchPopup, setMatchPopup,
+    preferenceFilters, handleSaveFilters,
+    swipeLimitReached, swipesRemaining, swipesUsed, limitMessage, limitResetsAt,
+    handleSwipe, handleUndo, handleBlock,
+  } = useDiscover();
+
   const [blockConfirm, setBlockConfirm] = useState(false);
 
   const currentCard = discoverUsers[0] || null;
@@ -31,7 +42,7 @@ export default function DiscoverView({
   return (
     <div style={{ minHeight: '100vh', background: 'var(--gradient-main)', padding: '40px 20px' }}>
       <div style={{ maxWidth: '520px', margin: '0 auto' }}>
-        <Nav {...navProps} />
+        <Nav />
 
         <PreferenceFilters
           key={savedFiltersKey}
@@ -223,7 +234,7 @@ export default function DiscoverView({
             </div>
             <div style={{ textAlign: 'center', marginTop: '6px' }}>
               <button
-                onClick={() => handleOpenReport(currentCard.id, currentCard.name)}
+                onClick={() => openReport(currentCard.id, currentCard.name)}
                 style={{ background: 'none', border: 'none', color: 'var(--text-disabled)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline', opacity: 0.6 }}
               >
                 Report this person
@@ -254,7 +265,7 @@ export default function DiscoverView({
               Keep Swiping
             </button>
             <button
-              onClick={() => { setMatchPopup(null); setView('matches'); }}
+              onClick={() => { setMatchPopup(null); navigate(PATHS.matches); }}
               style={{ width: '100%', marginTop: '10px', padding: '12px', background: 'transparent', color: 'var(--gold)', border: '2px solid var(--gold)', borderRadius: '10px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}
             >
               View Matches

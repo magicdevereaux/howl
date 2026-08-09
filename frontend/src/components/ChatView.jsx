@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
 import { animalEmoji, avatarUrl } from '../utils';
 import { apiFetch } from '../api/client';
+import { useChat } from '../contexts/ChatContext';
+import { useReport } from '../contexts/ReportContext';
+import { PATHS } from '../routes/paths';
 import MessageComposer from './MessageComposer';
 import MessageList from './MessageList';
 
@@ -13,16 +18,17 @@ const REPORT_REASONS = [
   { value: 'other',                 label: 'Other' },
 ];
 
-export default function ChatView({
-  currentMatch, messages,
-  messagesLoading, messagesError,
-  sending, sendError, sendMessage, loadMessages,
-  hasMoreMessages, loadingMore, loadMoreMessages,
-  handleDeleteMessage,
-  typingUser, sendTypingEvent,
-  handleUnmatch, handleBlock, handleBlockAndReport, handleOpenReport,
-  setView,
-}) {
+// Zero props, down from twenty-one. See contexts/SessionContext.jsx.
+export default function ChatView() {
+  const navigate = useNavigate();
+  const { openReport } = useReport();
+  const {
+    currentMatch, messages, messagesLoading, messagesError, loadMessages,
+    sending, sendError, sendMessage, sendTypingEvent,
+    hasMoreMessages, loadingMore, loadMoreMessages, handleDeleteMessage,
+    typingUser, handleUnmatch, handleBlock, handleBlockAndReport,
+  } = useChat();
+
   const other = currentMatch.other_user;
   const messagesEndRef = useRef(null);
   const scrollContainerRef = useRef(null);
@@ -75,7 +81,7 @@ export default function ChatView({
       {/* Chat header */}
       <div style={{ background: 'rgba(0,0,0,0.4)', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
         <button
-          onClick={() => setView('matches')}
+          onClick={() => navigate(PATHS.matches)}
           style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
         >
           ← Matches
@@ -182,7 +188,7 @@ export default function ChatView({
             otherName={other.name}
             otherId={other.id}
             onDelete={handleDeleteMessage}
-            onReport={handleOpenReport}
+            onReport={openReport}
           />
         )}
         <div ref={messagesEndRef} />
@@ -413,7 +419,7 @@ export default function ChatView({
 
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                  onClick={() => { setShowProfileModal(false); handleOpenReport(other.id, other.name); }}
+                  onClick={() => { setShowProfileModal(false); openReport(other.id, other.name); }}
                   style={{ flex: 1, padding: '10px', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
                   onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
                   onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'}

@@ -26,7 +26,6 @@ export default function ChatRoute({
   matchesLoaded,
   currentMatch,
   onOpen,
-  chatProps,
 }) {
   const { matchId } = useParams();
   const id = Number(matchId);
@@ -46,5 +45,7 @@ export default function ChatRoute({
 
   if (!isOpen) return <Splash label="Opening conversation…" />;
 
-  return <ChatView currentMatch={currentMatch} {...chatProps} />;
+  // ChatView takes no props — it reads the conversation from ChatContext, which
+  // App provides one level up.
+  return <ChatView />;
 }

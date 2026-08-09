@@ -10,8 +10,11 @@ import {
 } from './api/client';
 import { WS_RECONNECT_DELAY_MS } from './shared/constants';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
+import { ChatProvider } from './contexts/ChatContext';
+import { DiscoverProvider } from './contexts/DiscoverContext';
 import { EmailVerificationProvider } from './contexts/EmailVerificationContext';
-import ReportModal from './components/ReportModal';
+import { ReportProvider } from './contexts/ReportContext';
+import { SessionProvider } from './contexts/SessionContext';
 import DiscoverView from './components/DiscoverView';
 import LegalPage from './components/LegalPage';
 import LoginView from './components/LoginView';
@@ -121,11 +124,10 @@ export default function HowlApp() {
   // first connect (history was just loaded) from a reconnect (it may be stale).
   const hasConnectedRef = useRef(false);
   const [emailNotifications, setEmailNotifications] = useState(true);
-  const [reportModal, setReportModal] = useState(null); // null | { userId, name, messageId? }
-  const [reportSubmitting, setReportSubmitting] = useState(false);
-  const [reportError, setReportError] = useState('');
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  // Reporting moved out entirely — three useStates and two handlers now live in
+  // ReportProvider, which also renders the dialog. The delete-account modal's
+  // open flag and confirmation text moved into ProfileView, the only screen that
+  // opens it.
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
@@ -586,8 +588,8 @@ export default function HowlApp() {
         setMessages([]);
         setCurrentMatch(null);
         setMatchesLoaded(false);
-        setDeleteModalOpen(false);
-        setDeleteConfirmText('');
+        // The dialog's open flag and confirmation text belong to ProfileView
+        // now, and navigating away unmounts it — so there is nothing to reset.
         navigate(PATHS.register, { replace: true });
       } else {
         const data = await res.json().catch(() => ({}));
@@ -759,16 +761,25 @@ export default function HowlApp() {
     navigate(chatPath(match.id));
   };
 
-  const fetchBlocks = async () => {
+  // useCallback, and load-bearing: ProfileView calls this from an effect that
+  // lists it as a dependency. As a plain function it was a new identity every
+  // render, so the effect re-ran, set state, re-rendered, and re-ran — an
+  // infinite loop. That is exactly the trap the DiscoverView filter effect fell
+  // into, and the reason the eslint-disable that used to sit on ProfileView's
+  // effect was hiding a real hazard rather than a false positive.
+  const fetchBlocks = useCallback(async () => {
     setBlocksLoading(true);
     try {
       const res = await apiFetch(`/api/blocks`, {
 
       });
       if (res.ok) setBlocks(await res.json());
-    } catch { /* ignore */ }
-    finally { setBlocksLoading(false); }
-  };
+    } catch (err) {
+      console.error('Failed to load blocked users', err);
+    } finally {
+      setBlocksLoading(false);
+    }
+  }, []);
 
   const handleUnmatch = async (matchId) => {
     await apiFetch(`/api/matches/${matchId}`, {
@@ -864,40 +875,6 @@ export default function HowlApp() {
     });
   };
 
-  // Also a memoized MessageList prop — see handleDeleteMessage.
-  const handleOpenReport = useCallback((userId, name, messageId = undefined) => {
-    setReportError('');
-    setReportModal({ userId, name, messageId });
-  }, []);
-
-  const handleSubmitReport = async (reason, notes) => {
-    setReportSubmitting(true);
-    setReportError('');
-    try {
-      const body = {
-        reported_user_id: reportModal.userId,
-        reason,
-        ...(notes ? { notes } : {}),
-        ...(reportModal.messageId != null ? { message_id: reportModal.messageId } : {}),
-      };
-      const res = await apiFetch(`/api/reports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        setReportModal(null);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setReportError(data.detail || 'Submission failed — please try again.');
-      }
-    } catch {
-      setReportError('Network error — please try again.');
-    } finally {
-      setReportSubmitting(false);
-    }
-  };
 
   const handleSaveFilters = async ({ lookingFor: lf, gender: g, sexuality: s, agePrefMin: amin, agePrefMax: amax }) => {
     setLookingFor(lf);
@@ -1010,40 +987,11 @@ export default function HowlApp() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Routing
-  // ---------------------------------------------------------------------------
-
-  // Declared here — before any conditional returns — to avoid the TDZ.
-  // const bindings are in the temporal dead zone until their declaration
-  // is reached, so any early return above this point would throw if it
-  // referenced reportModalEl.
-  const reportModalEl = (
-    <ReportModal
-      target={reportModal ? { name: reportModal.name, messageId: reportModal.messageId } : null}
-      onClose={() => setReportModal(null)}
-      onSubmit={handleSubmitReport}
-      submitting={reportSubmitting}
-      error={reportError}
-    />
-  );
-
-  const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
-  const navProps = { view, setView, handleLogout, totalUnread };
-
-  // "Out of swipes" is now something the server has said, not something the
-  // client worked out. Premium accounts are unlimited and never see either.
-  const swipeLimitReached = !user?.is_premium && !!swipeQuota;
-  const swipesRemaining =
-    user?.is_premium || !swipeQuota?.limit
-      ? null
-      : Math.max(0, swipeQuota.limit - (user?.daily_swipes || 0));
-  const swipesUsed = user?.is_premium ? null : user?.daily_swipes || 0;
 
   // ---------------------------------------------------------------------------
   // Data on route entry.
   //
-  // These lists used to be loaded by whichever button navigated to them — Nav's
+  // These lists used to be loaded by whichever button navigated to them â€” Nav's
   // tab, the match popup's "View Matches", the empty state's "Discover People".
   // With real URLs that is no longer sufficient: /discover and /matches can be
   // entered by a pasted link, a refresh or the back button, none of which press
@@ -1063,6 +1011,76 @@ export default function HowlApp() {
     if (userId && view === 'matches') fetchMatches();
   }, [userId, view, fetchMatches]);
 
+  // ---------------------------------------------------------------------------
+  // Context values.
+  //
+  // This is what replaced the prop drilling GAPS #33 describes: ProfileView took
+  // 24 props, DiscoverView 24 and ChatView 21, nearly all of them threaded from
+  // here because here is where the state lives. All four screens now take none.
+  //
+  // Three values rather than one, split by what changes together: a swipe should
+  // not invalidate the value the chat reads, and a message arriving should not
+  // invalidate the profile's. See contexts/SessionContext.jsx for the note on
+  // why these are plain objects rather than useMemo'd.
+  // ---------------------------------------------------------------------------
+  const totalUnread = matches.reduce((sum, m) => sum + (m.unread_count || 0), 0);
+
+  const session = {
+    user,
+    avatarStatus,
+    isStale,
+    isGenerating,
+    name, age, location, bio,
+    error, loading, copied,
+    emailNotifications,
+    matches, matchesLoading, matchesError, totalUnread,
+    blocks, blocksLoading,
+    deleteLoading, deleteError,
+    fetchMatches,
+    openChat,
+    logout: handleLogout,
+    handleSaveProfile,
+    handleRegenerate,
+    handleCopyAnimal,
+    handleToggleNotifications,
+    handleDeleteAccount,
+    setDeleteError,
+    fetchBlocks,
+    handleUnblock,
+  };
+
+  const discover = {
+    discoverUsers, discoverLoading, discoverError, fetchDiscoverUsers,
+    swipeLoading, swipeError, canUndo, undoMessage,
+    matchPopup, setMatchPopup,
+    preferenceFilters: { lookingFor, gender, sexuality, agePrefMin, agePrefMax },
+    handleSaveFilters,
+    // "Out of swipes" is now something the server has said, not something the
+    // client worked out. Premium accounts are unlimited and never see either.
+    swipeLimitReached: !user?.is_premium && !!swipeQuota,
+    swipesRemaining:
+      user?.is_premium || !swipeQuota?.limit
+        ? null
+        : Math.max(0, swipeQuota.limit - (user?.daily_swipes || 0)),
+    swipesUsed: user?.is_premium ? null : user?.daily_swipes || 0,
+    limitMessage: swipeQuota?.message,
+    limitResetsAt: swipeQuota?.resetsAt,
+    handleSwipe, handleUndo, handleBlock,
+  };
+
+  const chat = {
+    currentMatch,
+    messages, messagesLoading, messagesError, loadMessages,
+    sending, sendError, sendMessage, sendTypingEvent,
+    hasMoreMessages, loadingMore, loadMoreMessages, handleDeleteMessage,
+    typingUser,
+    handleUnmatch, handleBlock, handleBlockAndReport,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Route table â€” see src/routes/paths.js
+  // ---------------------------------------------------------------------------
+
   const passwordResetEl = (
     <PasswordReset
       view={view} setView={setView}
@@ -1077,150 +1095,15 @@ export default function HowlApp() {
     />
   );
 
-  const registerEl = (
-    <RegisterView
-      email={email} setEmail={setEmail}
-      password={password} setPassword={setPassword}
-      error={error} loading={loading}
-      handleRegister={handleRegister} setView={setView}
-    />
-  );
-
-  const loginEl = (
-    <LoginView
-      email={email} setEmail={setEmail}
-      password={password} setPassword={setPassword}
-      error={error} loading={loading}
-      handleLogin={handleLogin} setView={setView}
-      setForgotEmail={setForgotEmail}
-      setForgotDone={setForgotDone}
-      setError={setError}
-    />
-  );
-
-  const discoverEl = (
-      <>
-        <DiscoverView
-          discoverUsers={discoverUsers}
-          discoverLoading={discoverLoading}
-          discoverError={discoverError}
-          swipeLoading={swipeLoading}
-          swipeError={swipeError}
-          canUndo={canUndo}
-          undoMessage={undoMessage}
-          matchPopup={matchPopup}
-          setMatchPopup={setMatchPopup}
-          avatarStatus={avatarStatus}
-          preferenceFilters={{ lookingFor, gender, sexuality, agePrefMin, agePrefMax }}
-          handleSaveFilters={handleSaveFilters}
-          swipeLimitReached={swipeLimitReached}
-          swipesRemaining={swipesRemaining}
-          swipesUsed={swipesUsed}
-          limitMessage={swipeQuota?.message}
-          limitResetsAt={swipeQuota?.resetsAt}
-          handleSwipe={handleSwipe}
-          handleUndo={handleUndo}
-          handleBlock={handleBlock}
-          handleOpenReport={handleOpenReport}
-          fetchDiscoverUsers={fetchDiscoverUsers}
-          setView={setView}
-          navProps={navProps}
-        />
-        {reportModalEl}
-      </>
-  );
-
-  const matchesEl = (
-      <>
-        <MatchesView
-          matches={matches}
-          matchesLoading={matchesLoading}
-          matchesError={matchesError}
-          fetchMatches={fetchMatches}
-          openChat={openChat}
-          user={user}
-          setView={setView}
-          handleOpenReport={handleOpenReport}
-          navProps={navProps}
-        />
-        {reportModalEl}
-      </>
-  );
-
-  const chatEl = (
-      <>
-        <ChatRoute
-          matches={matches}
-          matchesLoaded={matchesLoaded}
-          currentMatch={currentMatch}
-          onOpen={bindChat}
-          chatProps={{
-            messages,
-            messagesLoading,
-            messagesError,
-            sending,
-            sendError,
-            sendMessage,
-            loadMessages,
-            hasMoreMessages,
-            loadingMore,
-            loadMoreMessages,
-            handleDeleteMessage,
-            typingUser,
-            sendTypingEvent,
-            handleUnmatch,
-            handleBlock,
-            handleBlockAndReport,
-            handleOpenReport,
-            setView,
-          }}
-        />
-        {reportModalEl}
-      </>
-  );
-
-  const profileEl = (
-    <>
-      <ProfileView
-        user={user}
-        avatarStatus={avatarStatus}
-        isStale={isStale}
-        isGenerating={isGenerating}
-        name={name}
-        age={age}
-        location={location}
-        bio={bio}
-        error={error}
-        loading={loading}
-        copied={copied}
-        handleSaveProfile={handleSaveProfile}
-        handleRegenerate={handleRegenerate}
-        handleCopyAnimal={handleCopyAnimal}
-        deleteModalOpen={deleteModalOpen}
-        setDeleteModalOpen={setDeleteModalOpen}
-        deleteConfirmText={deleteConfirmText}
-        setDeleteConfirmText={setDeleteConfirmText}
-        deleteLoading={deleteLoading}
-        deleteError={deleteError}
-        setDeleteError={setDeleteError}
-        handleDeleteAccount={handleDeleteAccount}
-        emailNotifications={emailNotifications}
-        handleToggleNotifications={handleToggleNotifications}
-        blocks={blocks}
-        blocksLoading={blocksLoading}
-        fetchBlocks={fetchBlocks}
-        handleUnblock={handleUnblock}
-        navProps={navProps}
-      />
-      {reportModalEl}
-    </>
-  );
+  const credentialsProps = {
+    email, setEmail, password, setPassword, error, loading, setView,
+  };
 
   const protect = (element) => (
     <RequireAuth user={user} booting={booting}>{element}</RequireAuth>
   );
 
-  // A password-reset link lands on `/?token=…`; send it to the screen that can
+  // A password-reset link lands on `/?token=â€¦`; send it to the screen that can
   // use it. The token itself is already in state and has been stripped from the
   // URL, so it is not carried through the redirect.
   const indexEl = urlTokens.reset
@@ -1230,32 +1113,74 @@ export default function HowlApp() {
       : <Navigate to={user ? PATHS.profile : PATHS.login} replace />;
 
   return (
-    <EmailVerificationProvider email={user?.email}>
-      {/* Above the routes on purpose: whichever screen provoked the refusal,
-          the explanation is in the same place and says the same thing. */}
-      <EmailVerificationBanner />
-      <Routes>
-      <Route path="/" element={indexEl} />
+    <SessionProvider value={session}>
+      <EmailVerificationProvider email={user?.email}>
+        <ReportProvider>
+          {/* Above the routes on purpose: whichever screen provoked the
+              refusal, the explanation is in the same place and says the same
+              thing. */}
+          <EmailVerificationBanner />
 
-      {/* Public, and deliberately stable: the mobile client deep-links to
-          these two exact paths for the canonical legal text (GAPS #35). */}
-      <Route path={PATHS.privacy} element={<LegalPage view="privacy" setView={setView} />} />
-      <Route path={PATHS.terms} element={<LegalPage view="terms" setView={setView} />} />
+          <Routes>
+            <Route path="/" element={indexEl} />
 
-      <Route path={PATHS.login} element={user ? <Navigate to={PATHS.profile} replace /> : loginEl} />
-      <Route path={PATHS.register} element={registerEl} />
-      <Route path={PATHS.forgotPassword} element={passwordResetEl} />
-      <Route path={PATHS.resetPassword} element={passwordResetEl} />
+            {/* Public, and deliberately stable: the mobile client deep-links to
+                these two exact paths for the canonical legal text (GAPS #35). */}
+            <Route path={PATHS.privacy} element={<LegalPage view="privacy" setView={setView} />} />
+            <Route path={PATHS.terms} element={<LegalPage view="terms" setView={setView} />} />
 
-      <Route path={PATHS.discover} element={protect(discoverEl)} />
-      <Route path={PATHS.matches} element={protect(matchesEl)} />
-      <Route path={PATHS.chat} element={protect(chatEl)} />
-      <Route path={PATHS.profile} element={protect(profileEl)} />
+            <Route
+              path={PATHS.login}
+              element={user
+                ? <Navigate to={PATHS.profile} replace />
+                : (
+                  <LoginView
+                    {...credentialsProps}
+                    handleLogin={handleLogin}
+                    setForgotEmail={setForgotEmail}
+                    setForgotDone={setForgotDone}
+                    setError={setError}
+                  />
+                )}
+            />
+            <Route
+              path={PATHS.register}
+              element={<RegisterView {...credentialsProps} handleRegister={handleRegister} />}
+            />
+            <Route path={PATHS.forgotPassword} element={passwordResetEl} />
+            <Route path={PATHS.resetPassword} element={passwordResetEl} />
 
-      {/* Unknown path: hand it to the index route, which knows whether there is
-          a session and therefore whether "home" is /profile or /login. */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </EmailVerificationProvider>
+            <Route
+              path={PATHS.discover}
+              element={protect(
+                <DiscoverProvider value={discover}>
+                  <DiscoverView />
+                </DiscoverProvider>,
+              )}
+            />
+            <Route path={PATHS.matches} element={protect(<MatchesView />)} />
+            <Route
+              path={PATHS.chat}
+              element={protect(
+                <ChatProvider value={chat}>
+                  <ChatRoute
+                    matches={matches}
+                    matchesLoaded={matchesLoaded}
+                    currentMatch={currentMatch}
+                    onOpen={bindChat}
+                  />
+                </ChatProvider>,
+              )}
+            />
+            <Route path={PATHS.profile} element={protect(<ProfileView />)} />
+
+            {/* Unknown path: hand it to the index route, which knows whether
+                there is a session and therefore whether "home" is /profile or
+                /login. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ReportProvider>
+      </EmailVerificationProvider>
+    </SessionProvider>
   );
 }

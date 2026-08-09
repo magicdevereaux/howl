@@ -1,8 +1,28 @@
 import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
-// Navigation no longer triggers loads — being on the route does (see the
-// route-entry effects in App.jsx). So this component only navigates.
-export default function Nav({ view, setView, handleLogout, totalUnread = 0 }) {
+import { useSession } from '../contexts/SessionContext';
+import { pathForView, viewForPath } from '../routes/paths';
+
+/**
+ * Zero props.
+ *
+ * It used to take six, bundled as `navProps` and forwarded by all four screens
+ * purely to reach here. Everything it needs is now either the URL (which tab is
+ * active, where a click goes) or the session (the unread badge, sign out).
+ *
+ * It also no longer triggers loads: fetching is a property of being on the
+ * route now, not of the button that got you there — see the route-entry effects
+ * in App.jsx.
+ */
+export default function Nav() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const { totalUnread = 0, logout } = useSession();
+
+  const view = viewForPath(pathname);
+  const setView = (next) => navigate(pathForView(next));
+
   const navButton = (label, targetView) => {
     const active = view === targetView;
     return (
@@ -73,7 +93,7 @@ export default function Nav({ view, setView, handleLogout, totalUnread = 0 }) {
 
         {navButton('My Profile', 'profile')}
         <button
-          onClick={handleLogout}
+          onClick={logout}
           style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
         >
           Logout
