@@ -21,6 +21,7 @@ from app.schemas.swipe import (
     SwipeOut,
     UndoSwipeOut,
 )
+from app.services.blocks import blocked_between
 from app.services.task_queue import enqueue
 from app.tasks.auto_match import auto_match_demo_user
 from app.tasks.notify import notify_new_match
@@ -214,6 +215,14 @@ def record_swipe(
 
     target = db.query(User).filter(User.id == body.target_user_id).first()
     if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # GAPS #52: a blocked user could still `like` the person who blocked them.
+    # No match forms while the block stands (the mutual-like check below never
+    # sees a reciprocal swipe from the blocker), but on unblock the target's
+    # discover feed would show them again with this like already banked — one
+    # tap produces an instant match. 404, not 403: don't confirm the block.
+    if blocked_between(db, current_user.id, body.target_user_id):
         raise HTTPException(status_code=404, detail="User not found.")
 
     # The swipe row is the dedup gate: if it inserts, this request owns the swipe.
