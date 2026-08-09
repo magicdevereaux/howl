@@ -1,7 +1,16 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { API_URL, WS_URL, fetchApi } from './utils';
+import { WS_URL } from './utils';
+import {
+  apiFetch,
+  isVerificationBlocked,
+  isVerificationErrorFrame,
+  reportVerificationRequired,
+  WS_TERMINAL_CLOSE_CODES,
+} from './api/client';
 import { WS_RECONNECT_DELAY_MS } from './shared/constants';
+import EmailVerificationBanner from './components/EmailVerificationBanner';
+import { EmailVerificationProvider } from './contexts/EmailVerificationContext';
 import ReportModal from './components/ReportModal';
 import DiscoverView from './components/DiscoverView';
 import LegalPage from './components/LegalPage';
@@ -111,6 +120,9 @@ export default function HowlApp() {
 
   const chatWsRef = useRef(null);       // holds the live WebSocket for sending
   const typingTimerRef = useRef(null);  // auto-clears the typing indicator
+  // Whether this conversation's socket has opened before. Distinguishes the
+  // first connect (history was just loaded) from a reconnect (it may be stale).
+  const hasConnectedRef = useRef(false);
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [reportModal, setReportModal] = useState(null); // null | { userId, name, messageId? }
   const [reportSubmitting, setReportSubmitting] = useState(false);
@@ -141,6 +153,37 @@ export default function HowlApp() {
     (avatarStatus?.avatar_status === 'pending' || avatarStatus?.avatar_status === 'generating') &&
     !!user?.bio &&
     !isStale;
+
+  // Declared before the effects that list it as a dependency. A `const` is in
+  // the temporal dead zone until its declaration is *reached*, and a hook's
+  // dependency array is evaluated during render — so a dep declared further
+  // down the component throws "Cannot access '<minified>' before
+  // initialization" in the production bundle. This is the same trap GAPS #12
+  // recorded, and the reason the derived state above sits where it does.
+  //
+  // Empty dep list because the body closes over nothing but state setters
+  // (stable by contract) and module constants. The stable identity is required:
+  // ChatRoute and the socket's onopen both call it from effects.
+  const loadMessages = useCallback(async (matchId) => {
+    setMessagesLoading(true);
+    setMessagesError('');
+    try {
+      const res = await apiFetch(`/api/matches/${matchId}/messages`, {
+
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages);
+        setHasMoreMessages(data.has_more);
+      } else {
+        setMessagesError("Couldn't load messages.");
+      }
+    } catch {
+      setMessagesError('Network error — check your connection.');
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, []);
 
   // On mount, attempt to restore the session from the cookie. It does not
   // navigate: on a deep link to /discover, forcing /profile after the session
@@ -173,6 +216,7 @@ export default function HowlApp() {
     let ws = null;
     let reconnectTimer = null;
     let active = true; // false after cleanup so reconnect attempts stop
+    hasConnectedRef.current = false; // per conversation, not per app session
 
     const connect = () => {
       if (!active) return;
@@ -184,7 +228,12 @@ export default function HowlApp() {
         try {
           const data = JSON.parse(event.data);
           const { type, message, user_name } = data;
-          if (type === 'new_message') {
+          if (isVerificationErrorFrame(data)) {
+            // Sent immediately before the server closes with 4403. Reporting it
+            // here is what gives the notice the server's own wording; the close
+            // handler below only needs to not retry.
+            reportVerificationRequired(data.error);
+          } else if (type === 'new_message') {
             setMessages((prev) => {
               const byId = new Map(prev.map((m) => [m.id, m]));
               byId.set(message.id, message);
@@ -203,11 +252,27 @@ export default function HowlApp() {
         } catch { /* ignore malformed frames */ }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         chatWsRef.current = null;
-        if (active) {
-          reconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY_MS);
-        }
+        if (!active) return;
+        // Some refusals are permanent. 4403 (email not verified), 4001 (not
+        // authenticated) and 4003 (not your match) are all decisions about this
+        // identity and this match, so retrying returns the same answer — and
+        // retrying every 2.5s for as long as the tab is open is a denial of
+        // service aimed at ourselves. Reconnect only for transient closes.
+        if (WS_TERMINAL_CLOSE_CODES.has(event?.code)) return;
+        reconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY_MS);
+      };
+
+      // Redis pub/sub is fire-and-forget: an event published while this replica
+      // was disconnected is dropped with no replay (app/services/pubsub.py).
+      // The message rows are committed to Postgres before broadcast, so the
+      // history endpoint is the source of truth — but only if someone asks it.
+      // Refetching on every *re*connect is that ask (GAPS-ROUND-2 #47).
+      ws.onopen = () => {
+        if (!active) return;
+        if (hasConnectedRef.current) loadMessages(currentMatch.id);
+        hasConnectedRef.current = true;
       };
 
       ws.onerror = () => {
@@ -225,7 +290,7 @@ export default function HowlApp() {
       setTypingUser(null);
       if (ws) ws.close();
     };
-  }, [view, currentMatch?.id]);
+  }, [view, currentMatch?.id, loadMessages]);
 
   // Remove ?token= / ?verify= from the URL so tokens aren't visible in browser
   // history. `urlTokens` is stable (useState initialiser), so this runs once.
@@ -240,7 +305,7 @@ export default function HowlApp() {
     if (!urlTokens.verify) return;
     (async () => {
       try {
-        const res = await fetchApi(`${API_URL}/api/auth/verify-email`, {
+        const res = await apiFetch(`/api/auth/verify-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: urlTokens.verify }),
@@ -254,7 +319,7 @@ export default function HowlApp() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetchApi(`${API_URL}/api/profile/me`, {
+      const res = await apiFetch(`/api/profile/me`, {
         credentials: 'include'
       });
       if (res.ok) {
@@ -280,7 +345,7 @@ export default function HowlApp() {
 
   const fetchAvatarStatus = async () => {
     try {
-      const res = await fetchApi(`${API_URL}/api/avatar/status`, {});
+      const res = await apiFetch(`/api/avatar/status`, {});
       if (res.ok) {
         const data = await res.json();
         setAvatarStatus(prev => {
@@ -305,7 +370,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/auth/login`, {
+      const res = await apiFetch(`/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -337,7 +402,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/auth/register`, {
+      const res = await apiFetch(`/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -366,7 +431,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/profile/me`, {
+      const res = await apiFetch(`/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
 
@@ -404,7 +469,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/profile/me`, {
+      const res = await apiFetch(`/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
 
@@ -442,7 +507,7 @@ export default function HowlApp() {
 
   const handleLogout = () => {
     // Server clears both cookies; fire-and-forget
-    fetchApi(`${API_URL}/api/auth/logout`, { method: 'POST' }).catch(() => {});
+    apiFetch(`/api/auth/logout`, { method: 'POST' }).catch(() => {});
     setUser(null);
     setAvatarStatus(null);
     setEmail('');
@@ -474,7 +539,7 @@ export default function HowlApp() {
     setDeleteLoading(true);
     setDeleteError('');
     try {
-      const res = await fetchApi(`${API_URL}/api/profile/me`, {
+      const res = await apiFetch(`/api/profile/me`, {
         method: 'DELETE',
 
       });
@@ -510,7 +575,7 @@ export default function HowlApp() {
     setLoading(true);
     setError('');
     try {
-      await fetchApi(`${API_URL}/api/auth/forgot-password`, {
+      await apiFetch(`/api/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
@@ -532,7 +597,7 @@ export default function HowlApp() {
     }
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/auth/reset-password`, {
+      const res = await apiFetch(`/api/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: resetToken, new_password: newPassword }),
@@ -552,36 +617,11 @@ export default function HowlApp() {
     }
   };
 
-  // useCallback with an empty dep list because the body closes over nothing but
-  // state setters (stable by contract) and module constants. That makes it a
-  // stable identity, which ChatRoute needs: it calls this from an effect, and an
-  // identity that changed every render would loop.
-  const loadMessages = useCallback(async (matchId) => {
-    setMessagesLoading(true);
-    setMessagesError('');
-    try {
-      const res = await fetchApi(`${API_URL}/api/matches/${matchId}/messages`, {
-
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setMessages(data.messages);
-        setHasMoreMessages(data.has_more);
-      } else {
-        setMessagesError("Couldn't load messages.");
-      }
-    } catch {
-      setMessagesError('Network error — check your connection.');
-    } finally {
-      setMessagesLoading(false);
-    }
-  }, []);
-
   const handleDeleteMessage = async (messageId) => {
     if (!currentMatch) return;
     try {
-      const res = await fetchApi(
-        `${API_URL}/api/matches/${currentMatch.id}/messages/${messageId}`,
+      const res = await apiFetch(
+        `/api/matches/${currentMatch.id}/messages/${messageId}`,
         { method: 'DELETE', credentials: 'include' },
       );
       if (res.ok) {
@@ -596,8 +636,8 @@ export default function HowlApp() {
     setLoadingMore(true);
     try {
       const oldestId = Math.min(...messages.map((m) => m.id));
-      const res = await fetchApi(
-        `${API_URL}/api/matches/${currentMatch.id}/messages?before_id=${oldestId}`,
+      const res = await apiFetch(
+        `/api/matches/${currentMatch.id}/messages?before_id=${oldestId}`,
         {},
       );
       if (res.ok) {
@@ -616,7 +656,7 @@ export default function HowlApp() {
     setSendError('');
     setMessageInput('');
     try {
-      const res = await fetchApi(`${API_URL}/api/matches/${currentMatch.id}/messages`, {
+      const res = await apiFetch(`/api/matches/${currentMatch.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
 
@@ -630,8 +670,15 @@ export default function HowlApp() {
           return Array.from(byId.values()).sort((a, b) => a.id - b.id);
         });
       } else {
+        // Put the text back either way — losing what someone typed is worse
+        // than any error message. But stay quiet about *why* when the global
+        // verification notice is already saying it: "Message failed to send —
+        // please try again" next to "verify your email" reads as two unrelated
+        // faults, and "try again" is advice that cannot work.
         setMessageInput(content);
-        setSendError("Message failed to send — please try again.");
+        if (!isVerificationBlocked(res)) {
+          setSendError("Message failed to send — please try again.");
+        }
       }
     } catch {
       setMessageInput(content);
@@ -674,7 +721,7 @@ export default function HowlApp() {
   const fetchBlocks = async () => {
     setBlocksLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/blocks`, {
+      const res = await apiFetch(`/api/blocks`, {
 
       });
       if (res.ok) setBlocks(await res.json());
@@ -683,7 +730,7 @@ export default function HowlApp() {
   };
 
   const handleUnmatch = async (matchId) => {
-    await fetchApi(`${API_URL}/api/matches/${matchId}`, {
+    await apiFetch(`/api/matches/${matchId}`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -696,7 +743,7 @@ export default function HowlApp() {
   const handleBlockAndReport = async (userId, reason, notes) => {
     await handleBlock(userId); // navigate away and reload matches
     try {
-      await fetchApi(`${API_URL}/api/reports`, {
+      await apiFetch(`/api/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
 
@@ -710,7 +757,7 @@ export default function HowlApp() {
   };
 
   const handleBlock = async (userId) => {
-    await fetchApi(`${API_URL}/api/blocks`, {
+    await apiFetch(`/api/blocks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
 
@@ -729,7 +776,7 @@ export default function HowlApp() {
   };
 
   const handleUnblock = async (userId) => {
-    await fetchApi(`${API_URL}/api/blocks/${userId}`, {
+    await apiFetch(`/api/blocks/${userId}`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -740,7 +787,7 @@ export default function HowlApp() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetchApi(`${API_URL}/api/avatar/regenerate`, {
+      const res = await apiFetch(`/api/avatar/regenerate`, {
         method: 'POST',
 
       });
@@ -752,6 +799,8 @@ export default function HowlApp() {
         const resets = new Date(data.detail.resets_at);
         const resetStr = resets.toLocaleDateString([], { month: 'long', day: 'numeric' });
         setError(`You've used your free regeneration for this month. Resets on ${resetStr}.`);
+      } else if (isVerificationBlocked(res)) {
+        // The global notice covers it, with the server's wording.
       } else {
         setError(typeof data.detail === 'string' ? data.detail : 'Regeneration failed');
       }
@@ -785,7 +834,7 @@ export default function HowlApp() {
         ...(notes ? { notes } : {}),
         ...(reportModal.messageId != null ? { message_id: reportModal.messageId } : {}),
       };
-      const res = await fetchApi(`${API_URL}/api/reports`, {
+      const res = await apiFetch(`/api/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
 
@@ -811,7 +860,7 @@ export default function HowlApp() {
     setAgePrefMin(amin);
     setAgePrefMax(amax);
     try {
-      await fetchApi(`${API_URL}/api/profile/me`, {
+      await apiFetch(`/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
 
@@ -830,7 +879,7 @@ export default function HowlApp() {
   const handleToggleNotifications = async (enabled) => {
     setEmailNotifications(enabled);
     try {
-      await fetchApi(`${API_URL}/api/profile/me`, {
+      await apiFetch(`/api/profile/me`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
 
@@ -845,7 +894,7 @@ export default function HowlApp() {
     setDiscoverLoading(true);
     setDiscoverError('');
     try {
-      const res = await fetchApi(`${API_URL}/api/users/discover`, {
+      const res = await apiFetch(`/api/users/discover`, {
 
       });
       if (res.ok) {
@@ -867,7 +916,7 @@ export default function HowlApp() {
     setMatchesLoading(true);
     setMatchesError('');
     try {
-      const res = await fetchApi(`${API_URL}/api/users/matches`, {
+      const res = await apiFetch(`/api/users/matches`, {
 
       });
       if (res.ok) {
@@ -891,13 +940,18 @@ export default function HowlApp() {
     setUndoMessage('');
     setSwipeError('');
     try {
-      const res = await fetchApi(`${API_URL}/api/swipes`, {
+      const res = await apiFetch(`/api/swipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
 
         body: JSON.stringify({ target_user_id: targetUserId, direction }),
       });
       const data = await res.json();
+
+      // Return *before* the stack advances. The swipe was refused, so the card
+      // is still undecided — discarding it would silently cost the user a
+      // profile they never got to answer, and there is no way back to it.
+      if (isVerificationBlocked(res)) return;
 
       if (res.status === 429 && data.detail?.code === 'daily_limit_reached') {
         // The server just told us the real quota. Adopt it, then mark the
@@ -933,7 +987,7 @@ export default function HowlApp() {
     setSwipeLoading(true);
     setUndoMessage('');
     try {
-      const res = await fetchApi(`${API_URL}/api/swipes/last`, {
+      const res = await apiFetch(`/api/swipes/last`, {
         method: 'DELETE',
 
       });
@@ -1169,7 +1223,11 @@ export default function HowlApp() {
       : <Navigate to={user ? PATHS.profile : PATHS.login} replace />;
 
   return (
-    <Routes>
+    <EmailVerificationProvider email={user?.email}>
+      {/* Above the routes on purpose: whichever screen provoked the refusal,
+          the explanation is in the same place and says the same thing. */}
+      <EmailVerificationBanner />
+      <Routes>
       <Route path="/" element={indexEl} />
 
       {/* Public, and deliberately stable: the mobile client deep-links to
@@ -1190,6 +1248,7 @@ export default function HowlApp() {
       {/* Unknown path: hand it to the index route, which knows whether there is
           a session and therefore whether "home" is /profile or /login. */}
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </EmailVerificationProvider>
   );
 }
