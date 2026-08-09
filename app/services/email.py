@@ -257,6 +257,32 @@ def send_verification_email(to_email: str, token: str) -> bool:
     return delivered
 
 
+def send_email_changed_notice(old_email: str, new_email: str) -> bool:
+    """Warn the *previous* address that the account moved.
+
+    Sent to the address that is losing the account, not the one gaining it. If
+    an attacker who has both a session and the password changes the address,
+    this notice is the only signal the real owner ever gets — so it is worth
+    sending even though the change itself was authenticated.
+    """
+    text = (
+        "The email address on your Howl account was changed to "
+        f"{new_email}.\n\n"
+        "If you did not do this, reset your password immediately at "
+        f"{settings.frontend_url} — whoever made the change knew your password."
+    )
+    html = _wrap_html(
+        "Your email address was changed",
+        "<p>The email address on your Howl account was changed to "
+        f"<strong>{new_email}</strong>.</p>"
+        '<p style="font-size:13px;color:#555">If you did not do this, reset your '
+        "password immediately — whoever made the change knew your password.</p>"
+        + _button(settings.frontend_url, "Go to Howl"),
+    )
+
+    return _deliver(old_email, "Your Howl email address was changed", text, html)
+
+
 def send_message_notification(
     to_email: str,
     sender_name: str | None,

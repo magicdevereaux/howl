@@ -33,7 +33,11 @@ from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.user import UserLogin, UserRegister
 from app.security import create_access_token, create_refresh_token, hash_password, verify_password
-from app.services.email import send_password_reset_email, send_verification_email
+from app.services.email import (
+    send_email_changed_notice,
+    send_password_reset_email,
+    send_verification_email,
+)
 from app.services.rate_limit import enforce_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -91,6 +95,16 @@ class ForgotPasswordIn(BaseModel):
 class ResetPasswordIn(BaseModel):
     token: str
     new_password: str = Field(min_length=8)
+
+
+class ChangeEmailIn(BaseModel):
+    new_email: EmailStr
+    current_password: str
+
+    @field_validator("new_email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +273,72 @@ def resend_verification(payload: ResendVerificationIn, request: Request, db: Ses
     send_verification_email(user.email, token)
     logger.info("resend_verification: new token issued for user %d", user.id)
     return {"message": _GENERIC_VERIFICATION_MESSAGE}
+
+
+def change_email(
+    payload: ChangeEmailIn, request: Request, current_user: User, db: Session
+) -> dict:
+    """Move the account to a new address and re-issue verification.
+
+    Why this exists: `email` was editable nowhere — `ProfileUpdate` has no such
+    field — so resend-verification could only ever re-send to the address that
+    was typed at signup. With verification enforced after a 72-hour grace window
+    (GAPS #25), a single typo at registration was a permanent, unrecoverable
+    lockout: the user cannot receive the link, cannot correct the address, and
+    there is no admin route. The operator kill switch was the only remedy.
+
+    Requires the current password, not merely a valid session. A session alone
+    is a bearer credential that can be stolen; letting it move the account's
+    address would hand an attacker the password-reset channel too, which is the
+    whole account. Re-authenticating here is the difference between "someone
+    stole a token" and "someone owns the account".
+    """
+    enforce_rate_limit(request, "change_email", payload.new_email)
+
+    if not verify_password(payload.current_password, current_user.password_hash):
+        # 403, not 401: the session is valid, the confirmation is not. A 401
+        # would make both clients' interceptors treat this as an expired
+        # session and bounce the user to the login screen.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current password is incorrect.",
+        )
+
+    old_email = current_user.email
+    if payload.new_email == old_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That is already your email address.",
+        )
+
+    current_user.email = payload.new_email
+    current_user.is_email_verified = False
+    token = _new_verification_token(current_user)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Same 409 that registration gives for a taken address. This does leak
+        # that the address exists — but only to someone who already proved they
+        # own *this* account with a password, and registration leaks the same
+        # fact to anyone at all, so nothing new is exposed here.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That email address is already registered.",
+        ) from None
+
+    send_verification_email(current_user.email, token)
+    # Tell the old address too. If an attacker with a stolen session *and* the
+    # password moves the account, this is the only signal the real owner gets.
+    send_email_changed_notice(old_email, current_user.email)
+
+    logger.info("change_email: user %d moved address (verification reset)", current_user.id)
+    return {
+        "message": "Email updated. Check your new address for a verification link.",
+        "email": current_user.email,
+        "is_email_verified": False,
+    }
 
 
 # ---------------------------------------------------------------------------

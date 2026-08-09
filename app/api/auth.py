@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.user import AuthOut, UserLogin, UserOut, UserRegister
 from app.services import auth_service
 from app.services.auth_service import (
+    ChangeEmailIn,
     ForgotPasswordIn,
     ResendVerificationIn,
     ResetPasswordIn,
@@ -113,6 +114,23 @@ def resend_verification(
     db: Session = Depends(get_db),
 ) -> dict:
     return auth_service.resend_verification(payload, request, db)
+
+
+@router.post("/change-email", status_code=200)
+def change_email(
+    payload: ChangeEmailIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Move the account to a new address.
+
+    Only registered here, not in `mobile_auth.py`: `get_current_user` resolves a
+    cookie *or* a bearer header from the one dependency, so the mobile client
+    calls this same path. There is no cookie/bearer asymmetry to shell over —
+    which is the only reason the two routers exist separately.
+    """
+    return auth_service.change_email(payload, request, current_user, db)
 
 
 @router.post("/forgot-password", status_code=200)

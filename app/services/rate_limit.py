@@ -61,6 +61,10 @@ _LIMITS: dict[str, _ActionLimit] = {
     "reset_password": _ActionLimit("password reset", 10, None),
     "verify_email": _ActionLimit("verification", 20, None),
     "resend_verification": _ActionLimit("verification", 5, 3),
+    # Changing an address re-sends verification to it, so the same mail-bomb
+    # reasoning as forgot_password applies — the email bucket is keyed on the
+    # *target* address, which is the one that would receive the flood.
+    "change_email": _ActionLimit("email change", 5, 3),
 }
 
 
